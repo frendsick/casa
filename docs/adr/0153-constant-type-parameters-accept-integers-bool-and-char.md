@@ -19,7 +19,7 @@ numeric literals. The literal carries no width of its own. It fits any integer
 parameter whose range contains its value, so `3` can bind a `u8`, `u16`, or `u64` parameter.
 Array lengths specifically use `u64`. An argument whose value does not fit the declared width
 is rejected with a diagnostic that names the argument, the width, and the
-parameter. A `bool` argument is written `true` or `false`; a `char` argument is a
+parameter. A `bool` argument is written `true` or `false`. A `char` argument is a
 char literal.
 
 Float and `str` are rejected in constant position, each with a diagnostic that

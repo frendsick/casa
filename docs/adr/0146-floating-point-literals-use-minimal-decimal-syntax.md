@@ -13,7 +13,7 @@ A decimal point requires digits on both sides. An exponent uses `e` or `E` follo
 
 ## Consequences
 
-- `.5` and `1.` are rejected; users write `0.5` and `1.0`.
+- `.5` and `1.` are rejected. Users write `0.5` and `1.0`.
 - Casa initially adds no hexadecimal floating-point notation or type suffixes.
-- NaN and infinities have no literal syntax; standard-library associated values construct them.
+- NaN and infinities have no literal syntax. Standard-library associated values construct them.
 - Literal typing and direct target-width rounding follow ADR-0141.

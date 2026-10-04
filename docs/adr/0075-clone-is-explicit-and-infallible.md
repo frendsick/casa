@@ -19,7 +19,7 @@ An unrelated user trait named Clone gains no derivation behavior. Injecting a
 Clone declaration or a prelude solely for Clone would add a second trait-definition
 mechanism and is rejected.
 
-Clone is never implicit. Assignment, argument passing, field access, pattern binding, `dup`, and `over` do not fall back to `Clone`; source code must call `.clone` where the additional owner is wanted.
+Clone is never implicit. Assignment, argument passing, field access, pattern binding, `dup`, and `over` do not fall back to `Clone`. Source code must call `.clone` where the additional owner is wanted.
 
 ## Consequences
 

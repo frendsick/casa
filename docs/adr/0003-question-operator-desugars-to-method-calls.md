@@ -14,7 +14,7 @@ Conceptually, `value ?` binds `value` to a hidden local, borrows it for `is_ok`,
 ## Consequences
 
 - `Option[T]` can propagate failure into `Option[U]`, and `Result[T E]` can propagate failure into `Result[U E]`, through ordinary generic `propagate` methods.
-- A different `Result` error type is rejected unless the source type deliberately provides a compatible propagation conversion; callers otherwise convert it explicitly before `?`.
+- A different `Result` error type is rejected unless the source type deliberately provides a compatible propagation conversion. Callers otherwise convert it explicitly before `?`.
 - `?` becomes a resolved operation whose ownership-aware control-flow meaning belongs to shared operation semantics rather than an unchecked parser-only rewrite.
 - A malformed custom implementation may violate the behavioral agreement between `is_ok`, `unwrap`, and `propagate`, just as a structural comparison implementation may violate trait laws, but it cannot use `?` to forge a value of an unrelated return type.
 - `Option` and `Result` remain ordinary standard-library enums, and user-defined types may support `?` without registration or compiler changes.

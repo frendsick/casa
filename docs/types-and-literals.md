@@ -7,22 +7,22 @@ operation or binding that uses them.
 
 | Type | Values |
 |---|---|
-| `i8`, `i16`, `i32`, `i64` | Signed integers |
-| `u8`, `u16`, `u32`, `u64` | Unsigned integers |
-| `f32`, `f64` | Floating-point numbers |
 | `bool` | `true` or `false` |
 | `char` | One Unicode scalar value |
-| `str` | An immutable UTF-8 text view |
-| `$cstr` | A borrowed NUL-terminated foreign byte string |
+| [$cstr](strings-and-io.md#c-strings-and-mutable-buffers) | A borrowed NUL-terminated foreign byte string |
+| `f32`, `f64` | Floating-point numbers |
+| `i8`, `i16`, `i32`, `i64` | Signed integers |
+| [str](strings-and-io.md#text-views) | An immutable UTF-8 text view |
+| `u8`, `u16`, `u32`, `u64` | Unsigned integers |
 
 An unconstrained integer literal defaults to `i64`. An unconstrained
 floating-point literal defaults to `f64`. A nearby annotation or parameter can
 select another width:
 
 ```casa
-255 = byte:u8
-1.5 = ratio:f32
-42 typeof print       # i64
+255 = byte: u8
+1.5 = ratio: f32
+42 typeof print # i64
 ```
 
 Floating-point values use partial equality and ordering because NaN is
@@ -45,13 +45,13 @@ Both forms support these escapes:
 
 | Escape | Value |
 |---|---|
-| `\n` | Newline |
-| `\t` | Tab |
-| `\r` | Carriage return |
 | `\0` | Null byte |
 | `\\` | Backslash |
-| `\xHH` | One ASCII scalar from `00` through `7F` |
+| `\n` | Newline |
+| `\r` | Carriage return |
+| `\t` | Tab |
 | `\u{H...}` | One Unicode scalar written with 1 through 6 hexadecimal digits |
+| `\xHH` | One ASCII scalar from `00` through `7F` |
 
 Use `\'` for a quote in a character and `\"` for a quote in a string.
 Source files and text literals must be valid UTF-8. A character literal must
@@ -62,14 +62,16 @@ A string literal is a copied `str` view of static read-only storage. Convert it
 with `.to_str` when you need an owned, growable `String`:
 
 ```casa
-"Casa".to_str = name:String
+import "std"
+
+"Casa".to_str = name: std::String
 '!' name.push
 name.as_str print
 ```
 
 ```casa
-'\u{1F600}' print       # 😀
-"\u{3BB}" print         # λ
+'\u{1F600}' print # 😀
+"\u{3BB}" print # λ
 ```
 
 `cstr` is only used through a shared `$cstr` borrow. It has no literal syntax,
@@ -78,9 +80,11 @@ value when an operating-system or C interface needs a NUL-terminated byte
 string:
 
 ```casa
-"hello".as_cstr.unwrap = message:$cstr
-"raw" Bytes::from_str = raw_bytes
-raw_bytes.as_cstr.unwrap = raw_message:$cstr
+import "std"
+
+"hello".as_cstr.unwrap = message: $cstr
+"raw" std::Bytes::from_str = raw_bytes
+raw_bytes.as_cstr.unwrap = raw_message: $cstr
 ```
 
 See [Text and I/O](strings-and-io.md) for string operations and conversions.
@@ -95,31 +99,31 @@ Prefix a string with `f` and put expressions inside braces:
 f"{name} has {count} tasks\n" print
 ```
 
-Each expression must implement [`Display`](traits.md#built-in-traits).
+Each expression must implement `Display`.
 Use `\{` and `\}` for literal braces.
 
 ## Other types
 
 | Type | Purpose |
 |---|---|
-| `ptr` | A raw memory address |
-| `array[T N]` | An owned sequence of exactly `N` elements |
-| `Slice[T]` | A borrowed sequence with a runtime length |
-| `List[T]` | An owned growable sequence |
-| `Bytes` | An owned growable byte buffer |
-| `String` | Owned growable UTF-8 text |
-| `fn[inputs -> outputs]` | A function value |
-| `Option[T]` | A value that can be absent |
-| `Result[T E]` | A success value or an error |
-| Struct name | A user-defined product type |
+| [array[T N]](collections.md#arrays) | An owned sequence of exactly `N` elements |
+| [Bytes](collections.md#bytes) | An owned growable byte buffer |
 | Enum name | A user-defined variant type |
+| [fn[inputs -> outputs]](functions-and-lambdas.md#function-values) | A function value |
+| [List[T]](lists.md) | An owned growable sequence |
+| [Option[T]](optional-values-and-errors.md#option) | A value that can be absent |
+| [ptr](intrinsics.md#advanced-memory-access) | A raw memory address |
+| [Result[T E]](optional-values-and-errors.md#result) | A success value or an error |
+| [Slice[T]](collections.md#slices) | A borrowed sequence with a runtime length |
+| [String](strings-and-io.md#owned-strings) | Owned growable UTF-8 text |
+| Struct name | A user-defined product type |
 
 Array literals infer one common element type, and their length is part of the
 type:
 
 ```casa
-[1, 2, 3] = numbers:array[i64 3]
-[] = names:array[str 0]
+[1, 2, 3] = numbers: array[i64 3]
+[] = names: array[str 0]
 ```
 
 An `array[T N]` is `Copy` when `T` is `Copy`, including when `N` is zero.
@@ -153,6 +157,7 @@ const ELEMENT_COUNT 128
 const ELEMENT_BYTES 8
 const BUFFER_BYTES: u64 { ELEMENT_COUNT ELEMENT_BYTES * }
 const SCALE: f32 { 0.1 2.0 * }
+
 fn consume values:array[u8 BUFFER_BYTES] { values drop }
 ```
 
@@ -186,15 +191,14 @@ Import `std` to use named numeric conversions:
 ```casa
 import "std"
 
-120 = byte:i8
+120 = byte: i8
 byte i16::from = widened
-
-1000 = count:i64
+1000 = count: i64
 count u8::try_from = maybe_byte
 ```
 
 Use these operations for numeric conversion. Convert characters with
-`.codepoint`, `char::from_codepoint`, or the narrow unsafe
+`.codepoint`, `char::from_codepoint`, or the narrow [unsafe](functions-and-lambdas.md#unsafe-boundaries)
 `char::from_codepoint_unchecked` primitive. Representation casts to or from
 `char` are compile-time errors.
 

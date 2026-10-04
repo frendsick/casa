@@ -3,10 +3,10 @@
 Every first-class function value has one monomorphic `fn[...]` type. Taking a reference to a generic named function requires explicit type arguments:
 
 ```casa
-fn id[T] value:T -> T { value }
+fn id [T] value:T -> T { value }
 
-&id[i64]  # fn[i64 -> i64]
-&id[str]  # fn[str -> str]
+&id[i64] # fn[i64 -> i64]
+&id[str] # fn[str -> str]
 ```
 
 `&id` is rejected because it would require a first-class polymorphic function value. Direct calls to generic functions continue to infer type arguments from their operands.
@@ -20,9 +20,9 @@ fn id[T] value:T -> T { value }
 
 ## Consequences
 
-- Free generic functions use `&function[Arguments]`; every declared type argument is supplied.
+- Free generic functions use `&function[Arguments]`. Every declared type argument is supplied.
 - Trait and `Copy` bounds are checked when the reference is formed.
-- A generic body may specialize using its own in-scope type variables, such as `&id[T]`; the resulting function type is monomorphic for each instantiation of the enclosing function.
+- A generic body may specialize using its own in-scope type variables, such as `&id[T]`. The resulting function type is monomorphic for each instantiation of the enclosing function.
 - `FunctionType` need not represent universally quantified variables or delayed bounds.
 - Casa initially performs no expected-type specialization for omitted reference arguments. It may be added later as local syntactic inference without changing function-value semantics.
-- Named function references remain `Copy`; captured closures are repeatable and follow the ordinary ownership and borrowing rules.
+- Named function references remain `Copy`. Captured closures are repeatable and follow the ordinary ownership and borrowing rules.

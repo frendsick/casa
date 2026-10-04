@@ -4,8 +4,8 @@ Finite recursive owned structs and enums may derive Eq, Ord, and Hashable as wel
 
 ```casa
 enum Tree derives Eq Ord Hashable Clone {
-    Leaf(i64)
-    Branch(Tree Tree)
+    Leaf (i64)
+    Branch (Tree Tree)
 }
 ```
 

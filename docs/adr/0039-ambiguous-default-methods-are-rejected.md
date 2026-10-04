@@ -2,7 +2,7 @@
 
 An inherent method on the receiver type takes precedence over default methods from traits the receiver explicitly implements. When no inherent method exists, method lookup may use a default only when exactly one applicable default-method declaration remains. Multiple applicable defaults with the same method name are a compile-time ambiguity rather than an iteration-order choice.
 
-The diagnostic names every candidate trait. ADR-0102 later permits a caller to select one trait implementation through qualification; an inherent method remains the local way to give unqualified calls one meaning.
+The diagnostic names every candidate trait. ADR-0102 later permits a caller to select one trait implementation through qualification. An inherent method remains the local way to give unqualified calls one meaning.
 
 ## Considered options
 
@@ -14,7 +14,7 @@ The diagnostic names every candidate trait. ADR-0102 later permits a caller to s
 ## Consequences
 
 - Existing inherent methods continue to win over defaults.
-- Default candidates reached more than once through supertraits are deduplicated by their declaring method; distinct declarations remain ambiguous even when their stack effects match.
+- Default candidates reached more than once through supertraits are deduplicated by their declaring method. Distinct declarations remain ambiguous even when their stack effects match.
 - The compiler reports all conflicting trait names instead of silently selecting one.
 - Authors resolve a collision at a call site through trait qualification, for all unqualified calls with an inherent method, or by removing an unwanted trait implementation.
 - Lookup already examines applicable trait defaults, so collecting candidates rather than returning the first adds negligible compile-time work.

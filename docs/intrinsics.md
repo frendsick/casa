@@ -2,43 +2,50 @@
 
 Intrinsics are compiler-provided operations. They need no import.
 
+Stack-effect inputs use consumption order. Outputs use push order. See
+[reference notation](notation.md) for examples and the meaning of `None`.
+
 ## Stack operations
 
 | Intrinsic | Stack effect | Action |
 |---|---|---|
+| `copy` | `[T: Copy] $T -> T` | Produce an owned Copy value |
 | `drop` | `T -> None` | Destroy the top owned value |
 | `dup` | `[T: Copy] T -> T T` | Duplicate the top value |
-| `copy` | `[T: Copy] T -> T` | Produce an owned Copy value |
-| `swap` | `T1 T2 -> T2 T1` | Swap the top two values |
 | `over` | `[T2: Copy] T1 T2 -> T2 T1 T2` | Copy the second value to the top |
-| `rot` | `T1 T2 T3 -> T3 T1 T2` | Rotate the top three values |
+| `rot` | `T1 T2 T3 -> T2 T1 T3` | Rotate the top three values |
+| `swap` | `T1 T2 -> T1 T2` | Swap the top two values |
 
 ```casa
-1 2 drop print       # 1
-3 dup + print        # 6
+1 2 drop print # 1
+3 dup + print # 6
 ```
+
+`copy` reads a borrowed `Copy` value into an owned value. An owned argument
+is borrowed automatically. For `swap`, consuming `T1` then `T2` and pushing
+`T1` then `T2` exchanges their stack positions.
 
 `swap` and `rot` only move values. They accept non-Copy values. `dup` and `over`
 also duplicate shared borrows without making `$T` satisfy Copy. `dup`, `over`,
-and `copy` never call Clone and never allocate. `drop` runs the same custom
-cleanup and recursive field destruction as a scope exit.
+and `copy` never call Clone and never allocate. `drop` runs the same [custom
+cleanup](structs-and-methods.md#custom-destruction) and recursive field destruction as a scope exit.
 
 ## Output and inspection
 
 | Intrinsic | Stack effect | Action |
 |---|---|---|
-| `print` | `[T: Display] T -> None` | Write a value to standard output |
-| `typeof` | `T -> str` | Return the compile-time type name |
-| `size_of[T]` | `None -> u64` | Return the current compiler's inline size for `T` |
 | `exec` | `fn[...] -> ...` | Call a function value on the top of the stack |
+| `print` | `[T: Display] T -> None` | Write a value to standard output |
+| `size_of[T]` | `None -> u64` | Return the current compiler's inline size for `T` |
+| `typeof` | `T -> str` | Return the compile-time type name |
 
 ```casa
 42 print
-"hello" typeof print    # str
+"hello" typeof print # str
 ```
 
 Primitive display types print directly. User-defined types must implement
-[`Display`](traits.md#built-in-traits). See
+`Display`. See
 [Functions and Lambdas](functions-and-lambdas.md#function-values) for `exec`.
 
 `size_of[T]` includes aggregate padding and the tail padding needed to place
@@ -75,7 +82,7 @@ data is needed.
 
 These operations expose raw byte-addressed memory. Prefer standard-library
 collections and strings for application code. Raw allocation, access, owner
-conversion, and pointer arithmetic must be inside an `unsafe` block.
+conversion, and pointer arithmetic must be inside an [unsafe](functions-and-lambdas.md#unsafe-boundaries) block.
 `ptr::null`, `ptr::from_ref`, and pointer comparison are safe.
 
 Comparing raw pointers is safe, but an address identifies storage rather than
@@ -91,18 +98,18 @@ either result as owner identity.
 | `load16` | `ptr -> u16` | Load an unsigned 16-bit value |
 | `load32` | `ptr -> u32` | Load an unsigned 32-bit value |
 | `load64` | `ptr -> u64` | Load an unsigned 64-bit value |
-| `ptr::null` | `None -> ptr` | Produce the canonical null pointer |
-| `ptr::from_ref` | `$T -> ptr` | Get the raw address of a live borrow |
-| `ptr::as_ref[T]` | `ptr -> $T` | Form a shared borrow of typed storage |
 | `ptr::as_mut[T]` | `ptr -> mut$T` | Form an exclusive borrow of typed storage |
-| `ptr::into_raw` | `T -> ptr` | Transfer a heap-indirect owner without destruction |
+| `ptr::as_ref[T]` | `ptr -> $T` | Form a shared borrow of typed storage |
 | `ptr::from_raw[T]` | `ptr -> T` | Reconstruct a heap-indirect owner from its allocation address |
+| `ptr::from_ref` | `$T -> ptr` | Get the raw address of a live borrow |
+| `ptr::into_raw` | `T -> ptr` | Transfer a heap-indirect owner without destruction |
+| `ptr::null` | `None -> ptr` | Produce the canonical null pointer |
 | `ptr::read[T]` | `ptr -> T` | Move an initialized `T` out of typed storage |
+| `ptr::write[T]` | `ptr T -> None` | Move a `T` into uninitialized typed storage |
 | `store8` | `ptr u8 -> None` | Store an 8-bit value |
 | `store16` | `ptr u16 -> None` | Store a 16-bit value |
 | `store32` | `ptr u32 -> None` | Store a 32-bit value |
 | `store64` | `ptr u64 -> None` | Store a 64-bit value |
-| `ptr::write[T]` | `ptr T -> None` | Move a `T` into uninitialized typed storage |
 
 Inputs in a stack effect are listed from the top downward. The value is pushed
 before the destination pointer at a store call:
@@ -111,7 +118,7 @@ before the destination pointer at a store call:
 unsafe {
     16 alloc = buffer
     42 buffer store64
-    buffer load64 print    # 42
+    buffer load64 print # 42
 }
 ```
 
@@ -136,7 +143,7 @@ foreign pointer are undefined behavior.
 
 ### Forming a borrow from a raw address
 
-`ptr::as_ref[T]` and `ptr::as_mut[T]` form a typed borrow inside `unsafe`. A raw
+`ptr::as_ref[T]` and `ptr::as_mut[T]` form a typed borrow inside [unsafe](functions-and-lambdas.md#unsafe-boundaries). A raw
 address carries no lifetime, so the result is anchored conservatively to every
 compatible borrowed input of the enclosing function. A `$T` accepts any
 borrowed input. A `mut$T` only accepts exclusive ones. A function with no
@@ -149,7 +156,7 @@ fn nth [T const N:u64] array:$array[T N] index:u64 -> $T {
 }
 ```
 
-The unsafe body promises that the address stays valid for as long as the
+The `unsafe` body promises that the address stays valid for as long as the
 anchored input. See ADR-0112 and ADR-0113.
 
 `unsafe fn memcpy destination:ptr source:ptr count:u64` is a `std` function,
@@ -162,7 +169,7 @@ and text operations unless raw memory is required.
 `syscall0` through `syscall6` invoke Linux x86-64 system calls directly. Push
 the arguments in reverse register order, then push the syscall number. The
 number is the topmost value when the intrinsic runs. Each call must be inside
-an `unsafe` block.
+an [unsafe](functions-and-lambdas.md#unsafe-boundaries) block.
 
 | Intrinsic | Stack effect |
 |---|---|

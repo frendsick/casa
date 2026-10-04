@@ -5,18 +5,15 @@ Partial and total equality use the same `eq` and `ne` operator methods. The stan
 ```casa
 trait PartialEq {
     fn eq $self other:$self -> bool
-
-    fn ne $self other:$self -> bool {
-        other self.eq !
-    }
+    fn ne $self other:$self -> bool { other self.eq ! }
 }
 
 trait Eq: PartialEq { }
 ```
 
-The compiler validates effective trait shape after collecting inherited methods. A reserved Eq declaration must therefore expose correctly typed `eq` and `ne` operator methods either directly or through supertraits; an empty standalone `trait Eq { }` is invalid as the language Eq contract.
+The compiler validates effective trait shape after collecting inherited methods. A reserved Eq declaration must therefore expose correctly typed `eq` and `ne` operator methods either directly or through supertraits. An empty standalone `trait Eq { }` is invalid as the language Eq contract.
 
-Explicit implementation distinguishes semantic strength, so separate method names such as `partial_eq` are unnecessary. A float may implement PartialEq without adopting Eq, while a lawful total value explicitly implements both. Equality operators accept PartialEq and lower to `eq` or `ne`; Hashable requires Eq.
+Explicit implementation distinguishes semantic strength, so separate method names such as `partial_eq` are unnecessary. A float may implement PartialEq without adopting Eq, while a lawful total value explicitly implements both. Equality operators accept PartialEq and lower to `eq` or `ne`. Hashable requires Eq.
 
 [ADR-0083](0083-ordering-uses-inherited-operator-methods.md) applies the
 same refinement model to PartialOrd and Ord. Ordering operators accept PartialOrd,
@@ -28,5 +25,5 @@ traits. The explicit total implementation records the stronger semantic promise.
 
 - `Eq` promises that the inherited operations form lawful total equality but introduces no additional method name.
 - `derives Eq` generates PartialEq behavior and implements both PartialEq and Eq.
-- A handwritten total implementation may use one block: `impl Point: PartialEq + Eq { fn eq ... }`; `ne` normally comes from its default.
+- A handwritten total implementation may use one block: `impl Point: PartialEq + Eq { fn eq ... }`. `ne` normally comes from its default.
 - Primitive equality remains intrinsic when no traits are present and satisfies the active contracts when they are declared.

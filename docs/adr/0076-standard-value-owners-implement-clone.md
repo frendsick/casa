@@ -9,6 +9,6 @@ Owned closures, exclusive borrows, files, sockets, and other identity-bearing re
 ## Consequences
 
 - Cloning nested standard containers works by composing their ordinary Clone implementations.
-- A standard library may implement Clone for shared borrows directly; exclusive borrows do not implement it.
+- A standard library may implement Clone for shared borrows directly. Exclusive borrows do not implement it.
 - Standard Clone implementations may allocate, and allocation failure terminates under ADR-0075.
 - Adding a new owning standard type requires an explicit decision about whether it represents clonable value data or unique identity.

@@ -4,7 +4,7 @@
 assembly, the LSP and workspace request analysis snapshots, and the formatter
 requests syntax:
 
-| Operation | Input | Successful return |
+| Operation | Input | Result |
 | --- | --- | --- |
 | `syntax` | One `SourceUnit` | Tokens, optional structural facts, and a report |
 | `analyze` | `CompilationInput` | An independent analysis snapshot with a report and editor index |
@@ -98,7 +98,7 @@ before instruction selection. Native calls share one request-owned ABI plan per
 concrete extern function. Recursive calls refer to reserved identities.
 
 Source checking validates extern declaration forms, `Copy` requirements, and
-unsafe calls without ABI classification. The checked program retains concrete
+[unsafe](functions-and-lambdas.md#unsafe-boundaries) calls without ABI classification. The checked program retains concrete
 extern signatures and declaration locations. Before lowering functions, the
 Linux x86-64 planner classifies these signatures and fixes native argument and
 result placement. Unsupported layouts return `Rejected` with diagnostics and

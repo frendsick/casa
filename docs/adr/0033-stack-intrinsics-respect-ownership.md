@@ -17,7 +17,7 @@ Dropping a shared or exclusive borrow ends that loan without destroying the borr
 - Declared generic wrappers that duplicate an owned value expose `[T: Copy]`. A shared borrow does not satisfy that bound.
 - `copy` carries the same bound on its borrowed value and never invokes Clone.
 - `swap` and `rot` transfer ownership between stack positions without calling `drop` or other custom code.
-- `drop` on an owner may run custom cleanup followed by field destruction; it is no longer always a single stack-pointer adjustment.
+- `drop` on an owner may run custom cleanup followed by field destruction. It is no longer always a single stack-pointer adjustment.
 - An owner cannot be dropped or physically relocated while a borrow requiring its current storage remains live.
 - Compiler-synthesized stack shuffles obey the same rules as source-written intrinsics.
 - A `str` view is `Copy`, so stack intrinsics may duplicate its view. Owned `String` values remain non-`Copy` and use explicit `clone` when duplication is required.

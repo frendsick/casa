@@ -7,4 +7,4 @@ The safe OS-library operation `process::exit status:u8` terminates immediately w
 1 process::exit
 ```
 
-Using `u8` matches the status range conventionally observable by a parent process and contextually types ordinary status literals without a conversion. The wrapper contains the unsafe non-returning platform syscall; process exit is not a second compiler intrinsic.
+Using `u8` matches the status range conventionally observable by a parent process and contextually types ordinary status literals without a conversion. The wrapper contains the unsafe non-returning platform syscall. Process exit is not a second compiler intrinsic.

@@ -47,53 +47,52 @@ Common compiler options:
 
 | Option | Purpose |
 |---|---|
-| `-o`, `--output` | Set the output binary name |
+| `--keep-asm` | Keep the generated assembly file |
 | `-L`, `--library-path` | Add a module search directory |
 | `-l`, `--link-library` | Link a native library |
+| `-o`, `--output` | Set the output binary name |
 | `-r`, `--run` | Run the program after compilation |
-| `--keep-asm` | Keep the generated assembly file |
-| `-v`, `--version` | Print the compiler version |
 | `--verbose` | Print compiler progress |
+| `-v`, `--version` | Print the compiler version |
 
 ## Learn Casa
 
 Start with the [Casa guide](docs/guide.md).
+The [examples](examples/README.md) contain runnable programs ordered from
+introductory to advanced.
 
-Use the topic references when you need exact behavior:
+### Language
 
-| Topic | Reference |
-|---|---|
-| Values and types | [Types and Literals](docs/types-and-literals.md) |
-| Stack evaluation and operators | [Operators](docs/operators.md) |
-| Bindings, functions, and lambdas | [Functions and Lambdas](docs/functions-and-lambdas.md) |
-| Branches, loops, and matching | [Control Flow](docs/control-flow.md) |
-| Structs and methods | [Structs and Methods](docs/structs-and-methods.md) |
-| Enums and patterns | [Enums](docs/enums.md) |
-| Generics and traits | [Traits](docs/traits.md) |
-| Imports | [Modules](docs/modules.md) |
-| Compiler operations | [Built-in Intrinsics](docs/intrinsics.md) |
+- [Control flow](docs/control-flow.md)
+- [Enums and patterns](docs/enums.md)
+- [Functions and lambdas](docs/functions-and-lambdas.md)
+- [Intrinsics](docs/intrinsics.md)
+- [Modules](docs/modules.md)
+- [Operators](docs/operators.md)
+- [Ownership and borrows](docs/ownership.md)
+- [Reference notation](docs/notation.md)
+- [Structs and methods](docs/structs-and-methods.md)
+- [Traits](docs/traits.md)
+- [Types and literals](docs/types-and-literals.md)
 
-Library references:
+### Libraries
 
-| Topic | Reference |
-|---|---|
-| Optional values and errors | [Optional Values and Errors](docs/optional-values-and-errors.md) |
-| Collections and iterators | [Collections](docs/collections.md) |
-| Text, characters, and output | [Text and Characters](docs/strings-and-io.md) |
-| Files, directories, environment, and processes | [Operating-System APIs](docs/os.md) |
-| Logging, timing, arguments, JSON, and parsing | [Specialist Libraries](docs/utilities.md) |
-| Parser building blocks | [Parser Library](docs/parser.md) |
+- [Collections and iterators](docs/collections.md)
+- [List](docs/lists.md)
+- [Operating-system APIs](docs/os.md)
+- [Optional values and errors](docs/optional-values-and-errors.md)
+- [Parser library](docs/parser.md)
+- [Specialist libraries](docs/utilities.md): logging, timing, arguments, JSON,
+  and parsing
+- [Text and characters](docs/strings-and-io.md)
 
-Tooling:
+### Tooling
 
+- [Casa style](docs/STYLE.md)
 - [Compiler diagnostics](docs/errors.md)
 - [Compiler request products](docs/compiler-products.md)
-- [Language server](docs/language-server.md)
 - [Formatter usage and rules](docs/FORMAT.md)
-- [Casa style](docs/STYLE.md)
-
-See the [curated examples](examples/README.md) for runnable programs ordered
-from introductory to advanced.
+- [Language server](docs/language-server.md)
 
 ## Build from source
 
@@ -102,8 +101,3 @@ Casa is self-hosted. Build the compiler with an existing `casac`:
 ```sh
 ./casac casa.casa -o casac -L lib
 ```
-
-Keep committed documentation aligned with the current implementation. Plans
-belong in issues. Never commit benchmark results, raw samples, logs, profiles,
-or historical performance reports. See the [measurement tools](tests/benchmarks/README.md)
-for reusable checks and temporary output paths.

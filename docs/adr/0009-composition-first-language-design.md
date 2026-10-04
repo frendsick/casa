@@ -2,7 +2,7 @@
 
 Casa prioritizes **Composition-first programming**: programs are built from small, statically typed functions composed through the value stack. New features should improve that style or its developer experience without making the language substantially less minimal or compilation substantially slower.
 
-Feature work does not require evidence of existing user demand. Casa is a hobby language, so coherent exploration is sufficient when a feature fits the language. Source compatibility may be broken while the ecosystem has one known user; older releases preserve older behavior.
+Feature work does not require evidence of existing user demand. Casa is a hobby language, so coherent exploration is sufficient when a feature fits the language. Source compatibility may be broken while the ecosystem has one known user. Older releases preserve older behavior.
 
 ## Considered options
 

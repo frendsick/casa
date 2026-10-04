@@ -19,8 +19,8 @@ These unsafe operations read or write raw numeric bits. Signed integers, floatin
 
 ## Consequences
 
-- `load8` no longer zero-extends into an unrelated `i64`; it produces `u8` directly.
+- `load8` no longer zero-extends into an unrelated `i64`. It produces `u8` directly.
 - Raw stores accept no generic `Word` capability and cannot write arbitrary one-word representations.
 - Integer-width conversion remains explicit and separate from memory access.
 - The compiler lowers each operation to one exact-width load or store without runtime type metadata.
-- The caller must provide enough accessible bytes. ADR-0130 permits unaligned addresses for these raw integer operations on x86-64; typed raw operations retain natural alignment.
+- The caller must provide enough accessible bytes. ADR-0130 permits unaligned addresses for these raw integer operations on x86-64. Typed raw operations retain natural alignment.

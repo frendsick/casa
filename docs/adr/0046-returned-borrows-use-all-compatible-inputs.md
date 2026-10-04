@@ -3,8 +3,12 @@
 When a function returns a borrow that may originate from more than one borrowed input, Casa permits the function without named lifetime syntax. The returned borrow is conservatively tied to every compatible borrowed input in the function contract.
 
 ```casa
-fn choose[T] condition:bool left:$T right:$T -> $T {
-    if condition then left else right fi
+fn choose [T] condition:bool left:$T right:$T -> $T {
+    if condition then
+        left
+    else
+        right
+    fi
 }
 ```
 

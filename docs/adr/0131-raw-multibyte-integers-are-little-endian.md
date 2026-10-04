@@ -14,5 +14,5 @@ This is both Casa's explicit behavior and the native behavior of its sole compil
 - Binary parsing has deterministic byte order rather than an unspecified "native" format.
 - Little-endian formats may use the raw operations directly after their ordinary bounds and unsafe validity checks.
 - Big-endian protocols explicitly reverse or assemble bytes in library code.
-- `ptr::read[T]` and `ptr::write[T]` continue to use the compiler's ordinary in-memory layout; for fixed-width integers on x86-64 that layout is also little-endian.
+- `ptr::read[T]` and `ptr::write[T]` continue to use the compiler's ordinary in-memory layout. For fixed-width integers on x86-64 that layout is also little-endian.
 - A future target would need to preserve the specified operation semantics or introduce a separate target decision.

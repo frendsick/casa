@@ -52,17 +52,17 @@ operand:
 0 1 > print
 ```
 
-This prints `true` because the expression means `1 > 0`.
+This prints `true` because the expression means `1 > 0`. A stack snapshot
+shows the top on the right, while effect inputs start at the top. See
+[Reference notation](notation.md) for signatures, effects, and function types.
 
 ## Define and call functions
 
-A function declaration names its parameters in the order they are consumed.
+A function signature names its parameters in the order they are consumed.
 The first parameter receives the topmost value.
 
 ```casa
-fn subtract left:i64 right:i64 -> i64 {
-    left right -
-}
+fn subtract left:i64 right:i64 -> i64 { left right - }
 
 3 10 subtract print
 ```
@@ -73,9 +73,7 @@ becomes `right`. The function prints `7`.
 Functions can also use unnamed stack inputs when a local name adds no clarity:
 
 ```casa
-fn double i64 -> i64 {
-    2 *
-}
+fn double i64 -> i64 { 2 * }
 
 21 double print
 ```
@@ -98,9 +96,7 @@ an owned value without moving it:
 ```casa
 import "std"
 
-fn length text:$str -> u64 {
-    text.length
-}
+fn length text:$str -> u64 { text.length }
 
 "Casa" = text
 text length print
@@ -108,7 +104,7 @@ text print
 ```
 
 A `mut$T` parameter can update an owner through an exclusive borrow. See
-[Ownership and borrows](functions-and-lambdas.md#ownership-and-borrows) for
+[Ownership and borrows](ownership.md) for
 mutable borrow examples and the complete rules. Casa destroys each remaining
 owner when its scope ends. See [Custom destruction](structs-and-methods.md#custom-destruction)
 for cleanup methods and destruction order.
@@ -117,7 +113,7 @@ The compiler infers the binding type. Add an annotation to select or require a
 specific type:
 
 ```casa
-255 = byte:u8
+255 = byte: u8
 byte print
 ```
 
@@ -138,7 +134,6 @@ fn rating score:i64 -> str {
         "keep practicing"
     fi
 }
-
 82 rating print
 ```
 
@@ -148,7 +143,7 @@ Remember that comparison uses the topmost value as its left operand. Therefore,
 ## Try a complete program
 
 This program adds an [array iterator](collections.md#arrays), a
-[`for` loop](control-flow.md#for-loops),
+[for loop](control-flow.md#for-loops),
 [string interpolation](types-and-literals.md#string-interpolation), and
 `println` from the standard library.
 
@@ -164,7 +159,6 @@ fn rating score:i64 -> str {
         "keep practicing"
     fi
 }
-
 [72, 95, 81] = scores
 for score in scores.iter do
     score rating = label
@@ -197,3 +191,4 @@ Output:
 - [Optional Values and Errors](optional-values-and-errors.md) covers `Option`,
   `Result`, and `?`.
 - [Collections](collections.md) covers reusable data structures and iterators.
+- Use [README.md](../README.md#learn-casa) for the complete reference links.

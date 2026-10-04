@@ -20,12 +20,12 @@ trait Ord: PartialOrd + Eq {
 }
 ```
 
-The standard boolean defaults interpret `partial_cmp`; Ord fills that inherited requirement by wrapping `cmp`. Implementations may override the boolean operator methods while preserving the same ordering semantics. `<`, `<=`, `>`, and `>=` lower to `lt`, `le`, `gt`, and `ge` respectively. The compiler validates effective inherited shape, so Ord exposes all four operator methods plus `partial_cmp` and `cmp` even though most are inherited or defaulted.
+The standard boolean defaults interpret `partial_cmp`. Ord fills that inherited requirement by wrapping `cmp`. Implementations may override the boolean operator methods while preserving the same ordering semantics. `<`, `<=`, `>`, and `>=` lower to `lt`, `le`, `gt`, and `ge` respectively. The compiler validates effective inherited shape, so Ord exposes all four operator methods plus `partial_cmp` and `cmp` even though most are inherited or defaulted.
 
 ## Consequences
 
 - IEEE floats implement PartialEq and PartialOrd but not Eq or Ord.
-- `derives Ord` generates the total equality and comparison primitives and implements PartialEq, Eq, PartialOrd, and Ord; standard defaults provide the partial adapter and boolean operator methods.
-- A manual total implementation may place all four traits in one impl block; operator methods normally use their defaults.
-- Overriding a boolean operator method may improve performance but must agree with `partial_cmp` or `cmp`; the compiler cannot prove this semantic law.
+- `derives Ord` generates the total equality and comparison primitives and implements PartialEq, Eq, PartialOrd, and Ord. Standard defaults provide the partial adapter and boolean operator methods.
+- A manual total implementation may place all four traits in one impl block. Operator methods normally use their defaults.
+- Overriding a boolean operator method may improve performance but must agree with `partial_cmp` or `cmp`. The compiler cannot prove this semantic law.
 - Current direct operator-to-method lowering is retained while total-order algorithms may use `cmp` to avoid repeated comparisons.

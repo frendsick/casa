@@ -12,7 +12,7 @@ There is no receiver value at the reference site from which to determine the con
 ## Consequences
 
 - `&Token::convert` remains valid when method lookup is unambiguous.
-- The qualified reference has the concrete method's ordinary function type; qualification does not create a trait object or runtime dispatch.
+- The qualified reference has the concrete method's ordinary function type. Qualification does not create a trait object or runtime dispatch.
 - Generic code may continue to use `&T::method` when its bounds select one applicable trait implementation.
 - Function-reference resolution does not depend on a later assignment, argument, or return type.
 - Wrapper lambdas are unnecessary solely to disambiguate a trait implementation method.

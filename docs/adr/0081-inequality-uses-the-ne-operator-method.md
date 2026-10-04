@@ -3,9 +3,7 @@
 The `!=` operator lowers to the `ne` method of the active equality trait rather than always lowering to `eq` followed by boolean negation. The trait provides the ordinary default:
 
 ```casa
-fn ne $self other:$self -> bool {
-    other self.eq !
-}
+fn ne $self other:$self -> bool { other self.eq ! }
 ```
 
 A type that implements the trait may override `ne` when it has a more direct implementation, but the trait contract requires `ne` to remain the logical inverse of `eq`. The compiler checks the operator method's stack effect but cannot prove that semantic law, just as it cannot prove reflexivity or transitivity.

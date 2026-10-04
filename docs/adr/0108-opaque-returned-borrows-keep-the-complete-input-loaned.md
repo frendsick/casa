@@ -4,9 +4,8 @@ When a function returns borrows derived from a borrowed input, its public stack 
 
 ```casa
 pair.split = right = left
-
 left.clear
-pair.left.length  # error while right remains live
+pair.left.length # error while right remains live
 right.clear
 ```
 

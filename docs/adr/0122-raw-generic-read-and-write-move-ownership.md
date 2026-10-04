@@ -17,5 +17,5 @@ These operations transfer ownership. They do not copy an owning representation o
 - Writing over a live value without first moving or destroying it is undefined behavior and may leak resources.
 - Reading uninitialized storage, using the wrong `T`, violating alignment, or accessing invalid storage is undefined behavior.
 - Unsafe collection implementations track which slots are initialized and ensure every live slot is moved or destroyed exactly once.
-- `load8`, `load16`, `load32`, `load64`, and matching stores remain the raw numeric-bit operations; they do not replace typed ownership moves.
+- `load8`, `load16`, `load32`, `load64`, and matching stores remain the raw numeric-bit operations. They do not replace typed ownership moves.
 - The intrinsics lower directly and add no runtime type metadata or copy operation.

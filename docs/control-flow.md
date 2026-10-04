@@ -9,7 +9,6 @@ Use `if`, optional `elif` and `else` branches, and `fi`:
 
 ```casa
 82 = score
-
 if 90 score >= then
     "excellent"
 elif 60 score >= then
@@ -77,8 +76,8 @@ done
 ```
 
 The iterable expression is evaluated once. `break` and `continue` work as they
-do in a `while` loop. See [Collections](collections.md) for standard iterators
-and the [`Iterable` trait](traits.md#built-in-traits) for custom iterators.
+do in a `while` loop. Custom iterators implement `Iterable`. See
+[Collections](collections.md) for standard iterators.
 
 ## Test and bind an enum variant
 
@@ -86,13 +85,13 @@ and the [`Iterable` trait](traits.md#built-in-traits) for custom iterators.
 
 ```casa
 enum Shape {
-    Circle(i64)
-    Rectangle(i64 i64)
+    Circle (i64)
+    Rectangle (i64 i64)
     Point
 }
 
 10 Shape::Circle = shape
-shape Shape::Circle is print    # true
+shape Shape::Circle is print # true
 ```
 
 In an `if` or `elif` condition, the pattern can bind carried values:
@@ -124,12 +123,18 @@ matched path that returns does not affect the ownership join.
 `match` selects one pattern and can produce a value:
 
 ```casa
-enum Status { Ready Busy Failed(str) }
+import "std"
+
+enum Status {
+    Ready
+    Busy
+    Failed (str)
+}
 
 Status::Ready = status
 status match
-    Status::Ready => "ready"
-    Status::Busy => "busy"
+    Status::Ready => "ready".to_str
+    Status::Busy => "busy".to_str
     Status::Failed(message) => f"failed: {message}"
 end
 print
@@ -201,4 +206,4 @@ A guard cannot move an owner because a false guard must leave the subject and
 outer bindings available to later arms. A guarded arm does not count toward
 exhaustiveness because its condition can be false.
 
-See [`examples/enum.casa`](../examples/enum.casa) for guards on enum payloads.
+See [examples/enum.casa](../examples/enum.casa) for guards on enum payloads.

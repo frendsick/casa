@@ -2,7 +2,7 @@
 
 Compiler-generated destruction of recursive owned values initially follows the ordinary recursive field structure. Each owner runs its compiler-called cleanup method if present, then destroys fields in reverse declaration order under the existing LIFO rule. The compiler does not initially generate a heap worklist or pointer-reversal traversal solely to guarantee constant call-stack usage.
 
-A sufficiently deep structure may exhaust the process call stack; stack exhaustion terminates without unwinding. Programs that intentionally build exceptional depths may consume or drain the structure iteratively before scope exit. This limitation does not permit double destruction or use after move.
+A sufficiently deep structure may exhaust the process call stack. Stack exhaustion terminates without unwinding. Programs that intentionally build exceptional depths may consume or drain the structure iteratively before scope exit. This limitation does not permit double destruction or use after move.
 
 ## Considered options
 

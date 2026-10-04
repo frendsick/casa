@@ -4,27 +4,30 @@ Casa operators use postfix notation. Push the operands first, then write the
 operator:
 
 ```casa
-3 4 + 2 * print    # 14
+3 4 + 2 * print # 14
 ```
 
 There is no operator precedence. Each operator immediately consumes its
 operands and pushes its result.
+
+Stack-effect inputs use consumption order. Outputs use push order. See
+[reference notation](notation.md) for examples and the meaning of `None`.
 
 ## Operand order
 
 Arithmetic reads from left to right:
 
 ```casa
-10 3 - print    # 7, because this means 10 - 3
+10 3 - print # 7, because this means 10 - 3
 ```
 
 Functions and comparisons use the topmost value as the first operand:
 
 ```casa
-0 1 > print     # true, because this means 1 > 0
+0 1 > print # true, because this means 1 > 0
 ```
 
-This comparison rule can be surprising. For example, `90 score >=` means
+For example, `90 score >=` means
 `score >= 90`.
 
 ## Arithmetic
@@ -48,13 +51,55 @@ deliberate modulo arithmetic.
 
 After `import "std"`, these `i64` helpers are available:
 
-| Method | Result |
-|---|---|
-| `abs self:i64 -> i64` | Absolute value |
-| `min self:i64 other:i64 -> i64` | Smaller value |
-| `max self:i64 other:i64 -> i64` | Larger value |
-| `clamp self:i64 low:i64 high:i64 -> i64` | Value limited to the inclusive range |
-| `pow self:i64 exponent:i64 -> i64` | Integer exponentiation |
+| Method | Signature | Description |
+|---|---|---|
+| [abs](#i64abs) | `fn abs self:$i64 -> i64` | Absolute value |
+| [clamp](#i64clamp) | `fn clamp self:$i64 lo:i64 hi:i64 -> i64` | Value limited to the inclusive range |
+| [max](#i64max) | `fn max self:$i64 other:i64 -> i64` | Larger value |
+| [min](#i64min) | `fn min self:$i64 other:i64 -> i64` | Smaller value |
+| [pow](#i64pow) | `fn pow self:$i64 exp:i64 -> i64` | Integer exponentiation |
+
+### i64::abs
+
+```text
+fn abs self:$i64 -> i64
+```
+
+Returns the absolute value.
+
+### i64::clamp
+
+```text
+fn clamp self:$i64 lo:i64 hi:i64 -> i64
+```
+
+Returns the value limited to the inclusive range.
+
+### i64::max
+
+```text
+fn max self:$i64 other:i64 -> i64
+```
+
+Returns the larger value.
+
+### i64::min
+
+```text
+fn min self:$i64 other:i64 -> i64
+```
+
+Returns the smaller value.
+
+### i64::pow
+
+```text
+fn pow self:$i64 exp:i64 -> i64
+```
+
+Raises the integer to the given exponent.
+
+### Arithmetic examples
 
 `f32` and `f64` also provide `abs`.
 
@@ -67,7 +112,7 @@ unsafe {
 }
 ```
 
-Pointer arithmetic requires an `unsafe` block.
+Pointer arithmetic requires an [unsafe](functions-and-lambdas.md#unsafe-boundaries) block.
 
 ## Bit operations
 

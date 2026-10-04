@@ -16,12 +16,12 @@ impl Token: Convert[str] {
 }
 ```
 
-The trait implementation identity is the receiver type plus the fully instantiated trait, not merely the receiver and trait name. The two implementations above are distinct; a second `Token: Convert[i64]` remains a duplicate.
+The trait implementation identity is the receiver type plus the fully instantiated trait, not merely the receiver and trait name. The two implementations above are distinct. A second `Token: Convert[i64]` remains a duplicate.
 
 ## Consequences
 
 - Trait implementation methods retain their instantiated-trait identity instead of being flattened solely by receiver and method name.
 - Generic implementation patterns are rejected only when they can overlap at the same fully instantiated trait.
 - Bounds select the matching trait instantiation exactly.
-- An unqualified method call is valid only when its trait implementation is otherwise unambiguous; explicit call-disambiguation syntax is a separate decision.
+- An unqualified method call is valid only when its trait implementation is otherwise unambiguous. Explicit call-disambiguation syntax is a separate decision.
 - Inheriting incompatible instantiations into one child trait remains subject to ADR-0099's method-conflict rule.

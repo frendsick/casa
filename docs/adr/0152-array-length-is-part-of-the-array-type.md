@@ -33,9 +33,7 @@ A constant parameter remains symbolic while its generic body is checked under
 ADR-0069. The same index is therefore accepted here because `N` is not concrete:
 
 ```casa
-fn fourth [const N:u64] values:$array[i64 N] -> i64 {
-    3 values.nth.clone
-}
+fn fourth [const N:u64] values:$array[i64 N] -> i64 { 3 values.nth.clone }
 
 [1, 2, 3] fourth drop # Specializes N to 3 and terminates at runtime.
 ```

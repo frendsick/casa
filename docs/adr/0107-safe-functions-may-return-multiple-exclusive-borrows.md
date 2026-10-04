@@ -4,7 +4,7 @@ A safe function may return multiple exclusive borrows when its body proves that 
 
 ```casa
 struct Pair {
-    left: Buffer
+    left:  Buffer
     right: Buffer
 }
 

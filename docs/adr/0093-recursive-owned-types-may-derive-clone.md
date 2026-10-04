@@ -5,7 +5,7 @@ A finite recursive owned struct or enum may derive Clone:
 ```casa
 enum Node derives Clone {
     End
-    Next(i64 Node)
+    Next (i64 Node)
 }
 ```
 
@@ -16,5 +16,5 @@ The trait implementation checker treats a recursive derivation dependency as one
 ## Consequences
 
 - Compiler-managed indirection does not prevent Clone derivation, although it makes the recursive type non-Copy.
-- A deep recursive clone may exhaust call-stack space or allocation capacity; allocation failure terminates under the established model.
+- A deep recursive clone may exhaust call-stack space or allocation capacity. Allocation failure terminates under the established model.
 - Tests must cover direct recursion, mutual recursion, a non-Clone external field, and a long finite chain.

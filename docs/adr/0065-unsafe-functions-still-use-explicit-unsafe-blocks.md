@@ -10,4 +10,4 @@ unsafe fn read_u64 address:ptr -> u64 {
 }
 ```
 
-Unsafe blocks may consume and produce ordinary stack values. They enable only designated unsafe operations; type, ownership, borrowing, initialization, control-flow, and stack-effect checking remain active. Separating the caller contract from the implementation's exact trusted operations adds minimal ceremony while keeping audits local.
+Unsafe blocks may consume and produce ordinary stack values. They enable only designated unsafe operations. Type, ownership, borrowing, initialization, control-flow, and stack-effect checking remain active. Separating the caller contract from the implementation's exact trusted operations adds minimal ceremony while keeping audits local.

@@ -44,6 +44,10 @@ See [STYLE.md](./STYLE.md) for naming conventions and idiomatic patterns.
 
 ---
 
+Code fragments use declarations and bindings from their surrounding example.
+Names such as `std::List` assume `import "std"`. See
+[reference notation](notation.md#library-names-and-examples).
+
 ## Indentation
 
 - Use **4 spaces** per indentation level.
@@ -64,14 +68,15 @@ fn fizzbuzz number:i64 {
 
 - Lines SHOULD NOT exceed **100 characters**.
 - String literals in examples and expected-output lines are exempt.
-- When a function declaration exceeds 100 characters, use the wrapping form (see below).
+- When a function signature exceeds 100 characters, use the wrapping form (see below).
 
 ---
 
 ## Blank lines
 
-- **1 blank line** before and after top-level definitions (`fn`, `struct`, `enum`,
-  `impl`, `trait`, with an optional `pub` prefix) and import groups.
+- **1 blank line** before top-level definitions (`fn`, `struct`, `enum`,
+  `impl`, `trait`, with an optional `pub` prefix).
+- **1 blank line** before and after import groups.
 - Consecutive plain top-level statements (root bindings, assignments, map `.set` chains)
   are grouped **without** blank lines.
 - Consecutive `import` statements are grouped **without** blank lines.
@@ -91,12 +96,9 @@ struct Foo {
 }
 
 impl Foo {
-    fn new -> Foo {
-        0 0 Foo
-    }
+    fn new -> Foo { 0 0 Foo }
 }
-
-Map[str i64]::new = MY_MAP
+std::Map[str i64]::new = MY_MAP
 1 "a" MY_MAP.set
 2 "b" MY_MAP.set
 
@@ -120,8 +122,8 @@ Trailing spaces or tabs at the end of a line are forbidden.
 Do not put whitespace around `::` in qualified calls or references:
 
 ```casa
-List[T]::new = values
-value List[T]::from_array
+std::List[T]::new = values
+value std::List[T]::from_array
 ```
 
 ---
@@ -133,7 +135,7 @@ value List[T]::from_array
 - Keep a trailing comment on the line of the structural unit it follows.
 - Keep a standalone comment on its own line at the indentation of the unit it
   describes.
-- Put a `# SAFETY:` comment immediately before the `unsafe` block or `unsafe fn`
+- Put a `# SAFETY:` comment immediately before the [unsafe](functions-and-lambdas.md#unsafe-boundaries) block or `unsafe fn`
   that it justifies. Do not add `# SAFETY:` comments in test files.
 - Section separator comments may use either `=` or `-` repeated characters.
   Choose one style and do not mix styles within a file.
@@ -142,7 +144,6 @@ value List[T]::from_array
 # ============================================================================
 # Section using = style
 # ============================================================================
-
 # ---------------------------------------------------------------------------
 # Section using - style
 # ---------------------------------------------------------------------------
@@ -155,19 +156,19 @@ value List[T]::from_array
 - Items MUST be comma-separated, with a space after each comma. A missing comma
   between items is a syntax error (see
   [ADR-0154](adr/0154-array-literals-require-commas-between-items.md)).
-- A single trailing comma before `]` is allowed. The compact form omits it; the
+- A single trailing comma before `]` is allowed. The compact form omits it. The
   expanded form adds it.
 - One space before the opening `[` when it follows another token:
 
 ```casa
 # Correct
 ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"]
-[1, 2, 3] List::from_array = nums
-"hello" [0, 5] str::slice
+[1, 2, 3] std::List::from_array = nums
+["hello", "Casa"] = greetings
 
 # Wrong
 ["0","1","2"]
-[1,2,3]List::from_array = nums
+[1,2,3]std::List::from_array = nums
 [1 2 3]              # missing commas: syntax error
 ```
 
@@ -182,7 +183,6 @@ value List[T]::from_array
 ```casa
 # Fits within 100 characters: compact.
 [1, 2, 3] sum
-
 # Exceeds 100 characters: expand, trailing comma, aligned `]`, suffix on `]`.
 [
     11111111,
@@ -202,17 +202,28 @@ value List[T]::from_array
 
 ## Enum variant data parentheses
 
-No space between an enum variant name and its data parentheses:
+An enum declaration puts one space before a variant's payload type list:
+
+```casa
+enum Shape {
+    Circle (i64)
+    Rectangle (i64 i64)
+    Point
+}
+```
+
+Outside an enum declaration, put no space between a variant's qualified name
+and its data parentheses:
 
 ```casa
 # Correct
 OpValue::FnCall(value)
-Option::Some(x)
+std::Option::Some(x)
 Type::Generic(generic)
 
 # Wrong
 OpValue::FnCall (value)
-Option::Some (x)
+std::Option::Some (x)
 Type::Generic (generic)
 ```
 
@@ -230,6 +241,16 @@ const BUFFER_BYTES: u64 { ELEMENT_COUNT ELEMENT_BYTES * }
 
 Keep type arguments adjacent to a function reference: `&length[BUFFER_BYTES]`.
 
+## Binding annotations
+
+Put one space after the colon in a binding annotation. Function parameters use
+the compact `name:type` form.
+
+```casa
+255 = byte: u8
+std::Option::None = absent: std::Option[i64]
+```
+
 ---
 
 ## Struct and enum field layout
@@ -244,9 +265,9 @@ struct Parser {
 }
 
 struct Token {
-    pub kind:     TokenKind
-    location:     Location
-    value:        str
+    pub kind: TokenKind
+    location: Location
+    value:    str
 }
 ```
 
@@ -268,11 +289,11 @@ enum Color {
 
 ---
 
-## Function declarations
+## Function signatures
 
 ### Single-line form
 
-When the function declaration fits within the line-length limit, write everything on one line.
+When the function signature fits within the line-length limit, write everything on one line.
 Parameters use `name:type` (no space after colon):
 
 ```casa
@@ -280,11 +301,18 @@ fn fizzbuzz number:i64 {
     ...
 }
 
-fn add a:i64 b:i64 -> i64 {
-    a b +
-}
+fn add a:i64 b:i64 -> i64 { a b + }
 
 extern fn strlen text:$cstr -> u64
+```
+
+Put one space before a function's type-parameter list. Type bounds use a
+compact colon:
+
+```casa
+fn identity [T] value:T -> T { value }
+
+fn duplicate [T:Clone] value:$T -> T { value.clone }
 ```
 
 ### Inline definitions
@@ -311,8 +339,8 @@ not apply to lambdas or match-arm blocks.
 
 ### Wrapped form
 
-When the function declaration would exceed 100 characters, wrap as follows.
-Keep `pub`, `unsafe`, or `extern` before `fn` on the first line.
+When the function signature would exceed 100 characters, wrap as follows.
+Keep `pub`, [unsafe](functions-and-lambdas.md#unsafe-boundaries), or `extern` before `fn` on the first line.
 
 - `fn name` alone on the first line
 - Each parameter on its own line, indented 4 spaces, `name:type` compact
@@ -321,10 +349,10 @@ Keep `pub`, `unsafe`, or `extern` before `fn` on the first line.
 ```casa
 fn make_compiler_with_tables
     sources:SourceStore
-    ops:List[Op]
-    function:Option[Function]
-    string_table:List[str]
-    constants_table:List[str]
+    ops:std::List[Op]
+    function:std::Option[Function]
+    string_table:std::List[str]
+    constants_table:std::List[str]
 -> SourceReader {
     ...
 }
@@ -336,12 +364,15 @@ Multiple return types follow the same pattern:
 fn split_pair
     input:str
     delimiter:str
+    trim_whitespace:bool
+    preserve_empty_fields:bool
+    include_delimiter:bool
 -> str str {
     ...
 }
 ```
 
-An unsafe function prefixes the declaration with `unsafe`. The same rule
+An `unsafe` function prefixes the declaration with `unsafe`. The same rule
 applies to the wrapped form, whose first line is `unsafe fn name`:
 
 ```casa
@@ -355,8 +386,10 @@ extern declaration ends after its return type and has no opening brace:
 
 ```casa
 extern fn native_operation
-    address:ptr
-    value:i64
+    destination_buffer:ptr
+    destination_buffer_size:u64
+    source_buffer:ptr
+    source_buffer_size:u64
 -> i32
 ```
 
@@ -482,7 +515,6 @@ color match
     Color::Green => "green" print
     Color::Blue => "blue" print
 end
-
 shape match
     Shape::Circle(radius) => {
         "radius=" print
@@ -502,7 +534,6 @@ Prefer f-strings whenever embedding one or more values into a string literal:
 ```casa
 # Preferred
 f"Hello, {name}!" print
-
 # Avoid: str::concat for 3+ strings
 name " is " str::concat age i64::to_str str::concat print
 ```
@@ -510,8 +541,8 @@ name " is " str::concat age i64::to_str str::concat print
 Use `String` for incremental or loop-based string construction:
 
 ```casa
-String::new = text
-items.length 0 == ! while
+std::String::new = text
+while items.is_empty ! do
     items.pop.as_str text.append
 done
 text

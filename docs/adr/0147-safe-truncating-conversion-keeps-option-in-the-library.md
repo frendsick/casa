@@ -6,7 +6,7 @@ The standard library implements exact `Target::try_from` conversion by checking 
 
 ## Consequences
 
-- `trunc_from` is safe because every call either returns a valid target integer or terminates; it cannot construct an invalid value.
+- `trunc_from` is safe because every call either returns a valid target integer or terminates. It cannot construct an invalid value.
 - Users may call `trunc_from` directly when truncation is intended and exceptional inputs should terminate.
 - `try_from` remains non-terminating for conversion failure and returns `Option::None` instead.
 - The compiler knows the numeric primitive but neither recognizes `Option` nor lowers the standard-library wrapper specially.

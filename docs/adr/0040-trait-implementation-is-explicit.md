@@ -32,4 +32,4 @@ impl Item: Described { }
 - `derives Eq`, `derives Ord`, `derives Hashable`, `derives Clone`, and `derives Copy` implement traits and generate any required methods. Copy implementations are additionally subject to compiler representation validation.
 - Default methods are considered only from traits the receiver explicitly implements, including their supertraits. Ambiguity follows the separate default-method conflict rule.
 - Ordinary `impl Type { ... }` blocks continue to define inherent methods without implementing a trait.
-- Rules governing where a trait implementation may be declared and whether it may be repeated require a separate decision about trait implementation rules.
+- The rules for declaration locations and repeated implementations need a separate decision.

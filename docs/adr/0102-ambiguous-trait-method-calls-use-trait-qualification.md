@@ -18,5 +18,5 @@ token.convert
 - Method selection never depends on an expected return type.
 - Adding another trait implementation can make an unqualified call ambiguous, but cannot silently redirect it.
 - Ambiguity diagnostics list the qualifying trait names that make the call explicit.
-- Trait qualification is required only at the ambiguous call site; implementations and unambiguous callers gain no extra syntax.
+- Trait qualification is required only at the ambiguous call site. Implementations and unambiguous callers gain no extra syntax.
 - Selecting a trait implementation method as a first-class function value requires a separate receiver-type decision because no receiver value is present.

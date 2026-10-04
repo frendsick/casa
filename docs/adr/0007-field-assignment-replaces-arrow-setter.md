@@ -9,7 +9,7 @@ The `->` setter syntax (`value instance->field`) is removed in favour of extendi
 
 **Consequences**
 
-- `=`, `+=`, `-=` accept a variable-rooted dot-chain lvalue as their target: `identifier(.field)*`. The root must be a named variable; arbitrary expression receivers are not lvalues.
+- `=`, `+=`, `-=` accept a variable-rooted dot-chain lvalue as their target: `identifier(.field)*`. The root must be a named variable. Arbitrary expression receivers are not lvalues.
 - `+=` and `-=` on field paths remain `int`-only, consistent with their behaviour on local variables.
-- `->` is removed from the delimiter handler entirely. Its use in type annotations (`fn[int -> str]`) is unaffected — that token is parsed in a separate code path.
+- `->` is removed from the delimiter handler entirely. Its use in type annotations (`fn[int -> str]`) is unaffected because that token is parsed in a separate code path.
 - All existing call sites using `->` must be migrated to `= receiver.field`.

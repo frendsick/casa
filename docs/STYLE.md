@@ -8,6 +8,10 @@ see [FORMAT.md](./FORMAT.md).
 
 ---
 
+Code fragments use declarations and bindings from their surrounding example.
+Names such as `std::List` assume `import "std"`. See
+[reference notation](notation.md#library-names-and-examples).
+
 ## Naming
 
 ### Functions
@@ -38,9 +42,7 @@ see [FORMAT.md](./FORMAT.md).
   - live outside any impl block because they're too complex to be methods
 
   ```casa
-  fn make_location file:str offset:u64 length:u64 -> Location {
-      length offset file Location
-  }
+  fn make_location file:str offset:u64 length:u64 -> Location { length offset file Location }
   ```
 
 - **MUST NOT** use both `Type::new` and `make_type` for the same type.
@@ -100,9 +102,9 @@ see [FORMAT.md](./FORMAT.md).
   `K` (map key), `V` (map value), `E` (error in Result).
 
   ```casa
-  fn id[T] T -> T { }
-  fn swap_t[T1 T2] T1 T2 -> T1 T2 { swap }
-  fn get[K: Hashable, V] self:Map[K V] key:K -> Option[V] { ... }
+  fn id [T] T -> T { }
+  fn swap_t [T1 T2] T1 T2 -> T1 T2 { swap }
+  fn get [K:std::Hashable, V] self:std::Map[K V] key:K -> std::Option[V] { ... }
   ```
 
 ---
@@ -142,19 +144,19 @@ without a type-name prefix is acceptable.
   or more calls:
 
   ```casa
-  person.age print                  # MUST: shorthand getter, no space
+  person.age print # MUST: shorthand getter, no space
   analysis.result.document print
   analysis
       .result
       .document
       .location print
-  42 = person.age                   # MUST: field assignment, no space
+  42 = person.age # MUST: field assignment, no space
   ```
 
 - Use the explicit form (`person Person::age`) only when passing an accessor as a
   function reference (`&Person::age`) or when the shorthand creates an ambiguous
   RPN expression.
-- For method pipeline formatting see [FORMAT.md — Getter chaining and method pipelines](./FORMAT.md#getter-chaining-and-method-pipelines).
+- See the [method pipeline formatting rules](./FORMAT.md#getter-chaining-and-method-pipelines).
 
 ---
 
@@ -164,19 +166,16 @@ without a type-name prefix is acceptable.
   the type checker can infer them. This documents intent for readers:
 
   ```casa
-  fn greet name:$str -> String {
-      f"Hello, {name}!"
-  }
+  fn greet name:$str -> std::String { f"Hello, {name}!" }
   ```
 
 - In function bodies, annotate a variable **only** when inference would fail:
 
   ```casa
-  # Required: bare Option needs narrowing
-  Option::None = empty:Option[i64]
-
+  # Required: bare std::Option needs narrowing
+  std::Option::None = empty: std::Option[i64]
   # MUST NOT: inference works fine, annotation is noise
-  42 = x:i64
+  42 = x: i64
   ```
 
 ---
@@ -186,15 +185,15 @@ without a type-name prefix is acceptable.
 ### Order: primary data first, config flags last
 
 - **MUST** put primary data parameters first and config/flag/mode parameters last.
-- Casa's RPN means param 1 is the topmost stack slot — the first argument pushed last.
-  That position belongs to the primary data being operated on. A config flag in param 1
-  forces every call site to push the flag immediately before the function name, burying
-  the important argument under a trailing literal.
+- The first parameter receives the topmost stack value. Push that argument last.
+  Use that position for the primary data. A flag in the first parameter position
+  makes every caller push it immediately before the function name, after the primary
+  data.
 
   ```casa
   # MUST — primary data first, flag last
   fn find_matching_label
-      ops:List[Op]
+      ops:std::List[Op]
       op_index:u64
       boundary:i64
       target:OpKind
@@ -204,7 +203,7 @@ without a type-name prefix is acceptable.
   # MUST NOT — flag in first position
   fn find_matching_label
       backward:bool
-      ops:List[Op]
+      ops:std::List[Op]
       ...
   -> i64 { ... }
   ```
@@ -213,9 +212,9 @@ without a type-name prefix is acceptable.
 
 - **MUST** pick the parameter type matching the actual value set. Two states = `bool`.
   Arbitrary integer = `i64`. Don't use `i64` as a stand-in for "one of two values".
-- `i64` tells the reader "any integer" and invites misuse. If only `1` and `-1` are
-  ever valid, the type lies about the domain. Use `bool` and derive the integer
-  internally (`if backward then -1 else 1 fi = step`).
+- `i64` accepts values across its full range. If only `1` and `-1` are valid,
+  it does not express that restriction. Use `bool` and derive the integer internally
+  (`if backward then -1 else 1 fi = step`).
 
 ---
 
@@ -234,13 +233,12 @@ without a type-name prefix is acceptable.
 
   ```casa
   # MUST
-  if value Option::Some(inner) is then
+  if value std::Option::Some(inner) is then
       inner process
   fi
-
   # MUST NOT
-  if value .is_some then
-      value .unwrap process
+  if value.is_some then
+      value.unwrap process
   fi
   ```
 
@@ -292,15 +290,14 @@ without a type-name prefix is acceptable.
 
 - **SHOULD** prefer `for x in <iter> do … done` over the equivalent `while`
   loop whenever the loop walks every element of a collection or iterator. The
-  `for` form is shorter, makes the intent obvious, and removes the off-by-one
-  trap of manual index bookkeeping.
+  `for` form is shorter and states the traversal directly. It avoids manual
+  index updates that can cause off-by-one errors.
 
   ```casa
   # SHOULD
   for token in tokens.iter do
       token process
   done
-
   # SHOULD NOT — manual indexing where `for` works
   0 = index
   while index tokens.length > do
@@ -309,7 +306,7 @@ without a type-name prefix is acceptable.
   done
   ```
 
-- Reach for `while` only when `for` cannot express the loop: condition-driven
+- Use `while` only when `for` cannot express the loop: condition-driven
   iteration, parallel iteration over multiple sources, mid-loop mutation of the
   collection being iterated, or early termination that depends on state outside
   the iterator.
@@ -329,9 +326,8 @@ without a type-name prefix is acceptable.
   numeric conversion:
 
   ```casa
-  42 = x:i64
+  42 = x: i64
   x u8::try_from = maybe_byte
-
   # Raw representation boundary
   unsafe { x u64::wrapping_from buf store64 }
   ```
@@ -343,8 +339,8 @@ without a type-name prefix is acceptable.
 - **MUST** use `+=` or `-=` when adding or subtracting a literal value:
 
   ```casa
-  1 += index       # MUST
-  index 1 + = index  # MUST NOT for literal increment
+  1 += index # MUST
+  index 1 + = index # MUST NOT for literal increment
   ```
 
 - Use field assignment for computed updates that are not `+=` or `-=`:
@@ -359,7 +355,7 @@ without a type-name prefix is acceptable.
 
 - **MUST** return `Result` for meaningful failures and `Option` for absence.
 - Compiler phases **MUST** record recoverable diagnostics in their phase-owned
-  `Diagnostics`; callers decide whether to continue, report, or exit.
+  `Diagnostics`. Callers decide whether to continue, report, or exit.
 - Application adapters may print an unrecoverable internal error and exit when their
   public interface cannot represent failure.
 - **MUST** write fixed error messages as plain string literals, not constructed
@@ -370,7 +366,7 @@ without a type-name prefix is acceptable.
   location "Expected type name" ErrorKind::Syntax diagnostics.record_error
 
   # MUST NOT
-  String::new = msg
+  std::String::new = msg
   "Expected " msg.append ...
   location msg ErrorKind::Syntax diagnostics.record_error
   ```

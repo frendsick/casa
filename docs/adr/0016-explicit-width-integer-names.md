@@ -18,8 +18,8 @@ and conversions remain explicit under
 
 ## Consequences
 
-- Existing `int` source migrates to `i64`; `int` does not remain as an alias.
-- Binary data and UTF-8 code units use `u8`; `byte` is not a separate type or alias.
-- In-memory sizes and indexes use `u64`; signed offsets use `i64`.
-- Numeric conversions are explicit; Casa does not add implicit integer promotion.
-- Integer literals are typed from immediate context and default to `i64` only when otherwise unconstrained; this does not convert already typed values.
+- Existing `int` source migrates to `i64`. `int` does not remain as an alias.
+- Binary data and UTF-8 code units use `u8`. `byte` is not a separate type or alias.
+- In-memory sizes and indexes use `u64`. Signed offsets use `i64`.
+- Numeric conversions are explicit. Casa does not add implicit integer promotion.
+- Integer literals are typed from immediate context and default to `i64` only when otherwise unconstrained. This does not convert already typed values.

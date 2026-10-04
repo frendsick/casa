@@ -6,8 +6,8 @@ An enum defines a closed set of variants. A variant can carry values.
 
 ```casa
 enum Shape {
-    Circle(i64)
-    Rectangle(i64 i64)
+    Circle (i64)
+    Rectangle (i64 i64)
     Point
 }
 ```
@@ -18,8 +18,15 @@ enum.
 Enums can have type parameters:
 
 ```casa
-enum Option[T] { None Some(T) }
-enum Result[T E] { Error(E) Ok(T) }
+enum Option[T] {
+    None
+    Some (T)
+}
+
+enum Result[T E] {
+    Error (E)
+    Ok (T)
+}
 ```
 
 See [Traits](traits.md) for the general rules for type parameters.
@@ -37,14 +44,14 @@ Shape::Point
 The carried values determine generic type parameters when possible:
 
 ```casa
-42 Option::Some          # Option[i64]
+42 Option::Some # Option[i64]
 "not found" Result::Error
 ```
 
 An empty generic variant often needs context:
 
 ```casa
-Option::None = result:Option[i64]
+Option::None = result: Option[i64]
 ```
 
 ## Process an enum
@@ -73,11 +80,17 @@ Printing an enum writes its zero-based variant number. Using the enum name as a
 value produces its number of variants:
 
 ```casa
-enum Color derives Ord { Red Green Blue }
+import "std"
 
-Color::Red Color::Blue > print    # true, because Blue follows Red
-Color::Blue print                 # 2
-Color print                       # 3
+enum Color derives std::Ord {
+    Red
+    Green
+    Blue
+}
+
+Color::Red Color::Blue > print # true, because Blue follows Red
+Color::Blue print # 2
+Color print # 3
 ```
 
 Use `derives Eq`, `derives Ord`, or `derives Hashable` to opt in. Plain enums
@@ -89,4 +102,4 @@ indirection and can derive `Clone` for explicit independent duplication. For
 custom Clone behavior, omit the derive and write an explicit implementation. See
 [Copy and Clone](traits.md#copy-and-clone).
 
-See [`examples/enum.casa`](../examples/enum.casa) for more runnable examples.
+See [examples/enum.casa](../examples/enum.casa) for more runnable examples.

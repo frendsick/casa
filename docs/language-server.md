@@ -76,12 +76,12 @@ safer.
 
 ## Features
 
-| Feature | Current behavior |
+| Feature | Behavior |
 |---|---|
-| Diagnostics | Compile on open, full-document change, and save |
-| Definition | Functions, bindings, structs, enum variants, and qualified methods |
-| Hover | Types and stack effects for symbols, literals, operators, and intrinsics |
 | Completion | Names, keywords, intrinsics, dot methods, and qualified names |
+| Definition | Functions, bindings, structs, enum variants, and qualified methods |
+| Diagnostics | Compile on open, full-document change, and save |
+| Hover | Types and stack effects for symbols, literals, operators, and intrinsics |
 | References | Verified uses across discovered workspace roots and imports |
 | Rename | Validated workspace edits for functions and bindings |
 | Semantic tokens | Full-document token classification |

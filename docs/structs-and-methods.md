@@ -7,7 +7,7 @@ A struct groups named fields into one type.
 ```casa
 struct Person {
     name: str
-    age: i64
+    age:  i64
 }
 
 Person { name: "Ada" age: 36 } = person
@@ -53,16 +53,13 @@ person Person::name print
 An `impl` block adds methods to a type:
 
 ```casa
+import "std"
+
 impl Person {
-    fn birthday self:mut$Person {
-        1 += self.age
-    }
+    fn birthday self:mut$Person { 1 += self.age }
 
-    fn description self:$Person -> String {
-        f"{self.name}, age {self.age}"
-    }
+    fn description self:$Person -> std::String { f"{self.name}, age {self.age}" }
 }
-
 person.birthday
 person.description print
 ```
@@ -105,6 +102,8 @@ methods. Their allowed field types and native pointer use are documented under
 Ordinary `struct` declarations keep a compiler-owned layout that can change
 between compiler versions.
 
+## Receiver access and stored borrows
+
 The declared receiver controls which values can call a method:
 
 | Receiver | Owned `T` | Shared `$T` | Exclusive `mut$T` |
@@ -114,7 +113,7 @@ The declared receiver controls which values can call a method:
 | `self:mut$T` | Yes | No | Yes |
 
 Method lookup checks the exact value type before it checks the borrowed type.
-Shared borrows do not implement Clone. When `Person` implements Clone, `.clone`
+[Shared borrows](ownership.md#borrow-for-a-call) do not implement Clone. When `Person` implements Clone, `.clone`
 on `$Person` or `mut$Person` calls that implementation and produces a new
 owner:
 
@@ -137,10 +136,12 @@ responsibility and preserves the loan.
 ## Copy and Clone
 
 Ordinary struct values use heap-indirect storage, so they cannot implement
-`Copy`. Derive `Clone` when fieldwise independent duplication is suitable:
+[Copy](traits.md#copy-and-clone). Derive `Clone` when fieldwise independent duplication is suitable:
 
 ```casa
-struct Point derives Clone {
+import "std"
+
+struct Point derives std::Clone {
     x: i64
     y: i64
 }
@@ -149,15 +150,15 @@ struct Point derives Clone {
 For custom behavior, omit `derives Clone` and define the method:
 
 ```casa
+import "std"
+
 struct Point {
     x: i64
     y: i64
 }
 
-impl Point: Clone {
-    fn clone self:$Point -> Point {
-        self.y self.x Point
-    }
+impl Point: std::Clone {
+    fn clone self:$Point -> Point { self.y self.x Point }
 }
 ```
 
@@ -178,9 +179,7 @@ Define the reserved inherent `drop` method when a type needs custom cleanup:
 
 ```casa
 impl Person {
-    fn drop self:mut$Person {
-        self.age print
-    }
+    fn drop self:mut$Person { self.age print }
 }
 ```
 
@@ -222,6 +221,6 @@ Partial patterns are allowed. See
 [Control Flow and Patterns](control-flow.md#match-a-value) for binding scope,
 stack consistency, and exhaustiveness.
 
-See [`examples/struct.casa`](../examples/struct.casa) and
-[`examples/destruction.casa`](../examples/destruction.casa) for runnable
+See [examples/struct.casa](../examples/struct.casa) and
+[examples/destruction.casa](../examples/destruction.casa) for runnable
 examples.

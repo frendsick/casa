@@ -3,7 +3,7 @@
 `mut$T` does not automatically implement `Clone` and cannot be duplicated with `dup` or `over`:
 
 ```casa
-exclusive dup   # error
+exclusive dup # error
 ```
 
 Duplicating an exclusive borrow would create simultaneous mutable aliases and violate its defining invariant. An exclusive borrow remains affine and may only be moved between bindings, arguments, and returns.
@@ -11,7 +11,7 @@ Duplicating an exclusive borrow would create simultaneous mutable aliases and vi
 When `T` implements Clone, ordinary receiver lookup may call that borrowed value's method through a shared reborrow and return an owned `T`:
 
 ```casa
-exclusive.clone         # mut$Buffer -> Buffer
+exclusive.clone # mut$Buffer -> Buffer
 ```
 
 The call weakens `exclusive` to a temporary shared reborrow. The exclusive borrow becomes usable again after that call ends. ADR-0120 supersedes the earlier decision to reject unqualified `exclusive.clone`. ADR-0150 confirms that this calls the borrowed value's implementation and needs no Clone-specific lookup exception.

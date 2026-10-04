@@ -69,7 +69,7 @@ caller's document version.
 [ADR-0172](0172-editor-products-retain-verified-source-facts.md) defines which facts
 survive each source failure and distinguishes absent, unavailable, incomplete, and
 complete answers. It also defines workspace reference aggregation and rename through
-these same queries. Incomplete facts cannot masquerade as checked codegen input.
+these same queries. Incomplete facts cannot be used as checked codegen input.
 
 ## Independent snapshots
 
@@ -111,7 +111,7 @@ discovery, visibility, duplicate checks, import relationships, and lookup tables
 Source bodies contain structured branches, loops, match arms and guards, expression
 groups, and ordinary source leaves. A name occurrence remains source syntax until the
 shared semantic traversal resolves it in its recorded scope. This product is parsed
-input, not a falsely named fully resolved program. No backend or editor consumer reads
+input that has not been fully resolved. No backend or editor consumer reads
 it.
 
 Declaration signatures remain available while recursive bodies are being checked. A body

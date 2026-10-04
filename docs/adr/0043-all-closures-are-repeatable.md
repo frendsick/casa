@@ -2,21 +2,18 @@
 
 Casa has no single-use closure capability. Every closure has a repeatable `fn[...]` type. A closure definition is rejected when any invocation path could move or destroy a captured non-`Copy` value without restoring that capture before the invocation returns.
 
-Closures may consume their explicit arguments because each invocation receives new arguments. They may inspect or mutate captured owners and may temporarily move a capture when every continuing path reinitializes it. Destroying the closure value itself destroys its owned captures normally; the restriction applies to invoking the closure.
+Closures may consume their explicit arguments because each invocation receives new arguments. They may inspect or mutate captured owners and may temporarily move a capture when every continuing path reinitializes it. Destroying the closure value itself destroys its owned captures normally. The restriction applies to invoking the closure.
 
 ```casa
 resource = open_resource
-
 move { resource.inspect } # valid: capture remains owned
-move { resource.close }   # error: invocation consumes a capture
+move { resource.close } # error: invocation consumes a capture
 ```
 
 One-time ownership transfer uses an ordinary consuming function or method whose ownership appears in its parameters:
 
 ```casa
-fn close_resource resource:Resource {
-    resource.close
-}
+fn close_resource resource:Resource { resource.close }
 ```
 
 ## Considered options
@@ -28,7 +25,7 @@ fn close_resource resource:Resource {
 
 ## Consequences
 
-- `{ ... }` borrows captures and `move { ... }` owns captures; both forms are repeatable.
+- `{ ... }` borrows captures and `move { ... }` owns captures. Both forms are repeatable.
 - `fn[...]` is the only function-value type. Casa adds no `once fn[...]`, `FnOnce`, or implicit one-shot capability.
 - `exec` borrows a callable for the invocation rather than consuming the callable value. Shared and mutable callable borrows follow the `$fn[...]` and `mut$fn[...]` rules.
 - Capture availability is checked with the same whole-binding control-flow analysis used elsewhere. A possible un-restored move on any returning path rejects the closure.
