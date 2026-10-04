@@ -93,6 +93,7 @@ introductory to advanced.
 - [Compiler request products](docs/compiler-products.md)
 - [Formatter usage and rules](docs/FORMAT.md)
 - [Language server](docs/language-server.md)
+- [Line counts with cloc](cloc-lang-def.txt)
 
 ## Build from source
 
