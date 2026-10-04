@@ -10,7 +10,6 @@ struct TextView {
 
 "hello".to_str = text
 text.as_str = view
-
 TextView {
     text: text
     view: view

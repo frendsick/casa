@@ -7,9 +7,7 @@ fn bump counter:$Counter {
     1 += counter.value # error
 }
 
-fn bump counter:mut$Counter {
-    1 += counter.value
-}
+fn bump counter:mut$Counter { 1 += counter.value }
 ```
 
 This is a memory-access guarantee, not a claim that every shared method is free of external effects. Ordinary mutation of owned state uses an owner or `mut$T`.

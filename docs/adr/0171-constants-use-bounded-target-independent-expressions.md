@@ -13,8 +13,8 @@ blocks. An optional annotation specifies the type:
 ```casa
 const ELEMENT_COUNT 128
 const ELEMENT_BYTES 8
-const BUFFER_BYTES:u64 { ELEMENT_COUNT ELEMENT_BYTES * }
-const SCALE:f32 { 0.1 2.0 * }
+const BUFFER_BYTES: u64 { ELEMENT_COUNT ELEMENT_BYTES * }
+const SCALE: f32 { 0.1 2.0 * }
 const LABEL "buffer"
 const ENABLED true
 const MARKER 'B'

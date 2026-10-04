@@ -6,17 +6,14 @@ Closures may consume their explicit arguments because each invocation receives n
 
 ```casa
 resource = open_resource
-
 move { resource.inspect } # valid: capture remains owned
-move { resource.close }   # error: invocation consumes a capture
+move { resource.close } # error: invocation consumes a capture
 ```
 
 One-time ownership transfer uses an ordinary consuming function or method whose ownership appears in its parameters:
 
 ```casa
-fn close_resource resource:Resource {
-    resource.close
-}
+fn close_resource resource:Resource { resource.close }
 ```
 
 ## Considered options

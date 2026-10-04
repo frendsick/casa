@@ -9,10 +9,7 @@ trait PartialOrd: PartialEq {
 
 trait Ord: PartialOrd + Eq {
     fn cmp $self other:$self -> Ordering
-
-    fn partial_cmp $self other:$self -> Option[Ordering] {
-        other self.cmp Option::Some
-    }
+    fn partial_cmp $self other:$self -> Option[Ordering] { other self.cmp Option::Some }
 }
 ```
 

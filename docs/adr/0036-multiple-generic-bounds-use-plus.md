@@ -5,7 +5,7 @@ A type variable may require multiple capabilities by separating bounds with `+`:
 Casa reuses the existing `+` spelling for multiple supertraits. It does not initially add `where` clauses, trait aliases, comma-separated alternatives, or disjunctive bounds.
 
 ```casa
-fn show_twice[T: Copy + Display] value:T {
+fn show_twice [T:Copy + Display] value:T {
     value dup
     print
     print

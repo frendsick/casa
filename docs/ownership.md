@@ -34,6 +34,7 @@ borrow an available owner automatically:
 import "std"
 
 fn length text:$str -> u64 { text.length }
+
 fn clear text:mut$std::String { text.clear }
 
 "Casa".to_str = text
@@ -55,7 +56,9 @@ borrow the same binding exclusively more than once or combine shared and
 exclusive borrows of that binding:
 
 ```casa
-struct Person { age: i64 }
+struct Person {
+    age: i64
+}
 
 fn replace_both left:mut$Person right:mut$Person { }
 
@@ -69,12 +72,17 @@ A returned borrow keeps each compatible borrowed input loaned until its last
 use. The caller cannot know which input supplied an opaque result:
 
 ```casa
-struct Person { age: i64 }
-
-fn select first:$Person second:$Person choose_first:bool -> $Person {
-    if choose_first then first else second fi
+struct Person {
+    age: i64
 }
 
+fn select first:$Person second:$Person choose_first:bool -> $Person {
+    if choose_first then
+        first
+    else
+        second
+    fi
+}
 36 Person = person
 40 Person = other
 true other person select = selected
@@ -93,7 +101,10 @@ A function can return multiple exclusive field borrows when their named paths
 do not overlap:
 
 ```casa
-struct Item { value: i64 }
+struct Item {
+    value: i64
+}
+
 struct Pair {
     left:  Item
     right: Item

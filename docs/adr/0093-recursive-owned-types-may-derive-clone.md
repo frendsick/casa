@@ -5,7 +5,7 @@ A finite recursive owned struct or enum may derive Clone:
 ```casa
 enum Node derives Clone {
     End
-    Next(i64 Node)
+    Next (i64 Node)
 }
 ```
 

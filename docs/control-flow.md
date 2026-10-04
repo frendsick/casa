@@ -9,7 +9,6 @@ Use `if`, optional `elif` and `else` branches, and `fi`:
 
 ```casa
 82 = score
-
 if 90 score >= then
     "excellent"
 elif 60 score >= then
@@ -86,13 +85,13 @@ do in a `while` loop. Custom iterators implement `Iterable`. See
 
 ```casa
 enum Shape {
-    Circle(i64)
-    Rectangle(i64 i64)
+    Circle (i64)
+    Rectangle (i64 i64)
     Point
 }
 
 10 Shape::Circle = shape
-shape Shape::Circle is print    # true
+shape Shape::Circle is print # true
 ```
 
 In an `if` or `elif` condition, the pattern can bind carried values:
@@ -126,7 +125,11 @@ matched path that returns does not affect the ownership join.
 ```casa
 import "std"
 
-enum Status { Ready Busy Failed(str) }
+enum Status {
+    Ready
+    Busy
+    Failed (str)
+}
 
 Status::Ready = status
 status match

@@ -9,7 +9,7 @@ struct View[T] {
     second: $T
 }
 
-fn view_pair[T] first:$T second:$T -> View[T] {
+fn view_pair [T] first:$T second:$T -> View[T] {
     second first View[T]
 }
 ```

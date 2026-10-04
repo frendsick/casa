@@ -20,9 +20,9 @@ floating-point literal defaults to `f64`. A nearby annotation or parameter can
 select another width:
 
 ```casa
-255 = byte:u8
-1.5 = ratio:f32
-42 typeof print       # i64
+255 = byte: u8
+1.5 = ratio: f32
+42 typeof print # i64
 ```
 
 Floating-point values use partial equality and ordering because NaN is
@@ -64,14 +64,14 @@ with `.to_str` when you need an owned, growable `String`:
 ```casa
 import "std"
 
-"Casa".to_str = name:std::String
+"Casa".to_str = name: std::String
 '!' name.push
 name.as_str print
 ```
 
 ```casa
-'\u{1F600}' print       # 😀
-"\u{3BB}" print         # λ
+'\u{1F600}' print # 😀
+"\u{3BB}" print # λ
 ```
 
 `cstr` is only used through a shared `$cstr` borrow. It has no literal syntax,
@@ -82,9 +82,9 @@ string:
 ```casa
 import "std"
 
-"hello".as_cstr.unwrap = message:$cstr
+"hello".as_cstr.unwrap = message: $cstr
 "raw" std::Bytes::from_str = raw_bytes
-raw_bytes.as_cstr.unwrap = raw_message:$cstr
+raw_bytes.as_cstr.unwrap = raw_message: $cstr
 ```
 
 See [Text and I/O](strings-and-io.md) for string operations and conversions.
@@ -122,8 +122,8 @@ Array literals infer one common element type, and their length is part of the
 type:
 
 ```casa
-[1, 2, 3] = numbers:array[i64 3]
-[] = names:array[str 0]
+[1, 2, 3] = numbers: array[i64 3]
+[] = names: array[str 0]
 ```
 
 An `array[T N]` is `Copy` when `T` is `Copy`, including when `N` is zero.
@@ -157,6 +157,7 @@ const ELEMENT_COUNT 128
 const ELEMENT_BYTES 8
 const BUFFER_BYTES: u64 { ELEMENT_COUNT ELEMENT_BYTES * }
 const SCALE: f32 { 0.1 2.0 * }
+
 fn consume values:array[u8 BUFFER_BYTES] { values drop }
 ```
 
@@ -190,10 +191,9 @@ Import `std` to use named numeric conversions:
 ```casa
 import "std"
 
-120 = byte:i8
+120 = byte: i8
 byte i16::from = widened
-
-1000 = count:i64
+1000 = count: i64
 count u8::try_from = maybe_byte
 ```
 

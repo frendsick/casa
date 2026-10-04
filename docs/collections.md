@@ -31,8 +31,8 @@ arrays of different lengths are different types:
 ```casa
 import "std"
 
-[10, 20, 30] = numbers:array[i64 3]
-1 numbers.nth print    # 20
+[10, 20, 30] = numbers: array[i64 3]
+1 numbers.nth print # 20
 ```
 
 | Method | Signature | Behavior |
@@ -105,7 +105,7 @@ A function that accepts arrays of any length takes a constant length parameter:
 import "std"
 
 fn total [const N:u64] values:$array[i64 N] -> i64 {
-    0 = sum:i64
+    0 = sum: i64
     for value in values.iter do
         value += sum
     done
@@ -120,11 +120,13 @@ again afterwards:
 The following invalid example uses an owning struct:
 
 ```casa
-struct Resource { id: i64 }
+struct Resource {
+    id: i64
+}
 
 Resource { id: 1 } = resource
-[resource] = owned:array[Resource 1]
-resource drop    # error: owner `resource` was already moved
+[resource] = owned: array[Resource 1]
+resource drop # error: owner `resource` was already moved
 ```
 
 The array destroys its elements when it goes out of scope. `clone` produces an
@@ -147,7 +149,7 @@ import "std"
 
 [10, 20, 30, 40] std::List::from_array = numbers
 4 1 numbers.slice = middle
-0 middle.nth print    # 20
+0 middle.nth print # 20
 ```
 
 | Method | Signature | Behavior |
@@ -340,7 +342,6 @@ import "std"
 
 std::Map[str i64]::new = scores
 10 "Ada" scores.set
-
 "Ada" scores.get match
     std::Option::Some(score) => score print
     std::Option::None => "missing" print
@@ -577,7 +578,7 @@ import "std"
 std::Set[str]::new = names
 "Ada" names.add
 "Grace" names.add
-"Ada" names.has print    # true
+"Ada" names.has print # true
 ```
 
 | Method | Signature | Behavior |
@@ -970,7 +971,7 @@ them. Only `collect` runs the pipeline:
 ```casa
 import "std"
 
-[1, 2, 3, 4, 5, 6, 7] = values:array[i64 7]
+[1, 2, 3, 4, 5, 6, 7] = values: array[i64 7]
 2 values.iter.skip = rest
 4 rest.take = window
 { copy 2 % 0 == } window.filter = even

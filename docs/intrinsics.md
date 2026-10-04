@@ -17,8 +17,8 @@ Stack-effect inputs use consumption order. Outputs use push order. See
 | `swap` | `T1 T2 -> T1 T2` | Swap the top two values |
 
 ```casa
-1 2 drop print       # 1
-3 dup + print        # 6
+1 2 drop print # 1
+3 dup + print # 6
 ```
 
 `copy` reads a borrowed `Copy` value into an owned value. An owned argument
@@ -41,7 +41,7 @@ cleanup](structs-and-methods.md#custom-destruction) and recursive field destruct
 
 ```casa
 42 print
-"hello" typeof print    # str
+"hello" typeof print # str
 ```
 
 Primitive display types print directly. User-defined types must implement
@@ -118,7 +118,7 @@ before the destination pointer at a store call:
 unsafe {
     16 alloc = buffer
     42 buffer store64
-    buffer load64 print    # 42
+    buffer load64 print # 42
 }
 ```
 

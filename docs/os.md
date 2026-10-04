@@ -154,9 +154,12 @@ Environment variable names and text path utilities remain `$str`.
 import "std"
 import "os"
 
-"HOME" os::env::get .unwrap.to_str.unwrap print
-"tmp" "report.txt" os::path::join print    # tmp/report.txt
-"src/main.casa" os::path::extension print  # casa
+"HOME" os::env::get
+    .unwrap
+    .to_str
+    .unwrap print
+"tmp" "report.txt" os::path::join print # tmp/report.txt
+"src/main.casa" os::path::extension print # casa
 ```
 
 See the [OS example](../examples/os_interaction.casa) for files, directories,

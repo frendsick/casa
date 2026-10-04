@@ -4,6 +4,7 @@ The supertrait graph must be a directed acyclic graph. The compiler rejects dire
 
 ```casa
 trait A: B { }
+
 trait B: A { } # error: A -> B -> A
 ```
 

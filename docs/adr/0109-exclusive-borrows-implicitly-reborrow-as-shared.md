@@ -3,9 +3,7 @@
 An available `mut$T` may implicitly produce a shorter `$T` reborrow wherever a typed context requires shared access:
 
 ```casa
-fn freeze value:mut$Buffer -> $Buffer {
-    value
-}
+fn freeze value:mut$Buffer -> $Buffer { value }
 ```
 
 The original exclusive borrow is suspended until the shared reborrow and every value containing it reach their last use. This is a reborrow, not a mutation-capability transfer or runtime conversion.

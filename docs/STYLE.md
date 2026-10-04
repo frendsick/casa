@@ -42,9 +42,7 @@ Names such as `std::List` assume `import "std"`. See
   - live outside any impl block because they're too complex to be methods
 
   ```casa
-  fn make_location file:str offset:u64 length:u64 -> Location {
-      length offset file Location
-  }
+  fn make_location file:str offset:u64 length:u64 -> Location { length offset file Location }
   ```
 
 - **MUST NOT** use both `Type::new` and `make_type` for the same type.
@@ -104,9 +102,9 @@ Names such as `std::List` assume `import "std"`. See
   `K` (map key), `V` (map value), `E` (error in Result).
 
   ```casa
-  fn id[T] T -> T { }
-  fn swap_t[T1 T2] T1 T2 -> T1 T2 { swap }
-  fn get[K: std::Hashable, V] self:std::Map[K V] key:K -> std::Option[V] { ... }
+  fn id [T] T -> T { }
+  fn swap_t [T1 T2] T1 T2 -> T1 T2 { swap }
+  fn get [K:std::Hashable, V] self:std::Map[K V] key:K -> std::Option[V] { ... }
   ```
 
 ---
@@ -146,13 +144,13 @@ without a type-name prefix is acceptable.
   or more calls:
 
   ```casa
-  person.age print                  # MUST: shorthand getter, no space
+  person.age print # MUST: shorthand getter, no space
   analysis.result.document print
   analysis
       .result
       .document
       .location print
-  42 = person.age                   # MUST: field assignment, no space
+  42 = person.age # MUST: field assignment, no space
   ```
 
 - Use the explicit form (`person Person::age`) only when passing an accessor as a
@@ -168,19 +166,16 @@ without a type-name prefix is acceptable.
   the type checker can infer them. This documents intent for readers:
 
   ```casa
-  fn greet name:$str -> std::String {
-      f"Hello, {name}!"
-  }
+  fn greet name:$str -> std::String { f"Hello, {name}!" }
   ```
 
 - In function bodies, annotate a variable **only** when inference would fail:
 
   ```casa
   # Required: bare std::Option needs narrowing
-  std::Option::None = empty:std::Option[i64]
-
+  std::Option::None = empty: std::Option[i64]
   # MUST NOT: inference works fine, annotation is noise
-  42 = x:i64
+  42 = x: i64
   ```
 
 ---
@@ -241,10 +236,9 @@ without a type-name prefix is acceptable.
   if value std::Option::Some(inner) is then
       inner process
   fi
-
   # MUST NOT
-  if value .is_some then
-      value .unwrap process
+  if value.is_some then
+      value.unwrap process
   fi
   ```
 
@@ -304,7 +298,6 @@ without a type-name prefix is acceptable.
   for token in tokens.iter do
       token process
   done
-
   # SHOULD NOT — manual indexing where `for` works
   0 = index
   while index tokens.length > do
@@ -333,9 +326,8 @@ without a type-name prefix is acceptable.
   numeric conversion:
 
   ```casa
-  42 = x:i64
+  42 = x: i64
   x u8::try_from = maybe_byte
-
   # Raw representation boundary
   unsafe { x u64::wrapping_from buf store64 }
   ```
@@ -347,8 +339,8 @@ without a type-name prefix is acceptable.
 - **MUST** use `+=` or `-=` when adding or subtracting a literal value:
 
   ```casa
-  1 += index       # MUST
-  index 1 + = index  # MUST NOT for literal increment
+  1 += index # MUST
+  index 1 + = index # MUST NOT for literal increment
   ```
 
 - Use field assignment for computed updates that are not `+=` or `-=`:

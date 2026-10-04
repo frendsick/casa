@@ -3,20 +3,19 @@
 Casa writes an owned type as `T`, a shared borrow as `$T`, and an exclusive mutable borrow as `mut$T`. The borrow qualifier is a prefix attached directly to the complete type expression, without meaningful whitespace:
 
 ```casa
-value:T
-value:$T
-value:mut$T
-
-items:$List[i64]
-items:mut$List[i64]
+value: T
+value: $T
+value: mut$T
+items: $List[i64]
+items: mut$List[i64]
 ```
 
 Method receivers infer `Self` and use the same prefixes:
 
 ```casa
-self       # consuming owner
-$self      # shared borrow
-mut$self   # exclusive mutable borrow
+self # consuming owner
+$self # shared borrow
+mut$self # exclusive mutable borrow
 ```
 
 ## Considered options

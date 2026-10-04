@@ -4,10 +4,9 @@ Casa provides named compiler primitives for exact IEEE representation conversion
 
 ```casa
 bits f32::from_bits # u32 -> f32
-value.to_bits       # $f32 -> u32
-
+value.to_bits # $f32 -> u32
 bits f64::from_bits # u64 -> f64
-value.to_bits       # $f64 -> u64
+value.to_bits # $f64 -> u64
 ```
 
 ## Consequences

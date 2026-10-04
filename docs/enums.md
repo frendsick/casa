@@ -6,8 +6,8 @@ An enum defines a closed set of variants. A variant can carry values.
 
 ```casa
 enum Shape {
-    Circle(i64)
-    Rectangle(i64 i64)
+    Circle (i64)
+    Rectangle (i64 i64)
     Point
 }
 ```
@@ -18,8 +18,15 @@ enum.
 Enums can have type parameters:
 
 ```casa
-enum Option[T] { None Some(T) }
-enum Result[T E] { Error(E) Ok(T) }
+enum Option[T] {
+    None
+    Some (T)
+}
+
+enum Result[T E] {
+    Error (E)
+    Ok (T)
+}
 ```
 
 See [Traits](traits.md) for the general rules for type parameters.
@@ -37,14 +44,14 @@ Shape::Point
 The carried values determine generic type parameters when possible:
 
 ```casa
-42 Option::Some          # Option[i64]
+42 Option::Some # Option[i64]
 "not found" Result::Error
 ```
 
 An empty generic variant often needs context:
 
 ```casa
-Option::None = result:Option[i64]
+Option::None = result: Option[i64]
 ```
 
 ## Process an enum
@@ -75,11 +82,15 @@ value produces its number of variants:
 ```casa
 import "std"
 
-enum Color derives std::Ord { Red Green Blue }
+enum Color derives std::Ord {
+    Red
+    Green
+    Blue
+}
 
-Color::Red Color::Blue > print    # true, because Blue follows Red
-Color::Blue print                 # 2
-Color print                       # 3
+Color::Red Color::Blue > print # true, because Blue follows Red
+Color::Blue print # 2
+Color print # 3
 ```
 
 Use `derives Eq`, `derives Ord`, or `derives Hashable` to opt in. Plain enums

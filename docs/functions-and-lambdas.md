@@ -6,11 +6,9 @@ declared at global scope and called by name.
 ## Declare and call a function
 
 ```casa
-fn subtract left:i64 right:i64 -> i64 {
-    left right -
-}
+fn subtract left:i64 right:i64 -> i64 { left right - }
 
-3 12 subtract print    # 9
+3 12 subtract print # 9
 ```
 
 See the notation for [signatures](notation.md#signatures-and-calls),
@@ -25,15 +23,13 @@ Use unnamed inputs when a local name adds no clarity:
 ```casa
 fn square i64 -> i64 { dup * }
 
-6 square print    # 36
+6 square print # 36
 ```
 
 Omit `->` when a function pushes no result:
 
 ```casa
-fn greet name:str {
-    f"Hello, {name}!\n" print
-}
+fn greet name:str { f"Hello, {name}!\n" print }
 ```
 
 A function can push multiple results by listing each output type after `->`.
@@ -63,7 +59,6 @@ fn require_positive value:i64 -> i64 {
         "value must be positive" panic
     fi
 }
-
 5 require_positive print
 ```
 
@@ -76,18 +71,16 @@ top of the stack:
 fn increment value:i64 -> i64 { value 1 + }
 
 &increment = operation
-41 operation exec print    # 42
+41 operation exec print # 42
 ```
 
 Its type records the stack effect. For example, `&increment` has type
 `fn[i64 -> i64]`. A function can accept that type as a parameter:
 
 ```casa
-fn apply operation:fn[i64 -> i64] value:i64 -> i64 {
-    value operation exec
-}
+fn apply operation:fn[i64 -> i64] value:i64 -> i64 { value operation exec }
 
-40 { 2 + } apply print    # 42
+40 { 2 + } apply print # 42
 ```
 
 The function value must be on top when `exec` runs. Its arguments stay below
@@ -96,7 +89,7 @@ it.
 A generic function reference must name its concrete arguments:
 
 ```casa
-fn identity[T] value:T -> T { value }
+fn identity [T] value:T -> T { value }
 
 &identity[i64] = integer_identity
 ```
@@ -305,9 +298,7 @@ Lexical closures in the root body can capture root locals.
 Create runtime state in the root body and pass it to named functions:
 
 ```casa
-fn show_limit limit:i64 {
-    limit print
-}
+fn show_limit limit:i64 { limit print }
 
 100 = limit
 limit show_limit
@@ -323,7 +314,7 @@ Use `= name:Type` when the value needs an explicit type:
 ```casa
 import "std"
 
-std::Option::None = result:std::Option[i64]
+std::Option::None = result: std::Option[i64]
 ```
 
 See [Operators](operators.md#assignment) for assignment forms.
@@ -344,7 +335,7 @@ Braces create an anonymous function value:
 
 ```casa
 { 1 + } = increment
-41 increment exec print    # 42
+41 increment exec print # 42
 ```
 
 The compiler infers a lambda's stack effect from its body and the context in
@@ -357,7 +348,7 @@ types for unannotated lambda parameters. The body determines the output types:
 import "std"
 
 [1, 2, 3] std::List::from_array = values
-0 = initial_total:i64
+0 = initial_total: i64
 { = total copy total + } initial_total values.iter.fold print
 ```
 
@@ -373,7 +364,7 @@ import "std"
 
 [1, 2, 3] std::List::from_array = values
 { values.length } = count_values
-count_values exec print    # 3
+count_values exec print # 3
 ```
 
 Use `move` when the closure must own its captures and outlive their original

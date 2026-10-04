@@ -231,7 +231,7 @@ names:
 ```casa
 import "std"
 
-"hello" 1 3 str::substring print    # ell
+"hello" 1 3 str::substring print # ell
 "a,b,c" "," str::split = parts
 ```
 
@@ -241,7 +241,7 @@ import "std"
 import "std"
 
 "a,b,c" "," str::split = parts
-", " parts.join_strings print    # a, b, c
+", " parts.join_strings print # a, b, c
 ```
 
 ## Owned strings
@@ -417,7 +417,7 @@ import "std"
 " -42 ".trim = text
 text.as_str.to_int = number
 number.unwrap print
-"1.5e3".to_f64 .unwrap print
+"1.5e3".to_f64.unwrap print
 ```
 
 ## Convert text and bytes
@@ -547,11 +547,11 @@ Compares characters by codepoint.
 ```casa
 import "std"
 
-'A'.codepoint print          # 65
-'😀'.codepoint print         # 128512
-'7'.is_digit print           # true
-65 = value:u32
-value char::from_codepoint .unwrap print
+'A'.codepoint print # 65
+'😀'.codepoint print # 128512
+'7'.is_digit print # true
+65 = value: u32
+value char::from_codepoint.unwrap print
 ```
 
 `char::from_codepoint` rejects surrogate values and values above `U+10FFFF`.
@@ -636,10 +636,13 @@ Validates UTF-8 and copies the bytes into owned Casa text. Invalid UTF-8 returns
 ```casa
 import "std"
 
-"hello".as_cstr.unwrap = raw:$cstr
-raw.to_str.unwrap.as_str print
+"hello".as_cstr.unwrap = raw: $cstr
+raw
+    .to_str
+    .unwrap
+    .as_str print
 "path" std::Bytes::from_str = byte_path
-byte_path.as_cstr.unwrap = byte_raw:$cstr
+byte_path.as_cstr.unwrap = byte_raw: $cstr
 ```
 
 Constructing `$cstr` from a raw pointer requires `unsafe` code to guarantee an

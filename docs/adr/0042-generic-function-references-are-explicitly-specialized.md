@@ -3,10 +3,10 @@
 Every first-class function value has one monomorphic `fn[...]` type. Taking a reference to a generic named function requires explicit type arguments:
 
 ```casa
-fn id[T] value:T -> T { value }
+fn id [T] value:T -> T { value }
 
-&id[i64]  # fn[i64 -> i64]
-&id[str]  # fn[str -> str]
+&id[i64] # fn[i64 -> i64]
+&id[str] # fn[str -> str]
 ```
 
 `&id` is rejected because it would require a first-class polymorphic function value. Direct calls to generic functions continue to infer type arguments from their operands.

@@ -61,7 +61,7 @@ An integer or floating-point literal can also need more context. Add a type
 annotation when the surrounding operation cannot select a concrete width:
 
 ```casa
-0 = offset:u64
+0 = offset: u64
 ```
 
 ## Notes and related locations

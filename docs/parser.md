@@ -142,9 +142,9 @@ import "std"
 import "parser"
 
 "name=42" parser::Cursor::new = cursor
-&char::is_alpha cursor.take_while print    # name
+&char::is_alpha cursor.take_while print # name
 '=' cursor.expect_char.unwrap drop
-cursor parser::parse_int .unwrap print           # 42
+cursor parser::parse_int.unwrap print # 42
 ```
 
 ## Ready-made parsers

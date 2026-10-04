@@ -4,7 +4,7 @@ An owner may not be moved, replaced, or destroyed while any borrow derived from 
 
 ```casa
 owner.field = view
-owner take          # error
+owner take # error
 view.inspect
 ```
 

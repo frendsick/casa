@@ -22,8 +22,8 @@ for signatures, fragments, and commands for running complete examples.
 ```casa
 import "std"
 
-42 std::Option::Some = present:std::Option[i64]
-std::Option::None = absent:std::Option[i64]
+42 std::Option::Some = present: std::Option[i64]
+std::Option::None = absent: std::Option[i64]
 ```
 
 Prefer [pattern matching](control-flow.md#match-a-value) when both cases need behavior:
@@ -42,9 +42,7 @@ Use an optional result for an operation that can fail:
 ```casa
 import "std"
 
-fn divide dividend:i64 divisor:i64 -> std::Option[i64] {
-    divisor dividend.try_div
-}
+fn divide dividend:i64 divisor:i64 -> std::Option[i64] { divisor dividend.try_div }
 
 0 12 divide match
     std::Option::Some(value) => value print
@@ -157,7 +155,8 @@ Callbacks are pushed before the option receiver:
 ```casa
 import "std"
 
-{ 2 * } 5 std::Option::Some .map    # std::Option::Some(10)
+5 std::Option::Some = number
+{ 2 * } number.map # std::Option::Some(10)
 ```
 
 ## Result
@@ -168,8 +167,8 @@ import "std"
 ```casa
 import "std"
 
-42 std::Result::Ok = success:std::Result[i64 str]
-"invalid input" std::Result::Error = failure:std::Result[i64 str]
+42 std::Result::Ok = success: std::Result[i64 str]
+"invalid input" std::Result::Error = failure: std::Result[i64 str]
 ```
 
 Handle both cases with `match`:
@@ -299,9 +298,7 @@ fn half_if_even value:i64 -> std::Option[i64] {
     fi
 }
 
-fn quarter_if_even value:i64 -> std::Option[i64] {
-    value half_if_even ? 2 / std::Option::Some
-}
+fn quarter_if_even value:i64 -> std::Option[i64] { value half_if_even ? 2 / std::Option::Some }
 ```
 
 An `Option[T]` can propagate into another `Option`. A `Result[T E]` can

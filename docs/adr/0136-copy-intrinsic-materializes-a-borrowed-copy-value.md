@@ -9,9 +9,7 @@ copy # [T: Copy] $T -> T
 It produces one owned `T` by performing the same compiler-validated, allocation-free representation copy used by `dup` and `over`, but reads the value through a shared borrow. The borrowed value remains initialized and unchanged.
 
 ```casa
-fn copied[T: Copy] value:$T -> T {
-    value copy
-}
+fn copied [T:Copy] value:$T -> T { value copy }
 ```
 
 `mut$T` may call `copy` through an ordinary temporary shared reborrow.

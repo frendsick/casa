@@ -62,9 +62,7 @@ A function signature names its parameters in the order they are consumed.
 The first parameter receives the topmost value.
 
 ```casa
-fn subtract left:i64 right:i64 -> i64 {
-    left right -
-}
+fn subtract left:i64 right:i64 -> i64 { left right - }
 
 3 10 subtract print
 ```
@@ -75,9 +73,7 @@ becomes `right`. The function prints `7`.
 Functions can also use unnamed stack inputs when a local name adds no clarity:
 
 ```casa
-fn double i64 -> i64 {
-    2 *
-}
+fn double i64 -> i64 { 2 * }
 
 21 double print
 ```
@@ -100,9 +96,7 @@ an owned value without moving it:
 ```casa
 import "std"
 
-fn length text:$str -> u64 {
-    text.length
-}
+fn length text:$str -> u64 { text.length }
 
 "Casa" = text
 text length print
@@ -119,7 +113,7 @@ The compiler infers the binding type. Add an annotation to select or require a
 specific type:
 
 ```casa
-255 = byte:u8
+255 = byte: u8
 byte print
 ```
 
@@ -140,7 +134,6 @@ fn rating score:i64 -> str {
         "keep practicing"
     fi
 }
-
 82 rating print
 ```
 
@@ -166,7 +159,6 @@ fn rating score:i64 -> str {
         "keep practicing"
     fi
 }
-
 [72, 95, 81] = scores
 for score in scores.iter do
     score rating = label

@@ -7,7 +7,7 @@ A struct groups named fields into one type.
 ```casa
 struct Person {
     name: str
-    age: i64
+    age:  i64
 }
 
 Person { name: "Ada" age: 36 } = person
@@ -56,15 +56,10 @@ An `impl` block adds methods to a type:
 import "std"
 
 impl Person {
-    fn birthday self:mut$Person {
-        1 += self.age
-    }
+    fn birthday self:mut$Person { 1 += self.age }
 
-    fn description self:$Person -> std::String {
-        f"{self.name}, age {self.age}"
-    }
+    fn description self:$Person -> std::String { f"{self.name}, age {self.age}" }
 }
-
 person.birthday
 person.description print
 ```
@@ -163,9 +158,7 @@ struct Point {
 }
 
 impl Point: std::Clone {
-    fn clone self:$Point -> Point {
-        self.y self.x Point
-    }
+    fn clone self:$Point -> Point { self.y self.x Point }
 }
 ```
 
@@ -186,9 +179,7 @@ Define the reserved inherent `drop` method when a type needs custom cleanup:
 
 ```casa
 impl Person {
-    fn drop self:mut$Person {
-        self.age print
-    }
+    fn drop self:mut$Person { self.age print }
 }
 ```
 

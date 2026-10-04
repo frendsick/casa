@@ -74,8 +74,9 @@ fn fizzbuzz number:i64 {
 
 ## Blank lines
 
-- **1 blank line** before and after top-level definitions (`fn`, `struct`, `enum`,
-  `impl`, `trait`, with an optional `pub` prefix) and import groups.
+- **1 blank line** before top-level definitions (`fn`, `struct`, `enum`,
+  `impl`, `trait`, with an optional `pub` prefix).
+- **1 blank line** before and after import groups.
 - Consecutive plain top-level statements (root bindings, assignments, map `.set` chains)
   are grouped **without** blank lines.
 - Consecutive `import` statements are grouped **without** blank lines.
@@ -95,11 +96,8 @@ struct Foo {
 }
 
 impl Foo {
-    fn new -> Foo {
-        0 0 Foo
-    }
+    fn new -> Foo { 0 0 Foo }
 }
-
 std::Map[str i64]::new = MY_MAP
 1 "a" MY_MAP.set
 2 "b" MY_MAP.set
@@ -146,7 +144,6 @@ value std::List[T]::from_array
 # ============================================================================
 # Section using = style
 # ============================================================================
-
 # ---------------------------------------------------------------------------
 # Section using - style
 # ---------------------------------------------------------------------------
@@ -186,7 +183,6 @@ value std::List[T]::from_array
 ```casa
 # Fits within 100 characters: compact.
 [1, 2, 3] sum
-
 # Exceeds 100 characters: expand, trailing comma, aligned `]`, suffix on `]`.
 [
     11111111,
@@ -206,7 +202,18 @@ value std::List[T]::from_array
 
 ## Enum variant data parentheses
 
-No space between an enum variant name and its data parentheses:
+An enum declaration puts one space before a variant's payload type list:
+
+```casa
+enum Shape {
+    Circle (i64)
+    Rectangle (i64 i64)
+    Point
+}
+```
+
+Outside an enum declaration, put no space between a variant's qualified name
+and its data parentheses:
 
 ```casa
 # Correct
@@ -234,6 +241,16 @@ const BUFFER_BYTES: u64 { ELEMENT_COUNT ELEMENT_BYTES * }
 
 Keep type arguments adjacent to a function reference: `&length[BUFFER_BYTES]`.
 
+## Binding annotations
+
+Put one space after the colon in a binding annotation. Function parameters use
+the compact `name:type` form.
+
+```casa
+255 = byte: u8
+std::Option::None = absent: std::Option[i64]
+```
+
 ---
 
 ## Struct and enum field layout
@@ -248,9 +265,9 @@ struct Parser {
 }
 
 struct Token {
-    pub kind:     TokenKind
-    location:     Location
-    value:        str
+    pub kind: TokenKind
+    location: Location
+    value:    str
 }
 ```
 
@@ -284,11 +301,18 @@ fn fizzbuzz number:i64 {
     ...
 }
 
-fn add a:i64 b:i64 -> i64 {
-    a b +
-}
+fn add a:i64 b:i64 -> i64 { a b + }
 
 extern fn strlen text:$cstr -> u64
+```
+
+Put one space before a function's type-parameter list. Type bounds use a
+compact colon:
+
+```casa
+fn identity [T] value:T -> T { value }
+
+fn duplicate [T:Clone] value:$T -> T { value.clone }
 ```
 
 ### Inline definitions
@@ -340,6 +364,9 @@ Multiple return types follow the same pattern:
 fn split_pair
     input:str
     delimiter:str
+    trim_whitespace:bool
+    preserve_empty_fields:bool
+    include_delimiter:bool
 -> str str {
     ...
 }
@@ -359,8 +386,10 @@ extern declaration ends after its return type and has no opening brace:
 
 ```casa
 extern fn native_operation
-    address:ptr
-    value:i64
+    destination_buffer:ptr
+    destination_buffer_size:u64
+    source_buffer:ptr
+    source_buffer_size:u64
 -> i32
 ```
 
@@ -486,7 +515,6 @@ color match
     Color::Green => "green" print
     Color::Blue => "blue" print
 end
-
 shape match
     Shape::Circle(radius) => {
         "radius=" print
@@ -506,7 +534,6 @@ Prefer f-strings whenever embedding one or more values into a string literal:
 ```casa
 # Preferred
 f"Hello, {name}!" print
-
 # Avoid: str::concat for 3+ strings
 name " is " str::concat age i64::to_str str::concat print
 ```

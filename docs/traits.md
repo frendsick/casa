@@ -10,7 +10,7 @@ traits use qualified names after `import "std"`.
 Declare type parameters in brackets after a function name:
 
 ```casa
-fn identity[T] value:T -> T { value }
+fn identity [T] value:T -> T { value }
 
 42 identity print
 "hello" identity print
@@ -40,7 +40,7 @@ closures.
 Use more than one type parameter when the types are independent:
 
 ```casa
-fn keep_first[A, B] first:A second:B -> A {
+fn keep_first [A, B] first:A second:B -> A {
     second drop
     first
 }
@@ -54,11 +54,17 @@ only in the outputs.
 Structs and enums can also declare type parameters:
 
 ```casa
-struct Box[T] { value: T }
-enum Maybe[T] { None Some(T) }
+struct Box[T] {
+    value: T
+}
 
-42 Box = box:Box[i64]
-"hello" Maybe::Some = maybe:Maybe[str]
+enum Maybe[T] {
+    None
+    Some (T)
+}
+
+42 Box = box: Box[i64]
+"hello" Maybe::Some = maybe: Maybe[str]
 ```
 
 Put requirements on an `impl` block, not on a struct definition. See
@@ -76,7 +82,9 @@ trait Describe {
     fn describe self:self -> std::String
 }
 
-struct User { name: str }
+struct User {
+    name: str
+}
 
 impl User: Describe {
     fn describe self:User -> std::String { self.name.to_str }
@@ -91,9 +99,7 @@ same name does not implement the trait.
 Add a trait after a type parameter to restrict accepted types:
 
 ```casa
-fn print_description[T: Describe] value:T {
-    value.describe print
-}
+fn print_description [T:Describe] value:T { value.describe print }
 
 User { name: "Ada" } print_description
 ```
@@ -103,11 +109,10 @@ when one type parameter requires several traits:
 
 ```casa
 trait Stored { }
+
 impl User: Stored { }
 
-fn save_description[T: Describe + Stored] value:T {
-    value.describe print
-}
+fn save_description [T:Describe + Stored] value:T { value.describe print }
 ```
 
 ## Built-in traits
@@ -244,9 +249,7 @@ struct Document {
 }
 
 impl Document: std::Clone {
-    fn clone self:$Document -> Document {
-        self.title.clone Document
-    }
+    fn clone self:$Document -> Document { self.title.clone Document }
 }
 ```
 
@@ -263,7 +266,10 @@ effect. One block can implement several traits:
 ```casa
 import "std"
 
-struct Item { id: i64 name: str }
+struct Item {
+    id:   i64
+    name: str
+}
 
 impl Item: Describe + Stored {
     fn describe self:Item -> std::String { self.name.to_str }
@@ -283,7 +289,9 @@ its methods:
 ```casa
 import "std"
 
-struct Box[T] { value: T }
+struct Box[T] {
+    value: T
+}
 
 impl[T] Box[T] {
     fn unwrap self:Box[T] -> T { self.value }
@@ -332,9 +340,7 @@ equivalent:
 ```casa
 import "std"
 
-fn description[T: Describe] value:T -> std::String {
-    value T::describe
-}
+fn description [T:Describe] value:T -> std::String { value T::describe }
 ```
 
 Qualify a method when more than one trait provides the same name:
@@ -366,8 +372,9 @@ Widening from `u8` to `u64` is valid. Narrowing from `u64` to `u8`, or forwardin
 a signed type to an unsigned type, is rejected at the generic definition.
 
 ```casa
-fn wide[const N:u64] { }
-fn forward[const N:u8] { &wide[N] drop }
+fn wide [const N:u64] { }
+
+fn forward [const N:u8] { &wide[N] drop }
 
 &forward[255] exec
 ```

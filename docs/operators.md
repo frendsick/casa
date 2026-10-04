@@ -4,7 +4,7 @@ Casa operators use postfix notation. Push the operands first, then write the
 operator:
 
 ```casa
-3 4 + 2 * print    # 14
+3 4 + 2 * print # 14
 ```
 
 There is no operator precedence. Each operator immediately consumes its
@@ -18,13 +18,13 @@ Stack-effect inputs use consumption order. Outputs use push order. See
 Arithmetic reads from left to right:
 
 ```casa
-10 3 - print    # 7, because this means 10 - 3
+10 3 - print # 7, because this means 10 - 3
 ```
 
 Functions and comparisons use the topmost value as the first operand:
 
 ```casa
-0 1 > print     # true, because this means 1 > 0
+0 1 > print # true, because this means 1 > 0
 ```
 
 This comparison rule can be surprising. For example, `90 score >=` means

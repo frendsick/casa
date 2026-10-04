@@ -6,8 +6,8 @@ comma between two items is a syntax error. A single trailing comma before the
 closing `]` is allowed, so `[1, 2, 3,]` is also valid.
 
 ```casa
-[1, 2, 3] = numbers:array[i64 3]   # required commas
-[1, 2, 3,] = trailing:array[i64 3] # optional trailing comma allowed
+[1, 2, 3] = numbers: array[i64 3] # required commas
+[1, 2, 3,] = trailing: array[i64 3] # optional trailing comma allowed
 [1 2 3]                          # syntax error: missing commas
 ```
 

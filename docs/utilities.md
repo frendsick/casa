@@ -132,8 +132,8 @@ import "json"
 import "parser"
 
 "{\"name\":\"Ada\"}" parser::Cursor::new = cursor
-cursor json::json_parse .unwrap = value
-"name" value json::json_get_str .unwrap print
+cursor json::json_parse.unwrap = value
+"name" value json::json_get_str.unwrap print
 ```
 
 `JsonValue` variants are `JsonNull`, `JsonBool`, `JsonInt`, `JsonString`,

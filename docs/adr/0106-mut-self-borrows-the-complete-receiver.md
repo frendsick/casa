@@ -4,7 +4,7 @@ A method whose receiver is `mut$self` exclusively borrows the complete receiver,
 
 ```casa
 pair.left = left_view
-pair.clear_right          # error: clear_right takes mut$self
+pair.clear_right # error: clear_right takes mut$self
 left_view.length
 ```
 
