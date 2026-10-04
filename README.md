@@ -58,45 +58,41 @@ Common compiler options:
 ## Learn Casa
 
 Start with the [Casa guide](docs/guide.md).
+The [examples](examples/README.md) contain runnable programs ordered from
+introductory to advanced.
 
-Use the topic references when you need exact behavior:
+### Language
 
-| Topic | Reference |
-|---|---|
-| Bindings, functions, and lambdas | [Functions and Lambdas](docs/functions-and-lambdas.md) |
-| Branches, loops, and matching | [Control Flow](docs/control-flow.md) |
-| Compiler operations | [Built-in Intrinsics](docs/intrinsics.md) |
-| Enums and patterns | [Enums](docs/enums.md) |
-| Generics and traits | [Traits](docs/traits.md) |
-| Imports | [Modules](docs/modules.md) |
-| Ownership and borrows | [Ownership and Borrows](docs/ownership.md) |
-| Signature and stack-effect notation | [Reference Notation](docs/notation.md) |
-| Stack evaluation and operators | [Operators](docs/operators.md) |
-| Structs and methods | [Structs and Methods](docs/structs-and-methods.md) |
-| Values and types | [Types and Literals](docs/types-and-literals.md) |
+- [Control flow](docs/control-flow.md)
+- [Enums and patterns](docs/enums.md)
+- [Functions and lambdas](docs/functions-and-lambdas.md)
+- [Intrinsics](docs/intrinsics.md)
+- [Modules](docs/modules.md)
+- [Operators](docs/operators.md)
+- [Ownership and borrows](docs/ownership.md)
+- [Reference notation](docs/notation.md)
+- [Structs and methods](docs/structs-and-methods.md)
+- [Traits](docs/traits.md)
+- [Types and literals](docs/types-and-literals.md)
 
-Library references:
+### Libraries
 
-| Topic | Reference |
-|---|---|
-| Collections and iterators | [Collections](docs/collections.md) |
-| Files, directories, environment, and processes | [Operating-System APIs](docs/os.md) |
-| Growable sequences | [List](docs/lists.md) |
-| Logging, timing, arguments, JSON, and parsing | [Specialist Libraries](docs/utilities.md) |
-| Optional values and errors | [Optional Values and Errors](docs/optional-values-and-errors.md) |
-| Parser building blocks | [Parser Library](docs/parser.md) |
-| Text, characters, and output | [Text and Characters](docs/strings-and-io.md) |
+- [Collections and iterators](docs/collections.md)
+- [List](docs/lists.md)
+- [Operating-system APIs](docs/os.md)
+- [Optional values and errors](docs/optional-values-and-errors.md)
+- [Parser library](docs/parser.md)
+- [Specialist libraries](docs/utilities.md): logging, timing, arguments, JSON,
+  and parsing
+- [Text and characters](docs/strings-and-io.md)
 
-Tooling:
+### Tooling
 
 - [Casa style](docs/STYLE.md)
 - [Compiler diagnostics](docs/errors.md)
 - [Compiler request products](docs/compiler-products.md)
 - [Formatter usage and rules](docs/FORMAT.md)
 - [Language server](docs/language-server.md)
-
-See the [curated examples](examples/README.md) for runnable programs ordered
-from introductory to advanced.
 
 ## Build from source
 
