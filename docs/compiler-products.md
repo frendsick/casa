@@ -114,9 +114,12 @@ Publication also checks completed function definitions and static pool reference
 An invariant failure discards the private output. It never retries another backend.
 
 Operation handlers record dependencies from the selected target and receiver
-used to check the stack. The editor projection retains only source occurrences
-and presentation facts. It traverses completed semantic bodies directly and
-releases all compiler bodies before returning the index. Verified operation
+used to check the stack. `semantic_body.casa` owns source occurrences with
+operation kinds, source payloads, and type hints. `document.casa` classifies
+these occurrences and formats hover text while building the editor index.
+The editor projection retains only source occurrences and presentation facts.
+It traverses completed semantic bodies directly and releases all compiler
+bodies before returning the index. Verified operation
 identities are settled after literal checks and recursive call obligations.
 A failed operation withholds facts that depend on its recovered stack. An
 independent sibling branch or function can still contribute verified facts.
