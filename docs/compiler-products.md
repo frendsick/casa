@@ -4,7 +4,7 @@
 assembly, the LSP and workspace request analysis snapshots, and the formatter
 requests syntax:
 
-| Operation | Input | Successful return |
+| Operation | Input | Result |
 | --- | --- | --- |
 | `syntax` | One `SourceUnit` | Tokens, optional structural facts, and a report |
 | `analyze` | `CompilationInput` | An independent analysis snapshot with a report and editor index |

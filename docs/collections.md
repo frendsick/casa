@@ -11,16 +11,16 @@ Run complete examples from the repository root with
 `List`, `Option`, and similar local names. Source code uses `std::List`,
 `std::Option`, and the other qualified names. See [reference notation](notation.md).
 
-| Need | Type or operation |
+| Type | Need |
 |---|---|
-| Binary data | [Bytes](#bytes) |
-| Borrowed list range | [Slice](#slices) |
-| Fixed number of elements | [Array](#arrays) |
-| Growable sequence | [List](lists.md) |
-| Growable UTF-8 text | [String](strings-and-io.md#owned-strings) |
-| Key-value lookup | [Map](#maps) |
-| Process a sequence | [Iterators](#iterator-sources) |
-| Unique values | [Set](#sets) |
+| [Array](#arrays) | Fixed number of elements |
+| [Bytes](#bytes) | Binary data |
+| [Iterators](#iterator-sources) | Process a sequence |
+| [List](lists.md) | Growable sequence |
+| [Map](#maps) | Key-value lookup |
+| [Set](#sets) | Unique values |
+| [Slice](#slices) | Borrowed list range |
+| [String](strings-and-io.md#owned-strings) | Growable UTF-8 text |
 
 ## Arrays
 

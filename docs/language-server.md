@@ -76,7 +76,7 @@ safer.
 
 ## Features
 
-| Feature | Current behavior |
+| Feature | Behavior |
 |---|---|
 | Completion | Names, keywords, intrinsics, dot methods, and qualified names |
 | Definition | Functions, bindings, structs, enum variants, and qualified methods |
