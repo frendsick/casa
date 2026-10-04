@@ -44,9 +44,7 @@ import "std"
 | [length](#arrayt-nlength) | `fn length [T const N:u64] self:$array[T N] -> u64` | Number of elements, which is `N` |
 | [nth](#arrayt-nnth) | `fn nth [T const N:u64] self:$array[T N] index:u64 -> $T` | Borrow of the element at a zero-based index |
 
-<a id="arrayt-nclone"></a>
-
-### clone
+### array[T N]::clone
 
 ```text
 fn clone self:$array[T N] -> array[T N]
@@ -54,9 +52,7 @@ fn clone self:$array[T N] -> array[T N]
 
 Returns an independent array when `T: Clone`.
 
-<a id="arraystr-ncontains"></a>
-
-### contains
+### array[str N]::contains
 
 ```text
 fn contains [const N:u64] self:$array[str N] needle:$str -> bool
@@ -64,9 +60,7 @@ fn contains [const N:u64] self:$array[str N] needle:$str -> bool
 
 Returns whether a string array contains `needle`.
 
-<a id="arrayt-nis_empty"></a>
-
-### is_empty
+### array[T N]::is_empty
 
 ```text
 fn is_empty [T const N:u64] self:$array[T N] -> bool
@@ -74,9 +68,7 @@ fn is_empty [T const N:u64] self:$array[T N] -> bool
 
 Returns whether `N` is zero.
 
-<a id="arrayt-niter"></a>
-
-### iter
+### array[T N]::iter
 
 ```text
 fn iter [T const N:u64] self:$array[T N] -> Iter[$T]
@@ -84,9 +76,7 @@ fn iter [T const N:u64] self:$array[T N] -> Iter[$T]
 
 Returns an iterator over borrows of the elements.
 
-<a id="arrayt-nlength"></a>
-
-### length
+### array[T N]::length
 
 ```text
 fn length [T const N:u64] self:$array[T N] -> u64
@@ -94,9 +84,7 @@ fn length [T const N:u64] self:$array[T N] -> u64
 
 Returns the number of elements, which is `N`.
 
-<a id="arrayt-nnth"></a>
-
-### nth
+### array[T N]::nth
 
 ```text
 fn nth [T const N:u64] self:$array[T N] index:u64 -> $T
@@ -169,9 +157,7 @@ import "std"
 | [length](#slicetlength) | `fn length self:$Slice[T] -> u64` | Number of elements in the view |
 | [nth](#slicetnth) | `fn nth self:$Slice[T] index:u64 -> $T` | Borrow of the element at a zero-based index |
 
-<a id="slicetis_empty"></a>
-
-### is_empty
+### Slice[T]::is_empty
 
 ```text
 fn is_empty self:$Slice[T] -> bool
@@ -179,9 +165,7 @@ fn is_empty self:$Slice[T] -> bool
 
 Returns whether the view has no elements.
 
-<a id="slicetiter"></a>
-
-### iter
+### Slice[T]::iter
 
 ```text
 fn iter self:$Slice[T] -> Iter[$T]
@@ -189,9 +173,7 @@ fn iter self:$Slice[T] -> Iter[$T]
 
 Returns an iterator over borrows of the elements.
 
-<a id="slicetlength"></a>
-
-### length
+### Slice[T]::length
 
 ```text
 fn length self:$Slice[T] -> u64
@@ -199,9 +181,7 @@ fn length self:$Slice[T] -> u64
 
 Returns the number of elements in the view.
 
-<a id="slicetnth"></a>
-
-### nth
+### Slice[T]::nth
 
 ```text
 fn nth self:$Slice[T] index:u64 -> $T
@@ -244,9 +224,7 @@ removed. The [List reference](lists.md) covers list operations, including
 | [to_raw_buffer](#bytesto_raw_buffer) | `fn to_raw_buffer self:$Bytes -> RawBuffer` | Independent allocation containing exactly `length` initialized bytes |
 | [to_str](#bytesto_str) | `fn to_str self:$Bytes -> Result[String Utf8Error]` | Validate and copy UTF-8 text |
 
-<a id="bytesappend"></a>
-
-### append
+### Bytes::append
 
 ```text
 fn append self:mut$Bytes source:$Bytes
@@ -254,9 +232,7 @@ fn append self:mut$Bytes source:$Bytes
 
 Copies the source bytes onto the end.
 
-<a id="bytesas_cstr"></a>
-
-### as_cstr
+### Bytes::as_cstr
 
 ```text
 fn as_cstr self:$Bytes -> Option[$cstr]
@@ -264,9 +240,7 @@ fn as_cstr self:$Bytes -> Option[$cstr]
 
 Borrows a NUL-terminated view if no byte is NUL.
 
-<a id="bytescapacity"></a>
-
-### capacity
+### Bytes::capacity
 
 ```text
 fn capacity self:$Bytes -> u64
@@ -274,9 +248,7 @@ fn capacity self:$Bytes -> u64
 
 Returns the number of bytes available before growth.
 
-<a id="bytesclone"></a>
-
-### clone
+### Bytes::clone
 
 ```text
 fn clone self:$Bytes -> Bytes
@@ -284,9 +256,7 @@ fn clone self:$Bytes -> Bytes
 
 Returns an independent byte buffer.
 
-<a id="bytesfrom_str"></a>
-
-### from_str
+### Bytes::from_str
 
 ```text
 fn from_str source:$str -> Bytes
@@ -294,9 +264,7 @@ fn from_str source:$str -> Bytes
 
 Copies the text's UTF-8 bytes.
 
-<a id="bytesget"></a>
-
-### get
+### Bytes::get
 
 ```text
 fn get self:$Bytes index:u64 -> Option[u8]
@@ -305,9 +273,7 @@ fn get self:$Bytes index:u64 -> Option[u8]
 Returns a copied byte wrapped in `Option::Some`. An out-of-range index returns
 `Option::None`. The byte buffer remains available.
 
-<a id="bytesiter"></a>
-
-### iter
+### Bytes::iter
 
 ```text
 fn iter self:$Bytes -> Iter[u8]
@@ -315,9 +281,7 @@ fn iter self:$Bytes -> Iter[u8]
 
 Returns an iterator that copies each byte.
 
-<a id="byteslength"></a>
-
-### length
+### Bytes::length
 
 ```text
 fn length self:$Bytes -> u64
@@ -325,9 +289,7 @@ fn length self:$Bytes -> u64
 
 Returns the number of initialized bytes.
 
-<a id="bytesnew"></a>
-
-### new
+### Bytes::new
 
 ```text
 fn new -> Bytes
@@ -335,9 +297,7 @@ fn new -> Bytes
 
 Creates an empty byte buffer.
 
-<a id="bytespush"></a>
-
-### push
+### Bytes::push
 
 ```text
 fn push self:mut$Bytes byte:u8
@@ -345,9 +305,7 @@ fn push self:mut$Bytes byte:u8
 
 Adds one byte.
 
-<a id="bytesto_raw_buffer"></a>
-
-### to_raw_buffer
+### Bytes::to_raw_buffer
 
 ```text
 fn to_raw_buffer self:$Bytes -> RawBuffer
@@ -355,9 +313,7 @@ fn to_raw_buffer self:$Bytes -> RawBuffer
 
 Returns an independent allocation containing exactly `length` initialized bytes.
 
-<a id="bytesto_str"></a>
-
-### to_str
+### Bytes::to_str
 
 ```text
 fn to_str self:$Bytes -> Result[String Utf8Error]
@@ -409,9 +365,7 @@ end
 | [set](#mapk-vset) | `fn set self:mut$Map[K V] key:K value:V` | Insert or replace an entry |
 | [values](#mapk-vvalues) | `fn values self:$Map[K V] -> List[V]` | Cloned values when `V: Clone` |
 
-<a id="mapk-vclone"></a>
-
-### clone
+### Map[K V]::clone
 
 ```text
 fn clone self:$Map[K V] -> Map[K V]
@@ -419,9 +373,7 @@ fn clone self:$Map[K V] -> Map[K V]
 
 Returns an independent map when `K: Clone` and `V: Clone`.
 
-<a id="mapk-vdelete"></a>
-
-### delete
+### Map[K V]::delete
 
 ```text
 fn delete self:mut$Map[K V] key:$K
@@ -429,9 +381,7 @@ fn delete self:mut$Map[K V] key:$K
 
 Removes and destroys a value, if present.
 
-<a id="mapk-vget"></a>
-
-### get
+### Map[K V]::get
 
 ```text
 fn get self:$Map[K V] key:$K -> Option[$V]
@@ -439,9 +389,7 @@ fn get self:$Map[K V] key:$K -> Option[$V]
 
 Returns a borrow of a value, if present.
 
-<a id="mapk-vget_cloned"></a>
-
-### get_cloned
+### Map[K V]::get_cloned
 
 ```text
 fn get_cloned self:$Map[K V] key:$K -> Option[V]
@@ -449,9 +397,7 @@ fn get_cloned self:$Map[K V] key:$K -> Option[V]
 
 Returns a cloned value, if present. `V` must implement `Clone`.
 
-<a id="mapk-vget_copy"></a>
-
-### get_copy
+### Map[K V]::get_copy
 
 ```text
 fn get_copy self:$Map[K V] key:$K -> Option[V]
@@ -459,9 +405,7 @@ fn get_copy self:$Map[K V] key:$K -> Option[V]
 
 Returns a copied value, if present. `V` must implement `Copy`.
 
-<a id="mapk-vget_mut"></a>
-
-### get_mut
+### Map[K V]::get_mut
 
 ```text
 fn get_mut self:mut$Map[K V] key:$K -> Option[mut$V]
@@ -469,9 +413,7 @@ fn get_mut self:mut$Map[K V] key:$K -> Option[mut$V]
 
 Returns an exclusive borrow of a value, if present.
 
-<a id="mapk-vhas"></a>
-
-### has
+### Map[K V]::has
 
 ```text
 fn has self:$Map[K V] key:$K -> bool
@@ -479,9 +421,7 @@ fn has self:$Map[K V] key:$K -> bool
 
 Returns whether a key exists.
 
-<a id="mapk-vis_empty"></a>
-
-### is_empty
+### Map[K V]::is_empty
 
 ```text
 fn is_empty self:$Map[K V] -> bool
@@ -489,9 +429,7 @@ fn is_empty self:$Map[K V] -> bool
 
 Returns whether the map has no entries.
 
-<a id="mapk-viter"></a>
-
-### iter
+### Map[K V]::iter
 
 ```text
 fn iter self:$Map[K V] -> Iter[Pair[$K $V]]
@@ -499,9 +437,7 @@ fn iter self:$Map[K V] -> Iter[Pair[$K $V]]
 
 Returns an iterator over borrowed key-value pairs.
 
-<a id="mapk-vkeys"></a>
-
-### keys
+### Map[K V]::keys
 
 ```text
 fn keys self:$Map[K V] -> List[K]
@@ -509,9 +445,7 @@ fn keys self:$Map[K V] -> List[K]
 
 Returns a list of cloned keys when `K` implements `Clone`.
 
-<a id="mapk-vlength"></a>
-
-### length
+### Map[K V]::length
 
 ```text
 fn length self:$Map[K V] -> u64
@@ -519,9 +453,7 @@ fn length self:$Map[K V] -> u64
 
 Returns the number of entries.
 
-<a id="mapk-vnew"></a>
-
-### new
+### Map[K V]::new
 
 ```text
 fn new -> Map[K V]
@@ -529,9 +461,7 @@ fn new -> Map[K V]
 
 Creates an empty map.
 
-<a id="mapk-vremove"></a>
-
-### remove
+### Map[K V]::remove
 
 ```text
 fn remove self:mut$Map[K V] key:$K -> Option[V]
@@ -539,9 +469,7 @@ fn remove self:mut$Map[K V] key:$K -> Option[V]
 
 Removes and returns a value, if present.
 
-<a id="mapk-vset"></a>
-
-### set
+### Map[K V]::set
 
 ```text
 fn set self:mut$Map[K V] key:K value:V
@@ -549,9 +477,7 @@ fn set self:mut$Map[K V] key:K value:V
 
 Inserts or replaces an entry.
 
-<a id="mapk-vvalues"></a>
-
-### values
+### Map[K V]::values
 
 ```text
 fn values self:$Map[K V] -> List[V]
@@ -588,9 +514,7 @@ owner:
 | [remove_str](#mapstring-vremove_str) | `fn remove_str self:mut$Map[String V] key:$str -> Option[V]` | Remove a value |
 | [set_str](#mapstring-vset_str) | `fn set_str self:mut$Map[String V] key:$str value:V` | Copy and insert a text key |
 
-<a id="mapstring-vdelete_str"></a>
-
-### delete_str
+### Map[String V]::delete_str
 
 ```text
 fn delete_str self:mut$Map[String V] key:$str
@@ -598,9 +522,7 @@ fn delete_str self:mut$Map[String V] key:$str
 
 Removes and destroys a value.
 
-<a id="mapstring-vget_mut_str"></a>
-
-### get_mut_str
+### Map[String V]::get_mut_str
 
 ```text
 fn get_mut_str self:mut$Map[String V] key:$str -> Option[mut$V]
@@ -608,9 +530,7 @@ fn get_mut_str self:mut$Map[String V] key:$str -> Option[mut$V]
 
 Exclusively borrows a value.
 
-<a id="mapstring-vget_str"></a>
-
-### get_str
+### Map[String V]::get_str
 
 ```text
 fn get_str self:$Map[String V] key:$str -> Option[$V]
@@ -618,9 +538,7 @@ fn get_str self:$Map[String V] key:$str -> Option[$V]
 
 Borrows a value.
 
-<a id="mapstring-vhas_str"></a>
-
-### has_str
+### Map[String V]::has_str
 
 ```text
 fn has_str self:$Map[String V] key:$str -> bool
@@ -628,9 +546,7 @@ fn has_str self:$Map[String V] key:$str -> bool
 
 Returns whether the text key exists.
 
-<a id="mapstring-vremove_str"></a>
-
-### remove_str
+### Map[String V]::remove_str
 
 ```text
 fn remove_str self:mut$Map[String V] key:$str -> Option[V]
@@ -638,9 +554,7 @@ fn remove_str self:mut$Map[String V] key:$str -> Option[V]
 
 Removes a value.
 
-<a id="mapstring-vset_str"></a>
-
-### set_str
+### Map[String V]::set_str
 
 ```text
 fn set_str self:mut$Map[String V] key:$str value:V
@@ -678,9 +592,7 @@ std::Set[str]::new = names
 | [remove](#setkremove) | `fn remove self:mut$Set[K] key:$K` | Remove a value if present |
 | [to_list](#setkto_list) | `fn to_list self:$Set[K] -> List[K]` | Cloned values in unspecified order when `K: Clone` |
 
-<a id="setkadd"></a>
-
-### add
+### Set[K]::add
 
 ```text
 fn add self:mut$Set[K] key:K
@@ -688,9 +600,7 @@ fn add self:mut$Set[K] key:K
 
 Adds a value.
 
-<a id="setkclone"></a>
-
-### clone
+### Set[K]::clone
 
 ```text
 fn clone self:$Set[K] -> Set[K]
@@ -698,9 +608,7 @@ fn clone self:$Set[K] -> Set[K]
 
 Returns an independent set when `K: Clone`.
 
-<a id="setkhas"></a>
-
-### has
+### Set[K]::has
 
 ```text
 fn has self:$Set[K] key:$K -> bool
@@ -708,9 +616,7 @@ fn has self:$Set[K] key:$K -> bool
 
 Returns whether a value exists.
 
-<a id="setkis_empty"></a>
-
-### is_empty
+### Set[K]::is_empty
 
 ```text
 fn is_empty self:$Set[K] -> bool
@@ -718,9 +624,7 @@ fn is_empty self:$Set[K] -> bool
 
 Returns whether the set has no values.
 
-<a id="setkiter"></a>
-
-### iter
+### Set[K]::iter
 
 ```text
 fn iter self:$Set[K] -> Iter[$K]
@@ -728,9 +632,7 @@ fn iter self:$Set[K] -> Iter[$K]
 
 Returns an iterator over borrowed values.
 
-<a id="setklength"></a>
-
-### length
+### Set[K]::length
 
 ```text
 fn length self:$Set[K] -> u64
@@ -738,9 +640,7 @@ fn length self:$Set[K] -> u64
 
 Returns the number of values.
 
-<a id="setknew"></a>
-
-### new
+### Set[K]::new
 
 ```text
 fn new -> Set[K]
@@ -748,9 +648,7 @@ fn new -> Set[K]
 
 Creates an empty set.
 
-<a id="setkremove"></a>
-
-### remove
+### Set[K]::remove
 
 ```text
 fn remove self:mut$Set[K] key:$K
@@ -758,9 +656,7 @@ fn remove self:mut$Set[K] key:$K
 
 Removes a value if present.
 
-<a id="setkto_list"></a>
-
-### to_list
+### Set[K]::to_list
 
 ```text
 fn to_list self:$Set[K] -> List[K]
@@ -781,9 +677,7 @@ Collisions, traversal order, and untrusted-key behavior match `Map`.
 | [has_str](#setstringhas_str) | `fn has_str self:$Set[String] key:$str -> bool` | Whether the text key exists |
 | [remove_str](#setstringremove_str) | `fn remove_str self:mut$Set[String] key:$str` | Remove a text key if present |
 
-<a id="setstringadd_str"></a>
-
-### add_str
+### Set[String]::add_str
 
 ```text
 fn add_str self:mut$Set[String] key:$str
@@ -791,9 +685,7 @@ fn add_str self:mut$Set[String] key:$str
 
 Copies the borrowed text key into an owned String and adds it to the set.
 
-<a id="setstringhas_str"></a>
-
-### has_str
+### Set[String]::has_str
 
 ```text
 fn has_str self:$Set[String] key:$str -> bool
@@ -801,9 +693,7 @@ fn has_str self:$Set[String] key:$str -> bool
 
 Returns whether the borrowed text key exists. Lookup does not allocate.
 
-<a id="setstringremove_str"></a>
-
-### remove_str
+### Set[String]::remove_str
 
 ```text
 fn remove_str self:mut$Set[String] key:$str
@@ -856,9 +746,7 @@ In trait signatures, the type `self` means the type that implements `Iterable[T]
 | [take_while](#iterablettake_while) | `fn take_while self:self f:fn[$T -> bool] -> Iter[T]` | Yield while the predicate is true |
 | [zip](#iterabletzip) | `fn zip [U] self:self other:Iter[U] -> Iter[Pair[T U]]` | Pair values until either iterator ends |
 
-<a id="iterabletchain"></a>
-
-### chain
+### Iterable[T]::chain
 
 ```text
 fn chain self:self other:Iter[T] -> Iter[T]
@@ -866,9 +754,7 @@ fn chain self:self other:Iter[T] -> Iter[T]
 
 Yields from `self`, then `other`.
 
-<a id="iterabletenumerate"></a>
-
-### enumerate
+### Iterable[T]::enumerate
 
 ```text
 fn enumerate self:self -> Iter[Pair[i64 T]]
@@ -876,9 +762,7 @@ fn enumerate self:self -> Iter[Pair[i64 T]]
 
 Pairs each value with its zero-based index.
 
-<a id="iterabletfilter"></a>
-
-### filter
+### Iterable[T]::filter
 
 ```text
 fn filter self:self f:fn[$T -> bool] -> Iter[T]
@@ -886,9 +770,7 @@ fn filter self:self f:fn[$T -> bool] -> Iter[T]
 
 Keeps matching values.
 
-<a id="iterabletflat_map"></a>
-
-### flat_map
+### Iterable[T]::flat_map
 
 ```text
 fn flat_map [U] self:self f:fn[T -> Iter[U]] -> Iter[U]
@@ -896,9 +778,7 @@ fn flat_map [U] self:self f:fn[T -> Iter[U]] -> Iter[U]
 
 Transforms and flattens one level.
 
-<a id="iterabletmap"></a>
-
-### map
+### Iterable[T]::map
 
 ```text
 fn map [U] self:self f:fn[T -> U] -> Iter[U]
@@ -906,9 +786,7 @@ fn map [U] self:self f:fn[T -> U] -> Iter[U]
 
 Transforms each value.
 
-<a id="iterabletskip"></a>
-
-### skip
+### Iterable[T]::skip
 
 ```text
 fn skip self:self n:u64 -> Iter[T]
@@ -916,9 +794,7 @@ fn skip self:self n:u64 -> Iter[T]
 
 Omits the first `n` values.
 
-<a id="iterabletskip_while"></a>
-
-### skip_while
+### Iterable[T]::skip_while
 
 ```text
 fn skip_while self:self f:fn[$T -> bool] -> Iter[T]
@@ -926,9 +802,7 @@ fn skip_while self:self f:fn[$T -> bool] -> Iter[T]
 
 Omits values while the predicate is true.
 
-<a id="iterablettake"></a>
-
-### take
+### Iterable[T]::take
 
 ```text
 fn take self:self n:u64 -> Iter[T]
@@ -936,9 +810,7 @@ fn take self:self n:u64 -> Iter[T]
 
 Yields at most `n` values.
 
-<a id="iterablettake_while"></a>
-
-### take_while
+### Iterable[T]::take_while
 
 ```text
 fn take_while self:self f:fn[$T -> bool] -> Iter[T]
@@ -946,9 +818,7 @@ fn take_while self:self f:fn[$T -> bool] -> Iter[T]
 
 Yields while the predicate is true.
 
-<a id="iterabletzip"></a>
-
-### zip
+### Iterable[T]::zip
 
 ```text
 fn zip [U] self:self other:Iter[U] -> Iter[Pair[T U]]
@@ -980,9 +850,7 @@ Operations such as `any` and `find` can stop before it is exhausted.
 | [reduce](#iterabletreduce) | `fn reduce self:mut$self f:fn[T T -> T] -> Option[T]` | Reduce from the first value |
 | [sum](#iteri64sum) | `fn sum self:mut$Iter[i64] -> i64` | Add owned `i64` values |
 
-<a id="iterabletall"></a>
-
-### all
+### Iterable[T]::all
 
 ```text
 fn all self:mut$self f:fn[$T -> bool] -> bool
@@ -990,9 +858,7 @@ fn all self:mut$self f:fn[$T -> bool] -> bool
 
 Returns whether every value matches.
 
-<a id="iterabletany"></a>
-
-### any
+### Iterable[T]::any
 
 ```text
 fn any self:mut$self f:fn[$T -> bool] -> bool
@@ -1000,9 +866,7 @@ fn any self:mut$self f:fn[$T -> bool] -> bool
 
 Returns whether any value matches.
 
-<a id="iterabletcollect"></a>
-
-### collect
+### Iterable[T]::collect
 
 ```text
 fn collect self:mut$self -> List[T]
@@ -1010,9 +874,7 @@ fn collect self:mut$self -> List[T]
 
 Collects all remaining values into a list.
 
-<a id="iterabletcount"></a>
-
-### count
+### Iterable[T]::count
 
 ```text
 fn count self:mut$self -> u64
@@ -1020,9 +882,7 @@ fn count self:mut$self -> u64
 
 Returns the number of remaining values.
 
-<a id="iterabletfind"></a>
-
-### find
+### Iterable[T]::find
 
 ```text
 fn find self:mut$self f:fn[$T -> bool] -> Option[T]
@@ -1030,9 +890,7 @@ fn find self:mut$self f:fn[$T -> bool] -> Option[T]
 
 Returns the first matching value, if present.
 
-<a id="iterabletfold"></a>
-
-### fold
+### Iterable[T]::fold
 
 ```text
 fn fold [U] self:mut$self acc:U f:fn[U T -> U] -> U
@@ -1040,9 +898,7 @@ fn fold [U] self:mut$self acc:U f:fn[U T -> U] -> U
 
 Reduces from an initial value.
 
-<a id="itertmax"></a>
-
-### max
+### Iter[T]::max
 
 ```text
 fn max self:mut$Iter[T] -> Option[T]
@@ -1050,9 +906,7 @@ fn max self:mut$Iter[T] -> Option[T]
 
 Returns the maximum value, if present. `T` must implement `Ord`.
 
-<a id="iterabletmax_by"></a>
-
-### max_by
+### Iterable[T]::max_by
 
 ```text
 fn max_by self:mut$self f:fn[$T $T -> bool] -> Option[T]
@@ -1060,9 +914,7 @@ fn max_by self:mut$self f:fn[$T $T -> bool] -> Option[T]
 
 Returns the maximum value selected by the comparison callback, if present.
 
-<a id="itertmin"></a>
-
-### min
+### Iter[T]::min
 
 ```text
 fn min self:mut$Iter[T] -> Option[T]
@@ -1070,9 +922,7 @@ fn min self:mut$Iter[T] -> Option[T]
 
 Returns the minimum value, if present. `T` must implement `Ord`.
 
-<a id="iterabletmin_by"></a>
-
-### min_by
+### Iterable[T]::min_by
 
 ```text
 fn min_by self:mut$self f:fn[$T $T -> bool] -> Option[T]
@@ -1080,9 +930,7 @@ fn min_by self:mut$self f:fn[$T $T -> bool] -> Option[T]
 
 Returns the minimum value selected by the comparison callback, if present.
 
-<a id="iterabletnext"></a>
-
-### next
+### Iterable[T]::next
 
 ```text
 fn next self:mut$self -> Option[T]
@@ -1090,9 +938,7 @@ fn next self:mut$self -> Option[T]
 
 Advances the iterator and returns the next value, if present.
 
-<a id="iterabletpartition"></a>
-
-### partition
+### Iterable[T]::partition
 
 ```text
 fn partition self:mut$self f:fn[$T -> bool] -> Pair[List[T] List[T]]
@@ -1100,9 +946,7 @@ fn partition self:mut$self f:fn[$T -> bool] -> Pair[List[T] List[T]]
 
 Separates the remaining values into matching and non-matching lists.
 
-<a id="iterabletreduce"></a>
-
-### reduce
+### Iterable[T]::reduce
 
 ```text
 fn reduce self:mut$self f:fn[T T -> T] -> Option[T]
@@ -1110,9 +954,7 @@ fn reduce self:mut$self f:fn[T T -> T] -> Option[T]
 
 Reduces from the first value.
 
-<a id="iteri64sum"></a>
-
-### sum
+### Iter[i64]::sum
 
 ```text
 fn sum self:mut$Iter[i64] -> i64

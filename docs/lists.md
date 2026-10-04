@@ -66,9 +66,7 @@ names. Call forms below assume a list binding named `numbers`.
 | [sort_by_range](#listtsort_by_range) | `fn sort_by_range self:mut$List[T] low:u64 high:u64 f:$fn[$T $T -> bool]` | Sort an inclusive index range |
 | [swap_at](#listtswap_at) | `fn swap_at [T] self:mut$List[T] i:u64 j:u64` | Exchange two elements |
 
-<a id="listtappend"></a>
-
-### append
+### List[T]::append
 
 ```text
 fn append [T] self:mut$List[T] other:List[T]
@@ -79,9 +77,7 @@ onto the receiver's end.
 
 Call: `other numbers.append`.
 
-<a id="listtas_slice"></a>
-
-### as_slice
+### List[T]::as_slice
 
 ```text
 fn as_slice [T] self:$List[T] -> Slice[T]
@@ -92,9 +88,7 @@ use.
 
 Call: `numbers.as_slice`.
 
-<a id="listtclone"></a>
-
-### clone
+### List[T]::clone
 
 ```text
 fn clone self:$List[T] -> List[T]
@@ -105,9 +99,7 @@ allocate or run user code. The source list remains available.
 
 Call: `numbers.clone`.
 
-<a id="liststrcontains"></a>
-
-### contains
+### List[str]::contains
 
 ```text
 fn contains self:$List[str] needle:$str -> bool
@@ -115,9 +107,7 @@ fn contains self:$List[str] needle:$str -> bool
 
 Returns whether a string list contains `needle`.
 
-<a id="listtfrom_array"></a>
-
-### from_array
+### List[T]::from_array
 
 ```text
 fn from_array[T const N:u64] array:array[T N] -> List[T]
@@ -127,9 +117,7 @@ Takes ownership of the array and its elements and returns a growable list.
 
 Call: `[10, 20] std::List::from_array = numbers`.
 
-<a id="listtget"></a>
-
-### get
+### List[T]::get
 
 ```text
 fn get [T] self:$List[T] n:u64 -> $T
@@ -144,9 +132,7 @@ program. This method does not return an `Option`.
 
 Call: `index numbers.get`.
 
-<a id="listtget_mut"></a>
-
-### get_mut
+### List[T]::get_mut
 
 ```text
 fn get_mut [T] self:mut$List[T] n:u64 -> mut$T
@@ -157,9 +143,7 @@ access to the list until its last use. An out-of-range index terminates the prog
 
 Call: `index numbers.get_mut`.
 
-<a id="listtget_ref"></a>
-
-### get_ref
+### List[T]::get_ref
 
 ```text
 fn get_ref [T] self:$List[T] n:u64 -> $T
@@ -170,9 +154,7 @@ ownership rules. An out-of-range index terminates the program.
 
 Call: `index numbers.get_ref`.
 
-<a id="listtinsert"></a>
-
-### insert
+### List[T]::insert
 
 ```text
 fn insert [T] self:mut$List[T] item:T index:u64
@@ -184,9 +166,7 @@ into it. The item is consumed before the index, unlike [set](#listtset).
 
 Call: `index item numbers.insert`.
 
-<a id="listtis_empty"></a>
-
-### is_empty
+### List[T]::is_empty
 
 ```text
 fn is_empty self:$List -> bool
@@ -194,9 +174,7 @@ fn is_empty self:$List -> bool
 
 Returns whether the list has no elements.
 
-<a id="listtiter"></a>
-
-### iter
+### List[T]::iter
 
 ```text
 fn iter self:$List[T] -> Iter[$T]
@@ -207,9 +185,7 @@ loaned while those borrows are in use.
 
 Call: `numbers.iter`.
 
-<a id="liststrjoin"></a>
-
-### join
+### List[str]::join
 
 ```text
 fn join self:$List[str] separator:$str -> String
@@ -217,9 +193,7 @@ fn join self:$List[str] separator:$str -> String
 
 Joins a string-view list.
 
-<a id="liststringjoin_strings"></a>
-
-### join_strings
+### List[String]::join_strings
 
 ```text
 fn join_strings self:$List[String] separator:$str -> String
@@ -227,9 +201,7 @@ fn join_strings self:$List[String] separator:$str -> String
 
 Joins owned strings.
 
-<a id="listtlength"></a>
-
-### length
+### List[T]::length
 
 ```text
 fn length self:$List -> u64
@@ -237,9 +209,7 @@ fn length self:$List -> u64
 
 Returns the number of elements.
 
-<a id="listtnew"></a>
-
-### new
+### List[T]::new
 
 ```text
 fn new [T] -> List[T]
@@ -250,9 +220,7 @@ Creates an empty list without element storage. The first `push`, `insert`, or no
 
 Call: `std::List[i64]::new = numbers`.
 
-<a id="listtpop"></a>
-
-### pop
+### List[T]::pop
 
 ```text
 fn pop [T] self:mut$List[T] -> T
@@ -266,9 +234,7 @@ The list must be nonempty. Popping an empty list terminates the program.
 
 Call: `numbers.pop`.
 
-<a id="listtpush"></a>
-
-### push
+### List[T]::push
 
 ```text
 fn push [T] self:mut$List[T] item:T
@@ -280,9 +246,7 @@ in use across the call.
 
 Call: `item numbers.push`.
 
-<a id="listbytespush_str"></a>
-
-### push_str (List[Bytes])
+### List[Bytes]::push_str
 
 ```text
 fn push_str self:mut$List[Bytes] value:$str
@@ -290,9 +254,7 @@ fn push_str self:mut$List[Bytes] value:$str
 
 Copies text bytes and appends one buffer.
 
-<a id="liststringpush_str"></a>
-
-### push_str (List[String])
+### List[String]::push_str
 
 ```text
 fn push_str self:mut$List[String] value:$str
@@ -300,9 +262,7 @@ fn push_str self:mut$List[String] value:$str
 
 Copies and appends one text view.
 
-<a id="listtremove"></a>
-
-### remove
+### List[T]::remove
 
 ```text
 fn remove [T] self:mut$List[T] index:u64 -> Option[T]
@@ -315,9 +275,7 @@ the list.
 
 Call: `index numbers.remove`.
 
-<a id="listtreplace"></a>
-
-### replace
+### List[T]::replace
 
 ```text
 fn replace [T] self:mut$List[T] n:u64 item:T -> T
@@ -329,9 +287,7 @@ program.
 
 Call: `item index numbers.replace`.
 
-<a id="listtreverse"></a>
-
-### reverse
+### List[T]::reverse
 
 ```text
 fn reverse [T] self:mut$List[T]
@@ -341,9 +297,7 @@ Reverses elements in place through an exclusive list borrow.
 
 Call: `numbers.reverse`.
 
-<a id="listtset"></a>
-
-### set
+### List[T]::set
 
 ```text
 fn set [T] self:mut$List[T] n:u64 item:T
@@ -355,9 +309,7 @@ into its place. An out-of-range index terminates the program. Use
 
 Call: `item index numbers.set`.
 
-<a id="listtslice"></a>
-
-### slice
+### List[T]::slice
 
 ```text
 fn slice [T] self:$List[T] start:u64 stop:u64 -> Slice[T]
@@ -369,9 +321,7 @@ use.
 
 Call: `stop start numbers.slice`. See [Slices](collections.md#slices).
 
-<a id="listtsort"></a>
-
-### sort
+### List[T]::sort
 
 ```text
 fn sort self:mut$List[T]
@@ -381,9 +331,7 @@ Sorts elements in place in ascending order when `T` implements [`Ord`](traits.md
 
 Call: `numbers.sort`. See [the sorting example](../examples/sorting.casa).
 
-<a id="listtsort_by"></a>
-
-### sort_by
+### List[T]::sort_by
 
 ```text
 fn sort_by self:mut$List[T] f:fn[$T $T -> bool]
@@ -393,9 +341,7 @@ Sorts elements in place with a [comparison callback](functions-and-lambdas.md#fu
 
 Call: `compare numbers.sort_by`. See [the sorting example](../examples/sorting.casa).
 
-<a id="listtsort_by_range"></a>
-
-### sort_by_range
+### List[T]::sort_by_range
 
 ```text
 fn sort_by_range self:mut$List[T] low:u64 high:u64 f:$fn[$T $T -> bool]
@@ -406,9 +352,7 @@ borrowed exclusively.
 
 Call: `compare high low numbers.sort_by_range`.
 
-<a id="listtswap_at"></a>
-
-### swap_at
+### List[T]::swap_at
 
 ```text
 fn swap_at [T] self:mut$List[T] i:u64 j:u64

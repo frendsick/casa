@@ -31,9 +31,7 @@ for signatures, fragments, and commands for running complete examples.
 | [take_string](#cursortake_string) | `fn take_string self:mut$Cursor target:$str -> std::Result[str ParseError]` | Consume exact text |
 | [take_while](#cursortake_while) | `fn take_while self:mut$Cursor pred:fn[char -> bool] -> std::String` | Consume and copy matching text |
 
-<a id="cursoradvance"></a>
-
-### advance
+### Cursor::advance
 
 ```text
 fn advance self:mut$Cursor -> std::Option[char]
@@ -41,9 +39,7 @@ fn advance self:mut$Cursor -> std::Option[char]
 
 Returns the current character and advances the cursor.
 
-<a id="cursorexpect_char"></a>
-
-### expect_char
+### Cursor::expect_char
 
 ```text
 fn expect_char self:mut$Cursor expected:char -> std::Result[char ParseError]
@@ -51,9 +47,7 @@ fn expect_char self:mut$Cursor expected:char -> std::Result[char ParseError]
 
 Consumes one expected character.
 
-<a id="cursoris_eof"></a>
-
-### is_eof
+### Cursor::is_eof
 
 ```text
 fn is_eof self:$Cursor -> bool
@@ -61,9 +55,7 @@ fn is_eof self:$Cursor -> bool
 
 Returns whether the position reached the end.
 
-<a id="cursornew"></a>
-
-### new
+### Cursor::new
 
 ```text
 fn new source:$str -> Cursor
@@ -71,9 +63,7 @@ fn new source:$str -> Cursor
 
 Creates a cursor at position `0` over the borrowed source.
 
-<a id="cursorpeek"></a>
-
-### peek
+### Cursor::peek
 
 ```text
 fn peek self:$Cursor -> std::Option[char]
@@ -81,9 +71,7 @@ fn peek self:$Cursor -> std::Option[char]
 
 Returns the current character without advancing the cursor.
 
-<a id="cursorpeek_at"></a>
-
-### peek_at
+### Cursor::peek_at
 
 ```text
 fn peek_at self:$Cursor offset:u64 -> std::Option[char]
@@ -91,9 +79,7 @@ fn peek_at self:$Cursor offset:u64 -> std::Option[char]
 
 Returns the character at a relative offset without advancing the cursor.
 
-<a id="cursorrestore"></a>
-
-### restore
+### Cursor::restore
 
 ```text
 fn restore self:mut$Cursor saved:u64
@@ -101,9 +87,7 @@ fn restore self:mut$Cursor saved:u64
 
 Returns to a saved position.
 
-<a id="cursorsave"></a>
-
-### save
+### Cursor::save
 
 ```text
 fn save self:$Cursor -> u64
@@ -111,9 +95,7 @@ fn save self:$Cursor -> u64
 
 Returns the current cursor position.
 
-<a id="cursorskip"></a>
-
-### skip
+### Cursor::skip
 
 ```text
 fn skip self:mut$Cursor count:u64
@@ -121,9 +103,7 @@ fn skip self:mut$Cursor count:u64
 
 Advances by a count.
 
-<a id="cursorskip_while"></a>
-
-### skip_while
+### Cursor::skip_while
 
 ```text
 fn skip_while self:mut$Cursor pred:fn[char -> bool]
@@ -131,9 +111,7 @@ fn skip_while self:mut$Cursor pred:fn[char -> bool]
 
 Advances while matching.
 
-<a id="cursorstarts_with"></a>
-
-### starts_with
+### Cursor::starts_with
 
 ```text
 fn starts_with self:$Cursor prefix:$str -> bool
@@ -141,9 +119,7 @@ fn starts_with self:$Cursor prefix:$str -> bool
 
 Matches remaining text without advancing.
 
-<a id="cursortake_string"></a>
-
-### take_string
+### Cursor::take_string
 
 ```text
 fn take_string self:mut$Cursor target:$str -> std::Result[str ParseError]
@@ -151,9 +127,7 @@ fn take_string self:mut$Cursor target:$str -> std::Result[str ParseError]
 
 Consumes exact text.
 
-<a id="cursortake_while"></a>
-
-### take_while
+### Cursor::take_while
 
 ```text
 fn take_while self:mut$Cursor pred:fn[char -> bool] -> std::String

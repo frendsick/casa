@@ -59,9 +59,7 @@ After `import "std"`, these `i64` helpers are available:
 | [min](#i64min) | `fn min self:$i64 other:i64 -> i64` | Smaller value |
 | [pow](#i64pow) | `fn pow self:$i64 exp:i64 -> i64` | Integer exponentiation |
 
-<a id="i64abs"></a>
-
-### abs
+### i64::abs
 
 ```text
 fn abs self:$i64 -> i64
@@ -69,9 +67,7 @@ fn abs self:$i64 -> i64
 
 Returns the absolute value.
 
-<a id="i64clamp"></a>
-
-### clamp
+### i64::clamp
 
 ```text
 fn clamp self:$i64 lo:i64 hi:i64 -> i64
@@ -79,9 +75,7 @@ fn clamp self:$i64 lo:i64 hi:i64 -> i64
 
 Returns the value limited to the inclusive range.
 
-<a id="i64max"></a>
-
-### max
+### i64::max
 
 ```text
 fn max self:$i64 other:i64 -> i64
@@ -89,9 +83,7 @@ fn max self:$i64 other:i64 -> i64
 
 Returns the larger value.
 
-<a id="i64min"></a>
-
-### min
+### i64::min
 
 ```text
 fn min self:$i64 other:i64 -> i64
@@ -99,9 +91,7 @@ fn min self:$i64 other:i64 -> i64
 
 Returns the smaller value.
 
-<a id="i64pow"></a>
-
-### pow
+### i64::pow
 
 ```text
 fn pow self:$i64 exp:i64 -> i64

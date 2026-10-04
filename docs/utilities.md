@@ -44,9 +44,7 @@ Use `""` when an option has no short or long spelling.
 | [new](#argparsernew) | `fn new -> ArgParser` | Parser named from argument `0` |
 | [parse_args](#argparserparse_args) | `fn parse_args self:$ArgParser -> ParsedArgs` | Parse process arguments without changing definitions |
 
-<a id="argparseradd_flag"></a>
-
-### add_flag
+### ArgParser::add_flag
 
 ```text
 fn add_flag self:mut$ArgParser name:str short_flag:str long_flag:str help_text:str
@@ -54,9 +52,7 @@ fn add_flag self:mut$ArgParser name:str short_flag:str long_flag:str help_text:s
 
 Adds a Boolean flag.
 
-<a id="argparseradd_multi_option"></a>
-
-### add_multi_option
+### ArgParser::add_multi_option
 
 ```text
 fn add_multi_option self:mut$ArgParser name:str short_flag:str long_flag:str help_text:str
@@ -64,9 +60,7 @@ fn add_multi_option self:mut$ArgParser name:str short_flag:str long_flag:str hel
 
 Adds a repeatable string option.
 
-<a id="argparseradd_option"></a>
-
-### add_option
+### ArgParser::add_option
 
 ```text
 fn add_option self:mut$ArgParser name:str short_flag:str long_flag:str help_text:str
@@ -74,9 +68,7 @@ fn add_option self:mut$ArgParser name:str short_flag:str long_flag:str help_text
 
 Adds an option that accepts one string value.
 
-<a id="argparseradd_positional"></a>
-
-### add_positional
+### ArgParser::add_positional
 
 ```text
 fn add_positional self:mut$ArgParser name:str help_text:str
@@ -84,9 +76,7 @@ fn add_positional self:mut$ArgParser name:str help_text:str
 
 Adds a required positional value.
 
-<a id="argparseradd_terminal_flag"></a>
-
-### add_terminal_flag
+### ArgParser::add_terminal_flag
 
 ```text
 fn add_terminal_flag self:mut$ArgParser name:str short_flag:str long_flag:str help_text:str
@@ -94,9 +84,7 @@ fn add_terminal_flag self:mut$ArgParser name:str short_flag:str long_flag:str he
 
 Adds a flag that permits missing positional values.
 
-<a id="parsedargsget"></a>
-
-### get
+### ParsedArgs::get
 
 ```text
 fn get self:$ParsedArgs name:$str -> std::Option[std::String]
@@ -104,9 +92,7 @@ fn get self:$ParsedArgs name:$str -> std::Option[std::String]
 
 Returns an independent cloned positional or option value, if present.
 
-<a id="parsedargsget_flag"></a>
-
-### get_flag
+### ParsedArgs::get_flag
 
 ```text
 fn get_flag self:$ParsedArgs name:$str -> bool
@@ -114,9 +100,7 @@ fn get_flag self:$ParsedArgs name:$str -> bool
 
 Returns the state of a defined flag. An unknown name terminates the program.
 
-<a id="parsedargsget_multi"></a>
-
-### get_multi
+### ParsedArgs::get_multi
 
 ```text
 fn get_multi self:$ParsedArgs name:$str -> std::Option[std::List[std::String]]
@@ -124,9 +108,7 @@ fn get_multi self:$ParsedArgs name:$str -> std::Option[std::List[std::String]]
 
 Returns an independent cloned list of repeatable values, if present.
 
-<a id="argparsernew"></a>
-
-### new
+### ArgParser::new
 
 ```text
 fn new -> ArgParser
@@ -134,9 +116,7 @@ fn new -> ArgParser
 
 Creates a parser named from process argument `0`.
 
-<a id="argparserparse_args"></a>
-
-### parse_args
+### ArgParser::parse_args
 
 ```text
 fn parse_args self:$ArgParser -> ParsedArgs
@@ -199,9 +179,7 @@ A selected level includes less verbose levels.
 | [configure](#loggerconfigure) | `fn configure self:mut$Logger level:LogLevel` | Change the owned level |
 | [new](#loggernew) | `fn new -> Logger` | Create logger state at `Warning` |
 
-<a id="loggerconfigure"></a>
-
-### configure
+### Logger::configure
 
 ```text
 fn configure self:mut$Logger level:LogLevel
@@ -209,9 +187,7 @@ fn configure self:mut$Logger level:LogLevel
 
 Changes the logger level through an exclusive borrow.
 
-<a id="loggernew"></a>
-
-### new
+### Logger::new
 
 ```text
 fn new -> Logger
@@ -255,9 +231,7 @@ f"elapsed: {timer}\n" print
 | [new](#timernew) | `fn new -> Timer` | Start a timer |
 | [to_str](#timerto_str) | `fn to_str self:$Timer -> std::String` | Fractional seconds, such as `1.042s` |
 
-<a id="timerelapsed_ms"></a>
-
-### elapsed_ms
+### Timer::elapsed_ms
 
 ```text
 fn elapsed_ms self:$Timer -> i64
@@ -265,9 +239,7 @@ fn elapsed_ms self:$Timer -> i64
 
 Returns elapsed milliseconds without consuming the timer.
 
-<a id="timerelapsed_ns"></a>
-
-### elapsed_ns
+### Timer::elapsed_ns
 
 ```text
 fn elapsed_ns self:$Timer -> i64
@@ -275,9 +247,7 @@ fn elapsed_ns self:$Timer -> i64
 
 Returns elapsed nanoseconds without consuming the timer.
 
-<a id="timernew"></a>
-
-### new
+### Timer::new
 
 ```text
 fn new -> Timer
@@ -285,9 +255,7 @@ fn new -> Timer
 
 Creates a timer using the monotonic clock.
 
-<a id="timerto_str"></a>
-
-### to_str
+### Timer::to_str
 
 ```text
 fn to_str self:$Timer -> std::String

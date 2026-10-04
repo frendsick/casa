@@ -63,9 +63,7 @@ text.as_str print_length
 | [to_upper](#strto_upper) | `fn to_upper self:$str -> String` | Copy with ASCII letters uppercased |
 | [trim](#strtrim) | `fn trim s:$str -> String` | Copy without surrounding ASCII whitespace |
 
-<a id="strat"></a>
-
-### at
+### str::at
 
 ```text
 fn at s:$str index:u64 -> char
@@ -73,9 +71,7 @@ fn at s:$str index:u64 -> char
 
 Returns the byte at `index`, represented as `char`.
 
-<a id="strconcat"></a>
-
-### concat
+### str::concat
 
 ```text
 fn concat b:$str a:$str -> String
@@ -83,9 +79,7 @@ fn concat b:$str a:$str -> String
 
 Returns owned text containing both inputs.
 
-<a id="strcontains"></a>
-
-### contains
+### str::contains
 
 ```text
 fn contains needle:$str s:$str -> bool
@@ -93,9 +87,7 @@ fn contains needle:$str s:$str -> bool
 
 Returns whether text contains a substring.
 
-<a id="strends_with"></a>
-
-### ends_with
+### str::ends_with
 
 ```text
 fn ends_with suffix:$str s:$str -> bool
@@ -103,9 +95,7 @@ fn ends_with suffix:$str s:$str -> bool
 
 Returns whether text ends with a suffix.
 
-<a id="streq"></a>
-
-### eq
+### str::eq
 
 ```text
 fn eq b:$str a:$str -> bool
@@ -113,9 +103,7 @@ fn eq b:$str a:$str -> bool
 
 Compares text content for equality. `==` is the usual form.
 
-<a id="strfind"></a>
-
-### find
+### str::find
 
 ```text
 fn find needle:$str s:$str -> i64
@@ -123,9 +111,7 @@ fn find needle:$str s:$str -> i64
 
 Returns the first matching byte index, or `-1` when no match exists.
 
-<a id="stris_empty"></a>
-
-### is_empty
+### str::is_empty
 
 ```text
 fn is_empty self:$str -> bool
@@ -133,9 +119,7 @@ fn is_empty self:$str -> bool
 
 Returns whether the string has no bytes.
 
-<a id="striter"></a>
-
-### iter
+### str::iter
 
 ```text
 fn iter self:$str -> Iter[char]
@@ -143,9 +127,7 @@ fn iter self:$str -> Iter[char]
 
 Returns an iterator over Unicode scalar values.
 
-<a id="strlength"></a>
-
-### length
+### str::length
 
 ```text
 fn length s:$str -> u64
@@ -153,9 +135,7 @@ fn length s:$str -> u64
 
 Returns the length in bytes.
 
-<a id="strrepeat"></a>
-
-### repeat
+### str::repeat
 
 ```text
 fn repeat self:$str n:u64 -> String
@@ -165,9 +145,7 @@ Returns owned text containing `n` repetitions of the input.
 
 Call: `2 "abc".repeat`, producing `abcabc`.
 
-<a id="strreplace"></a>
-
-### replace
+### str::replace
 
 ```text
 fn replace old:$str new_str:$str s:$str -> String
@@ -175,9 +153,7 @@ fn replace old:$str new_str:$str s:$str -> String
 
 Replaces all matches.
 
-<a id="strreverse"></a>
-
-### reverse
+### str::reverse
 
 ```text
 fn reverse self:$str -> String
@@ -185,9 +161,7 @@ fn reverse self:$str -> String
 
 Reverses Unicode scalar values.
 
-<a id="strsplit"></a>
-
-### split
+### str::split
 
 ```text
 fn split delimiter:$str s:$str -> List[String]
@@ -197,9 +171,7 @@ Copies the parts separated by `delimiter` into a list of owned strings.
 
 Call: `"a,b,c" "," str::split`.
 
-<a id="strstarts_with"></a>
-
-### starts_with
+### str::starts_with
 
 ```text
 fn starts_with prefix:$str s:$str -> bool
@@ -207,9 +179,7 @@ fn starts_with prefix:$str s:$str -> bool
 
 Returns whether text starts with a prefix.
 
-<a id="strsubstring"></a>
-
-### substring
+### str::substring
 
 ```text
 fn substring len:u64 start:u64 s:$str -> String
@@ -221,9 +191,7 @@ range terminates the program.
 
 Call: `"hello" 1 3 str::substring`, producing `ell`.
 
-<a id="strto_lower"></a>
-
-### to_lower
+### str::to_lower
 
 ```text
 fn to_lower self:$str -> String
@@ -231,9 +199,7 @@ fn to_lower self:$str -> String
 
 Copies with ASCII letters lowercased.
 
-<a id="strto_str"></a>
-
-### to_str
+### str::to_str
 
 ```text
 fn to_str self:$str -> String
@@ -241,9 +207,7 @@ fn to_str self:$str -> String
 
 Allocates an independent owner.
 
-<a id="strto_upper"></a>
-
-### to_upper
+### str::to_upper
 
 ```text
 fn to_upper self:$str -> String
@@ -251,9 +215,7 @@ fn to_upper self:$str -> String
 
 Copies with ASCII letters uppercased.
 
-<a id="strtrim"></a>
-
-### trim
+### str::trim
 
 ```text
 fn trim s:$str -> String
@@ -302,9 +264,7 @@ independent owner. `as_str` returns a [borrowed view](ownership.md#return-a-borr
 | [reserve](#stringreserve) | `fn reserve self:mut$String additional:u64` | Reserve space after the current text |
 | [with_capacity](#stringwith_capacity) | `fn with_capacity capacity:u64 -> String` | Empty text with reserved byte capacity |
 
-<a id="stringappend"></a>
-
-### append
+### String::append
 
 ```text
 fn append self:mut$String text:$str
@@ -312,9 +272,7 @@ fn append self:mut$String text:$str
 
 Appends a borrowed view.
 
-<a id="stringappend_string"></a>
-
-### append_string
+### String::append_string
 
 ```text
 fn append_string self:mut$String text:String
@@ -322,9 +280,7 @@ fn append_string self:mut$String text:String
 
 Appends and consumes owned text.
 
-<a id="stringas_str"></a>
-
-### as_str
+### String::as_str
 
 ```text
 fn as_str self:$String -> $str
@@ -332,9 +288,7 @@ fn as_str self:$String -> $str
 
 Borrows the current text without allocation.
 
-<a id="stringcapacity"></a>
-
-### capacity
+### String::capacity
 
 ```text
 fn capacity self:$String -> u64
@@ -342,9 +296,7 @@ fn capacity self:$String -> u64
 
 Returns the byte capacity.
 
-<a id="stringclear"></a>
-
-### clear
+### String::clear
 
 ```text
 fn clear self:mut$String
@@ -352,9 +304,7 @@ fn clear self:mut$String
 
 Removes all text and retains capacity.
 
-<a id="stringclone"></a>
-
-### clone
+### String::clone
 
 ```text
 fn clone self:$String -> String
@@ -362,9 +312,7 @@ fn clone self:$String -> String
 
 Allocates an independent owner.
 
-<a id="stringfrom_str"></a>
-
-### from_str
+### String::from_str
 
 ```text
 fn from_str text:$str -> String
@@ -372,9 +320,7 @@ fn from_str text:$str -> String
 
 Copies a view into owned storage.
 
-<a id="stringlength"></a>
-
-### length
+### String::length
 
 ```text
 fn length self:$String -> u64
@@ -382,9 +328,7 @@ fn length self:$String -> u64
 
 Returns the length in bytes.
 
-<a id="stringnew"></a>
-
-### new
+### String::new
 
 ```text
 fn new -> String
@@ -392,9 +336,7 @@ fn new -> String
 
 Creates an empty owned text.
 
-<a id="stringpush"></a>
-
-### push
+### String::push
 
 ```text
 fn push self:mut$String character:char
@@ -402,9 +344,7 @@ fn push self:mut$String character:char
 
 Appends one Unicode scalar value.
 
-<a id="stringreserve"></a>
-
-### reserve
+### String::reserve
 
 ```text
 fn reserve self:mut$String additional:u64
@@ -412,9 +352,7 @@ fn reserve self:mut$String additional:u64
 
 Reserves space after the current text.
 
-<a id="stringwith_capacity"></a>
-
-### with_capacity
+### String::with_capacity
 
 ```text
 fn with_capacity capacity:u64 -> String
@@ -442,9 +380,7 @@ message.as_str print
 | [to_f64](#strto_f64) | `fn to_f64 self:$str -> Option[f64]` | 64-bit decimal floating-point value |
 | [to_int](#strto_int) | `fn to_int self:$str -> Option[i64]` | Signed decimal integer |
 
-<a id="strto_f32"></a>
-
-### to_f32
+### str::to_f32
 
 ```text
 fn to_f32 self:$str -> Option[f32]
@@ -452,9 +388,7 @@ fn to_f32 self:$str -> Option[f32]
 
 Parses a 32-bit decimal floating-point value.
 
-<a id="strto_f64"></a>
-
-### to_f64
+### str::to_f64
 
 ```text
 fn to_f64 self:$str -> Option[f64]
@@ -462,9 +396,7 @@ fn to_f64 self:$str -> Option[f64]
 
 Parses a 64-bit decimal floating-point value.
 
-<a id="strto_int"></a>
-
-### to_int
+### str::to_int
 
 ```text
 fn to_int self:$str -> Option[i64]
@@ -528,9 +460,7 @@ data loss.
 | [is_upper](#charis_upper) | `fn is_upper c:char -> bool` | ASCII uppercase letter |
 | [lt](#charlt) | `fn lt self:$char other:$char -> bool` | Codepoint ordering |
 
-<a id="charcodepoint"></a>
-
-### codepoint
+### char::codepoint
 
 ```text
 fn codepoint self:char -> u32
@@ -538,9 +468,7 @@ fn codepoint self:char -> u32
 
 Returns the Unicode scalar value as `u32`.
 
-<a id="chareq"></a>
-
-### eq
+### char::eq
 
 ```text
 fn eq self:$char other:$char -> bool
@@ -548,9 +476,7 @@ fn eq self:$char other:$char -> bool
 
 Compares characters for equality.
 
-<a id="charfrom_codepoint"></a>
-
-### from_codepoint
+### char::from_codepoint
 
 ```text
 fn from_codepoint codepoint:u32 -> Option[char]
@@ -559,9 +485,7 @@ fn from_codepoint codepoint:u32 -> Option[char]
 Returns a character if the codepoint is a valid Unicode scalar value. Otherwise, returns
 `Option::None`.
 
-<a id="charfrom_codepoint_unchecked"></a>
-
-### from_codepoint_unchecked
+### char::from_codepoint_unchecked
 
 ```text
 unsafe fn from_codepoint_unchecked value:u32 -> char
@@ -570,9 +494,7 @@ unsafe fn from_codepoint_unchecked value:u32 -> char
 Creates a character without validating the codepoint. The caller must supply a valid
 Unicode scalar value.
 
-<a id="charis_alpha"></a>
-
-### is_alpha
+### char::is_alpha
 
 ```text
 fn is_alpha c:char -> bool
@@ -580,9 +502,7 @@ fn is_alpha c:char -> bool
 
 Returns whether the character is an ASCII letter.
 
-<a id="charis_digit"></a>
-
-### is_digit
+### char::is_digit
 
 ```text
 fn is_digit c:char -> bool
@@ -590,9 +510,7 @@ fn is_digit c:char -> bool
 
 Returns whether the character is an ASCII digit.
 
-<a id="charis_lower"></a>
-
-### is_lower
+### char::is_lower
 
 ```text
 fn is_lower c:char -> bool
@@ -600,9 +518,7 @@ fn is_lower c:char -> bool
 
 Returns whether the character is an ASCII lowercase letter.
 
-<a id="charis_space"></a>
-
-### is_space
+### char::is_space
 
 ```text
 fn is_space c:char -> bool
@@ -610,9 +526,7 @@ fn is_space c:char -> bool
 
 Returns whether the character is an ASCII space, tab, newline, or carriage return.
 
-<a id="charis_upper"></a>
-
-### is_upper
+### char::is_upper
 
 ```text
 fn is_upper c:char -> bool
@@ -620,9 +534,7 @@ fn is_upper c:char -> bool
 
 Returns whether the character is an ASCII uppercase letter.
 
-<a id="charlt"></a>
-
-### lt
+### char::lt
 
 ```text
 fn lt self:$char other:$char -> bool
@@ -692,9 +604,7 @@ provides this view for a byte buffer.
 | [to_bytes](#cstrto_bytes) | `fn to_bytes self:$cstr -> Bytes` | Copy bytes before the NUL terminator |
 | [to_str](#cstrto_str) | `fn to_str self:$cstr -> Result[String Utf8Error]` | Validate and copy UTF-8 text |
 
-<a id="stras_cstr"></a>
-
-### as_cstr
+### str::as_cstr
 
 ```text
 fn as_cstr s:$str -> Option[$cstr]
@@ -703,9 +613,7 @@ fn as_cstr s:$str -> Option[$cstr]
 Checks for interior NUL and returns an optional borrowed NUL-terminated byte
 view. The view keeps its source loaned until its last use.
 
-<a id="cstrto_bytes"></a>
-
-### to_bytes
+### cstr::to_bytes
 
 ```text
 fn to_bytes self:$cstr -> Bytes
@@ -714,9 +622,7 @@ fn to_bytes self:$cstr -> Bytes
 Copies the bytes before the NUL terminator into an independent byte buffer.
 Use this method when the bytes do not have a text guarantee.
 
-<a id="cstrto_str"></a>
-
-### to_str
+### cstr::to_str
 
 ```text
 fn to_str self:$cstr -> Result[String Utf8Error]

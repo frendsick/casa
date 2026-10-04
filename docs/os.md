@@ -70,9 +70,7 @@ provides these checks:
 | [is_symlink](#filestatis_symlink) | `fn is_symlink self:$FileStat -> bool` | Symbolic link |
 | [is_writable](#filestatis_writable) | `fn is_writable self:$FileStat -> bool` | Owner-writable mode bit |
 
-<a id="filestatis_dir"></a>
-
-### is_dir
+### FileStat::is_dir
 
 ```text
 fn is_dir self:$FileStat -> bool
@@ -80,9 +78,7 @@ fn is_dir self:$FileStat -> bool
 
 Returns whether the entry is a directory.
 
-<a id="filestatis_executable"></a>
-
-### is_executable
+### FileStat::is_executable
 
 ```text
 fn is_executable self:$FileStat -> bool
@@ -90,9 +86,7 @@ fn is_executable self:$FileStat -> bool
 
 Returns whether the owner-executable mode bit is set.
 
-<a id="filestatis_file"></a>
-
-### is_file
+### FileStat::is_file
 
 ```text
 fn is_file self:$FileStat -> bool
@@ -100,9 +94,7 @@ fn is_file self:$FileStat -> bool
 
 Returns whether the entry is a regular file.
 
-<a id="filestatis_readable"></a>
-
-### is_readable
+### FileStat::is_readable
 
 ```text
 fn is_readable self:$FileStat -> bool
@@ -110,9 +102,7 @@ fn is_readable self:$FileStat -> bool
 
 Returns whether the owner-readable mode bit is set.
 
-<a id="filestatis_symlink"></a>
-
-### is_symlink
+### FileStat::is_symlink
 
 ```text
 fn is_symlink self:$FileStat -> bool
@@ -120,9 +110,7 @@ fn is_symlink self:$FileStat -> bool
 
 Returns whether the entry is a symbolic link.
 
-<a id="filestatis_writable"></a>
-
-### is_writable
+### FileStat::is_writable
 
 ```text
 fn is_writable self:$FileStat -> bool
