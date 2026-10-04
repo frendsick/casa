@@ -85,8 +85,8 @@ do in a `while` loop. Custom iterators implement `Iterable`. See
 
 ```casa
 enum Shape {
-    Circle (i64)
-    Rectangle (i64 i64)
+    Circle(i64)
+    Rectangle(i64 i64)
     Point
 }
 
@@ -128,7 +128,7 @@ import "std"
 enum Status {
     Ready
     Busy
-    Failed (str)
+    Failed(str)
 }
 
 Status::Ready = status

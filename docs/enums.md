@@ -6,8 +6,8 @@ An enum defines a closed set of variants. A variant can carry values.
 
 ```casa
 enum Shape {
-    Circle (i64)
-    Rectangle (i64 i64)
+    Circle(i64)
+    Rectangle(i64 i64)
     Point
 }
 ```
@@ -20,12 +20,12 @@ Enums can have type parameters:
 ```casa
 enum Option[T] {
     None
-    Some (T)
+    Some(T)
 }
 
 enum Result[T E] {
-    Error (E)
-    Ok (T)
+    Error(E)
+    Ok(T)
 }
 ```
 
