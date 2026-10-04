@@ -3765,6 +3765,19 @@ impl Emitter {
     }
 
     # DATA section
+    fn emit_static_element self:mut$Emitter element:$StaticArrayElement {
+        element match
+            StaticArrayElement::Imm(value) => f".quad {value}" self.line_string
+            StaticArrayElement::String(identity) => f".quad str_{identity}" self.line_string
+            StaticArrayElement::Array(identity) => f".quad static_array_{identity}" self.line_string
+            StaticArrayElement::Struct(identity) => f".quad static_struct_{identity}" self.line_string
+            StaticArrayElement::Function(name) => {
+                name.as_str self.function_label = label
+                f".quad closure_{label}" self.line_string
+            }
+        end
+    }
+
     fn emit_data self:mut$Emitter {
         ".section .data" self.line
         0 = index: u64
@@ -3795,16 +3808,10 @@ impl Emitter {
         done
 
         # Static array literals
+        self.static_arrays.reverse
         0 = sa_index: u64
-        while
-            sa_index self
-                .static_arrays
-                .length >
-        do
-            sa_index self
-                .static_arrays
-                .get
-                .clone = sa
+        while self.static_arrays.is_empty ! do
+            self.static_arrays.pop = sa
             sa StaticArray::elements = elems: $std::List[StaticArrayElement]
             ".align 8" self.line
             f"static_array_{sa_index}:" self.line_string
@@ -3814,49 +3821,21 @@ impl Emitter {
                 ".quad 0" self.line
             fi
             for elem in elems.iter do
-                elem match
-                    StaticArrayElement::Imm(v) => {
-                        f".quad {v}" self.line_string
-                    }
-                    StaticArrayElement::String(identity) => f".quad str_{identity}" self.line_string
-                    StaticArrayElement::Array(identity) => f".quad static_array_{identity}" self.line_string
-                    StaticArrayElement::Struct(identity) => f".quad static_struct_{identity}" self.line_string
-                    StaticArrayElement::Function(name) => {
-                        name.as_str self.function_label = label
-                        f".quad closure_{label}" self.line_string
-                    }
-                end
+                elem self.emit_static_element
             done
             1 += sa_index
         done
 
         # Static struct literals
+        self.static_structs.reverse
         0 = ss_index: u64
-        while
-            ss_index self
-                .static_structs
-                .length >
-        do
-            ss_index self
-                .static_structs
-                .get
-                .clone = ss
+        while self.static_structs.is_empty ! do
+            self.static_structs.pop = ss
             ss StaticStruct::fields = fields: $std::List[StaticArrayElement]
             ".align 8" self.line
             f"static_struct_{ss_index}:" self.line_string
             for field in fields.iter do
-                field match
-                    StaticArrayElement::Imm(v) => {
-                        f".quad {v}" self.line_string
-                    }
-                    StaticArrayElement::String(identity) => f".quad str_{identity}" self.line_string
-                    StaticArrayElement::Array(identity) => f".quad static_array_{identity}" self.line_string
-                    StaticArrayElement::Struct(identity) => f".quad static_struct_{identity}" self.line_string
-                    StaticArrayElement::Function(name) => {
-                        name.as_str self.function_label = label
-                        f".quad closure_{label}" self.line_string
-                    }
-                end
+                field self.emit_static_element
             done
             1 += ss_index
         done
@@ -4271,14 +4250,6 @@ impl Emitter {
         true
     }
 
-    fn emit_comparison self:mut$Emitter setcc:str {
-        "popq %rax" self.indent
-        "cmpq (%rsp), %rax" self.indent
-        f"{setcc} %al" self.indent_string
-        "movzbq %al, %rax" self.indent
-        "movq %rax, (%rsp)" self.indent
-    }
-
     fn emit_syscall self:mut$Emitter arg_count:u64 {
         "popq %rax" self.indent
         ["%rdi", "%rsi", "%rdx", "%r10", "%r8", "%r9"] = syscall_regs
@@ -4339,19 +4310,6 @@ impl Emitter {
     fn emit_call_via_return_stack self:mut$Emitter jump_target:$str {
         common::WORD_SIZE self.emit_return_stack_reservation
         f"call {jump_target}" self.indent_string
-    }
-
-    # Emit memory load/store shared helpers
-    fn emit_load self:mut$Emitter mov_op:str dst_reg:str {
-        "popq %rax" self.indent
-        f"{mov_op} (%rax), {dst_reg}" self.indent_string
-        "pushq %rax" self.indent
-    }
-
-    fn emit_store self:mut$Emitter mov_op:str src_reg:str {
-        "popq %rax" self.indent
-        "popq %rbx" self.indent
-        f"{mov_op} {src_reg}, (%rax)" self.indent_string
     }
 
     fn emit_move_bytes self:mut$Emitter size:u64 {
@@ -5069,23 +5027,9 @@ impl Emitter {
 
     fn emit_str_string_eq self:mut$Emitter { "%rdi" self.emit_mixed_string_eq }
 
+    # Scalar operations have already been consumed by emit_scalar_inst.
     fn emit_inst self:mut$Emitter inst:$InstValue is_global:bool {
         inst match
-            # Stack operations
-            InstValue::Drop => "addq $8, %rsp" self.indent
-            InstValue::Dup => "pushq (%rsp)" self.indent
-            InstValue::Over => "pushq 8(%rsp)" self.indent
-            InstValue::Push(value) => {
-                if
-                    INT32_MIN value >=
-                    INT32_MAX value <= &&
-                then
-                    f"pushq ${value}" self.indent_string
-                else
-                    f"movabsq ${value}, %rax" self.indent_string
-                    "pushq %rax" self.indent
-                fi
-            }
             InstValue::PushFloat32(value) => {
                 "jmp 1f" self.indent
                 ".align 4" self.line
@@ -5103,11 +5047,6 @@ impl Emitter {
                 "1:" self.line
                 "pushq 0b(%rip)" self.indent
             }
-            InstValue::PushChar(char_value) => f"pushq ${char_value}" self.indent_string
-            InstValue::PushStr(str_index) => {
-                f"leaq str_{str_index}(%rip), %rax" self.indent_string
-                "pushq %rax" self.indent
-            }
             InstValue::PushStaticArray(array_index byte_count) => {
                 f"movq ${byte_count}, %rdi" self.indent_string
                 "heap_alloc" self.emit_call_via_return_stack
@@ -5116,35 +5055,8 @@ impl Emitter {
                 f"movq ${byte_count}, %rcx" self.indent_string
                 "rep movsb" self.indent
             }
-            InstValue::Rot => {
-                "popq %rax" self.indent
-                "popq %rbx" self.indent
-                "popq %rcx" self.indent
-                "pushq %rbx" self.indent
-                "pushq %rax" self.indent
-                "pushq %rcx" self.indent
-            }
-            InstValue::Swap => {
-                "popq %rax" self.indent
-                "popq %rbx" self.indent
-                "pushq %rax" self.indent
-                "pushq %rbx" self.indent
-            }
 
             # Arithmetic / bitshift / bitwise / boolean / comparison
-            InstValue::Add => {
-                "popq %rax" self.indent
-                "addq %rax, (%rsp)" self.indent
-            }
-            InstValue::Sub => {
-                "popq %rax" self.indent
-                "subq %rax, (%rsp)" self.indent
-            }
-            InstValue::Mul => {
-                "popq %rax" self.indent
-                "imulq (%rsp), %rax" self.indent
-                "movq %rax, (%rsp)" self.indent
-            }
             InstValue::Div => {
                 "popq %rbx" self.indent
                 "popq %rax" self.indent
@@ -5167,52 +5079,6 @@ impl Emitter {
                 "popq %rcx" self.indent
                 "sarq %cl, (%rsp)" self.indent
             }
-            InstValue::BitAnd => {
-                "popq %rax" self.indent
-                "andq %rax, (%rsp)" self.indent
-            }
-            InstValue::BitOr => {
-                "popq %rax" self.indent
-                "orq %rax, (%rsp)" self.indent
-            }
-            InstValue::BitXor => {
-                "popq %rax" self.indent
-                "xorq %rax, (%rsp)" self.indent
-            }
-            InstValue::BitNot => "notq (%rsp)" self.indent
-            InstValue::And => {
-                "popq %rax" self.indent
-                "testq %rax, %rax" self.indent
-                "setne %al" self.indent
-                "cmpq $0, (%rsp)" self.indent
-                "setne %cl" self.indent
-                "andb %cl, %al" self.indent
-                "movzbq %al, %rax" self.indent
-                "movq %rax, (%rsp)" self.indent
-            }
-            InstValue::Or => {
-                "popq %rax" self.indent
-                "orq %rax, (%rsp)" self.indent
-                "setne %al" self.indent
-                "movzbq %al, %rax" self.indent
-                "movq %rax, (%rsp)" self.indent
-            }
-            InstValue::Not => {
-                "cmpq $0, (%rsp)" self.indent
-                "sete %al" self.indent
-                "movzbq %al, %rax" self.indent
-                "movq %rax, (%rsp)" self.indent
-            }
-            InstValue::Eq => "sete" self.emit_comparison
-            InstValue::Ne => "setne" self.emit_comparison
-            InstValue::Lt => "setl" self.emit_comparison
-            InstValue::Le => "setle" self.emit_comparison
-            InstValue::Gt => "setg" self.emit_comparison
-            InstValue::Ge => "setge" self.emit_comparison
-            InstValue::Ult => "setb" self.emit_comparison
-            InstValue::Ule => "setbe" self.emit_comparison
-            InstValue::Ugt => "seta" self.emit_comparison
-            InstValue::Uge => "setae" self.emit_comparison
             InstValue::UDiv => {
                 "popq %rbx" self.indent
                 "popq %rax" self.indent
@@ -5231,18 +5097,7 @@ impl Emitter {
                 "popq %rcx" self.indent
                 "shrq %cl, (%rsp)" self.indent
             }
-            InstValue::NormalizeInt(builtin) => {
-                builtin match
-                    common::BuiltinType::I8 => "movsbq (%rsp), %rax" self.indent
-                    common::BuiltinType::I16 => "movswq (%rsp), %rax" self.indent
-                    common::BuiltinType::I32 => "movslq (%rsp), %rax" self.indent
-                    common::BuiltinType::U8 => "movzbq (%rsp), %rax" self.indent
-                    common::BuiltinType::U16 => "movzwq (%rsp), %rax" self.indent
-                    common::BuiltinType::U32 => "movl (%rsp), %eax" self.indent
-                    _ => return
-                end
-                "movq %rax, (%rsp)" self.indent
-            }
+            InstValue::NormalizeInt(builtin) => builtin self.emit_normalize_numeric
             InstValue::CheckedAdd(builtin) => "arithmetic_error" builtin self.emit_checked_add
             InstValue::CheckedSub(builtin) => "arithmetic_error" builtin self.emit_checked_sub
             InstValue::CheckedMul(builtin) => "arithmetic_error" builtin self.emit_checked_mul
@@ -5280,11 +5135,6 @@ impl Emitter {
             # Control flow / variables / functions
             InstValue::Label(label) => f".L{label}:" self.line_string
             InstValue::Jump(label) => f"jmp .L{label}" self.indent_string
-            InstValue::JumpNe(label) => {
-                "popq %rax" self.indent
-                "testq %rax, %rax" self.indent
-                f"jz .L{label}" self.indent_string
-            }
             InstValue::LocalsInit(count) => {
                 if 0 count == then
                     return
@@ -5311,21 +5161,6 @@ impl Emitter {
                 if 0 count != then
                     f"subq ${count common::WORD_SIZE *}, %r14" self.indent_string
                 fi
-            }
-            InstValue::LocalAddress(local_index) => {
-                local_index 1 + common::WORD_SIZE * = offset
-                f"leaq -{offset}(%r14), %rax" self.indent_string
-                "pushq %rax" self.indent
-            }
-            InstValue::LocalGet(local_index) => {
-                local_index 1 + common::WORD_SIZE * = offset
-                f"movq -{offset}(%r14), %rax" self.indent_string
-                "pushq %rax" self.indent
-            }
-            InstValue::LocalSet(local_index) => {
-                local_index 1 + common::WORD_SIZE * = offset
-                "popq %rax" self.indent
-                f"movq %rax, -{offset}(%r14)" self.indent_string
             }
             InstValue::ConstantLoad(constant_index) => {
                 constant_index common::WORD_SIZE * = offset
@@ -5487,15 +5322,7 @@ impl Emitter {
                 "heap_free" self.emit_call_via_return_stack
             }
             InstValue::HeapFreeIfAllocated => self.emit_heap_free_if_allocated
-            InstValue::Load8 => "%eax" "movzbl" self.emit_load
-            InstValue::Load16 => "%eax" "movzwl" self.emit_load
-            InstValue::Load32 => "%eax" "movl" self.emit_load
-            InstValue::Load64 => "%rax" "movq" self.emit_load
             InstValue::ReadIndirect(size) => size self.emit_indirect_read
-            InstValue::Store8 => "%bl" "movb" self.emit_store
-            InstValue::Store16 => "%bx" "movw" self.emit_store
-            InstValue::Store32 => "%ebx" "movl" self.emit_store
-            InstValue::Store64 => "%rbx" "movq" self.emit_store
             InstValue::WriteIndirect(size) => size self.emit_indirect_write
             InstValue::MoveBytes(size) => size self.emit_move_bytes
 
@@ -5562,6 +5389,7 @@ impl Emitter {
                 "movq __envp(%rip), %rax" self.indent
                 "pushq %rax" self.indent
             }
+            _ => "Cached scalar operation reached fallback emitter" panic
         end
     }
 }
