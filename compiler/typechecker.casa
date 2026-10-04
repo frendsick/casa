@@ -45,6 +45,14 @@ impl CheckedProgram {
             .unwrap
             .copy_aggregate
     }
+    pub fn has_plain_storage self:$CheckedProgram typ:$common::Type -> bool {
+        typ.format = key
+        key self
+            .types
+            .get
+            .unwrap
+            .plain_storage
+    }
     pub fn needs_destruction self:$CheckedProgram typ:$common::Type -> bool {
         typ.format = key
         key self
@@ -381,11 +389,54 @@ pub enum CheckedShape derives std::Copy {
 }
 
 pub struct CheckedType {
+    pub plain_storage:     bool
     pub shape:             CheckedShape
     pub copy_aggregate:    bool
     pub needs_destruction: bool
     pub drop_function:     std::Option[std::String]
     pub value_kind:        CheckedValueKind
+}
+
+# Direct fields still need their own destruction when they own storage or a hook.
+fn has_plain_variant_fields
+    members:$std::List[common::Type]
+    substitutions:$std::Map[std::String common::Type]
+    store:$common::SymbolStore
+-> bool {
+    for member in members.iter do
+        substitutions member.substitute_t = child
+        if store child common::type_needs_destruction_in_store then
+            false return
+        fi
+    done
+    true
+}
+
+fn has_plain_fields typ:$common::Type store:$common::SymbolStore -> bool {
+    typ match
+        common::Type::Generic(generic) => generic
+        _ => false return
+    end = generic
+    if generic.base store.structs.get std::Option::Some(shape) is then
+        shape.type_vars typ common::aggregate_type_bindings = substitutions
+        for member in shape.members.iter do
+            substitutions member.typ.substitute_t = child
+            if store child common::type_needs_destruction_in_store then
+                false return
+            fi
+        done
+        true return
+    fi
+    if generic.base store.enums.get std::Option::Some(shape) is then
+        shape.type_vars typ common::aggregate_type_bindings = substitutions
+        for variant in shape.variant_types.iter do
+            if store substitutions variant.second has_plain_variant_fields ! then
+                false return
+            fi
+        done
+        true return
+    fi
+    false
 }
 
 fn commit_type_facts
@@ -445,7 +496,15 @@ fn commit_type_facts
             CheckedShape::Enum = shape_kind
         fi
     fi
-    kind drop_function needs_destruction copy_aggregate shape_kind CheckedType key types.set
+    false = plain_storage
+    if needs_destruction copy_aggregate ! && then
+        if store typ common::type_value_representation std::Option::Some(representation) is then
+            if common::VALUE_REPR_INDIRECT representation == then
+                store typ has_plain_fields = plain_storage
+            fi
+        fi
+    fi
+    kind drop_function needs_destruction copy_aggregate shape_kind plain_storage CheckedType key types.set
     if typ common::Type::Generic(generic) is then
         types store typ generic commit_child_type_facts
     fi

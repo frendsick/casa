@@ -55,7 +55,8 @@ if __name__ == "__main__":
         if re.match(r"callq?\s", current[1]))
     entries = sorted((address, name) for name, address in names.items()
                      if name.startswith("fn_") or name in {
-                         "heap_alloc", "heap_free", "print_int", "print_uint", "print_str",
+                         "heap_alloc", "heap_free", "heap_alloc_native", "heap_free_native",
+                         "print_int", "print_uint", "print_str",
                          "encode_char", "primitive_to_str", "str_concat", "_start",
                          "write_all", "arithmetic_error", "return_stack_overflow",
                          "env_stack_overflow"})
@@ -104,6 +105,14 @@ if __name__ == "__main__":
                     data = os.pread(memory.fileno(), size, names["return_stack"])
                     stack = [function(word) for (word,) in struct.iter_unpack("<Q", data)
                              if word in return_addresses]
+                if function(registers.rip) in {"heap_alloc_native", "heap_free_native"}:
+                    # Native allocator calls leave their return address on rsp.
+                    # The mmap path can save four registers above that address.
+                    native_stack = os.pread(memory.fileno(), 40, registers.rsp)
+                    for (word,) in struct.iter_unpack("<Q", native_stack):
+                        if word in return_addresses:
+                            stack.append(function(word))
+                            break
                 stack.append(function(registers.rip))
                 samples.append({"elapsed_raw_ns": time.clock_gettime_ns(time.CLOCK_MONOTONIC_RAW) - started,
                                 "pc": registers.rip, "stack": stack})

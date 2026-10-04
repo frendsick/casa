@@ -22,9 +22,13 @@ pub enum AssemblyError {
     Internal (BytecodeFailure)
 }
 
+const ENUM_DISPATCH_MIN_ARMS 4
+const DIRECT_MOVE_SCAN_LIMIT 12
+const SHORT_COPY_LIMIT 64
+
 enum FunctionWork {
     Checked (std::String)
-    Destruction (std::String common::Type)
+    Destruction (std::String common::Type bool)
     ClosureDestruction (std::String std::String)
 }
 
@@ -35,6 +39,13 @@ struct BackendPlanner {
     pending:       std::List[FunctionWork]
     failure:       std::Option[BytecodeFailure]
     label_counter: u64
+}
+
+struct EnumDispatch {
+    labels:      std::List[u64]
+    targets:     std::List[u64]
+    fallback:    u64
+    has_payload: bool
 }
 
 struct LoopTargets {
@@ -251,7 +262,6 @@ impl FunctionPlanner {
         0
     }
 }
-
 # Label management
 impl BackendPlanner {
     fn new_label self:mut$BackendPlanner -> u64 {
@@ -264,7 +274,6 @@ impl BackendPlanner {
 impl FunctionPlanner {
     fn new_label self:mut$FunctionPlanner -> u64 { self.state.new_label }
 }
-
 # String/constant interning
 fn intern_table table:mut$std::List[std::String] value:$str -> u64 {
     # Add value to table if not present, return its index.
@@ -285,7 +294,6 @@ impl FunctionPlanner {
             .strings intern_table
     }
 }
-
 # Variable resolution
 fn index_variable_list variables:$std::List[common::Variable] -> std::Map[std::String u64] {
     std::Map[std::String u64]::new = slots
@@ -433,7 +441,6 @@ impl FunctionPlanner {
         local_index InstValue::LocalSet bytecode.push
     }
 }
-
 # Deterministic destruction
 impl FunctionPlanner {
     fn is_copy_aggregate self:$FunctionPlanner typ:$common::Type -> bool {
@@ -510,6 +517,7 @@ impl FunctionPlanner {
         skipped:mut$std::List[std::String]
         op:$common::Op
         bytecode:mut$std::List[InstValue]
+        release_storage:bool
     {
         casa_struct.type_vars typ common::aggregate_type_bindings = substitutions
         casa_struct.members.length = member_index
@@ -520,6 +528,14 @@ impl FunctionPlanner {
                 continue
             fi
             substitutions member.typ.substitute_t = member_type
+            if
+                member_type compiler
+                    .state
+                    .checked
+                    .needs_destruction !
+            then
+                continue
+            fi
             InstValue::Dup bytecode.push
             member_index casa_struct compiler.get_struct_field_plan = plan
             if 0 plan.offset != then
@@ -529,7 +545,7 @@ impl FunctionPlanner {
             bytecode plan member.typ compiler.emit_field_load
             bytecode op member_type compiler.compile_destruction
         done
-        InstValue::HeapFree bytecode.push
+        if release_storage then InstValue::HeapFree else InstValue::Drop fi bytecode.push
     }
 
     fn compile_enum_variant_fields
@@ -540,6 +556,7 @@ impl FunctionPlanner {
         skipped_count:u64
         op:$common::Op
         bytecode:mut$std::List[InstValue]
+        release_storage:bool
     {
         casa_enum.type_vars typ common::aggregate_type_bindings = substitutions
         if variant_name casa_enum.variant_types.get_str std::Option::Some(payload_types) is then
@@ -547,6 +564,14 @@ impl FunctionPlanner {
             while skipped_count payload_index > do
                 1 -= payload_index
                 substitutions payload_index payload_types.get.substitute_t = payload_type
+                if
+                    payload_type compiler
+                        .state
+                        .checked
+                        .needs_destruction !
+                then
+                    continue
+                fi
                 InstValue::Dup bytecode.push
                 payload_index variant_name casa_enum compiler.get_enum_field_plan = plan
                 plan.offset i64::try_from.unwrap
@@ -556,7 +581,7 @@ impl FunctionPlanner {
                 bytecode op payload_type compiler.compile_destruction
             done
         fi
-        InstValue::HeapFree bytecode.push
+        if release_storage then InstValue::HeapFree else InstValue::Drop fi bytecode.push
     }
 
     fn compile_enum_fields
@@ -565,23 +590,24 @@ impl FunctionPlanner {
         casa_enum:$common::CasaEnum
         op:$common::Op
         bytecode:mut$std::List[InstValue]
+        release_storage:bool
     {
         compiler.allocate_local = enum_local
         enum_local InstValue::LocalSet bytecode.push
         compiler.new_label = end_label
+        std::List[u64]::new = labels
+        for _variant in casa_enum.variants.iter do
+            compiler.new_label labels.push
+        done
+        enum_local InstValue::LocalGet bytecode.push
+        InstValue::Load64 bytecode.push
+        end_label labels.clone InstValue::JumpTable bytecode.push
         0 = variant_index: u64
-        while variant_index casa_enum.variants.length > do
-            compiler.new_label = next_label
+        for variant_name in casa_enum.variants.iter do
+            variant_index labels.get copy InstValue::Label bytecode.push
             enum_local InstValue::LocalGet bytecode.push
-            InstValue::Load64 bytecode.push
-            variant_index i64::try_from.unwrap InstValue::Push bytecode.push
-            InstValue::Eq bytecode.push
-            next_label InstValue::JumpNe bytecode.push
-            enum_local InstValue::LocalGet bytecode.push
-            variant_index casa_enum.variants.get = variant_name
-            bytecode op 0 variant_name.as_str casa_enum typ compiler.compile_enum_variant_fields
+            release_storage bytecode op 0 variant_name.as_str casa_enum typ compiler.compile_enum_variant_fields
             end_label InstValue::Jump bytecode.push
-            next_label InstValue::Label bytecode.push
             1 += variant_index
         done
         end_label InstValue::Label bytecode.push
@@ -592,7 +618,18 @@ impl FunctionPlanner {
         typ:$common::Type
         op:$common::Op
         bytecode:mut$std::List[InstValue]
+        release_storage:bool
     {
+        if
+            typ compiler
+                .state
+                .checked
+                .has_plain_storage
+        then
+            bytecode typ compiler.compile_drop_hook
+            if release_storage then InstValue::HeapFree else InstValue::Drop fi bytecode.push
+            return
+        fi
         typ compiler
             .state
             .checked
@@ -604,7 +641,7 @@ impl FunctionPlanner {
             InstValue::ClosureDrop bytecode.push return
         fi
         if typ compiler.is_copy_aggregate then
-            InstValue::HeapFreeIfAllocated bytecode.push return
+            if release_storage then InstValue::HeapFreeIfAllocated else InstValue::Drop fi bytecode.push return
         fi
         bytecode typ compiler.compile_drop_hook
         shape match
@@ -612,7 +649,7 @@ impl FunctionPlanner {
                 typ common::get_array_length_parameter.unwrap = length
                 typ.array_element_type.unwrap = element_type
                 bytecode op length element_type compiler.compile_array_destruction
-                InstValue::HeapFree bytecode.push
+                if release_storage then InstValue::HeapFree else InstValue::Drop fi bytecode.push
             }
             typechecker::CheckedShape::Struct => {
                 typ.match_base = name
@@ -623,7 +660,7 @@ impl FunctionPlanner {
                     .get
                     .unwrap = struct_declaration
                 std::List[std::String]::new = skipped
-                bytecode op skipped struct_declaration typ compiler.compile_struct_fields
+                release_storage bytecode op skipped struct_declaration typ compiler.compile_struct_fields
             }
             typechecker::CheckedShape::Enum => {
                 typ.match_base = name
@@ -634,7 +671,7 @@ impl FunctionPlanner {
                     .get
                     .unwrap = enum_declaration
                 if enum_declaration common::has_inner_values then
-                    bytecode op enum_declaration typ compiler.compile_enum_fields
+                    release_storage bytecode op enum_declaration typ compiler.compile_enum_fields
                 else
                     InstValue::Drop bytecode.push
                 fi
@@ -650,8 +687,13 @@ impl FunctionPlanner {
             .needs_destruction
     }
 
-    fn ensure_destruction_function compiler:mut$FunctionPlanner typ:$common::Type -> std::String {
-        f"__drop_{typ.format}" = function_name
+    fn ensure_destruction_function
+        compiler:mut$FunctionPlanner
+        typ:$common::Type
+        release_storage:bool
+    -> std::String {
+        typ.format = type_name
+        if release_storage then f"__drop_{type_name}" else f"__destroy_{type_name}" fi = function_name
         if
             function_name compiler
                 .state
@@ -665,7 +707,7 @@ impl FunctionPlanner {
             .state
             .program
             .register_function
-        typ.clone function_name.clone FunctionWork::Destruction compiler
+        release_storage typ.clone function_name.clone FunctionWork::Destruction compiler
             .state
             .pending
             .push
@@ -682,7 +724,26 @@ impl FunctionPlanner {
             InstValue::Drop bytecode.push
             return
         fi
-        typ compiler.ensure_destruction_function = function_name
+        # A read immediately consumed by destruction needs no temporary owner.
+        # The source storage becomes uninitialized, but its allocation stays live.
+        true = release_storage
+        if bytecode.is_empty ! then
+            if bytecode.length 1 - bytecode.get InstValue::ReadIndirect is then
+                bytecode.pop drop
+                false = release_storage
+            fi
+        fi
+        if
+            typ compiler
+                .state
+                .checked
+                .has_plain_storage
+        then
+            bytecode typ compiler.compile_drop_hook
+            if release_storage then InstValue::HeapFree else InstValue::Drop fi bytecode.push
+            return
+        fi
+        release_storage typ compiler.ensure_destruction_function = function_name
         function_name InstValue::FnCall bytecode.push
     }
 
@@ -703,7 +764,7 @@ impl FunctionPlanner {
             if generic.base store.enums.get std::Option::Some(owned_enum) is then
                 if owned_enum common::has_inner_values then
                     variant.bindings.length = skipped_count
-                    bytecode op skipped_count variant.variant_name.as_str owned_enum typ
+                    true bytecode op skipped_count variant.variant_name.as_str owned_enum typ
                     compiler.compile_enum_variant_fields
                     return
                 fi
@@ -742,7 +803,7 @@ impl FunctionPlanner {
                 if op common::pattern_value_of common::PatternValue::Struct(struct_pattern) is then
                     struct_pattern.bindings.keys = skipped
                 fi
-                bytecode op skipped owned_struct typ compiler.compile_struct_fields
+                true bytecode op skipped owned_struct typ compiler.compile_struct_fields
                 return
             fi
             if generic.base store.enums.get std::Option::Some(owned_enum) is then
@@ -750,7 +811,7 @@ impl FunctionPlanner {
                     InstValue::Drop bytecode.push return
                 fi
                 if op common::pattern_value_of common::PatternValue::EnumVariant(variant) is then
-                    bytecode op owned_enum typ compiler.compile_enum_fields
+                    true bytecode op owned_enum typ compiler.compile_enum_fields
                     return
                 fi
             fi
@@ -855,7 +916,6 @@ impl FunctionPlanner {
         fi
     }
 }
-
 # Control-flow targets
 impl common::OpValue {
     fn produces_integer_result self:$common::OpValue -> bool {
@@ -1064,7 +1124,6 @@ impl FunctionPlanner {
         end
     }
 }
-
 # Compile if block
 impl FunctionPlanner {
     fn emit_struct_arm
@@ -1263,7 +1322,6 @@ impl FunctionPlanner {
         fi
     }
 }
-
 # Compile enum variant
 impl FunctionPlanner {
     fn compile_enum_variant
@@ -1272,56 +1330,26 @@ impl FunctionPlanner {
         casa_enum:$common::CasaEnum
         bytecode:mut$std::List[InstValue]
     {
-        variant.variant_name.clone = variant_name
-        variant_name casa_enum common::CasaEnum::variant_types.get = types_opt
-        std::List[common::Type]::new = types
-        0 = inner_count: u64
-        if types_opt std::Option::Some(found_types) is then
-            for found_type in found_types.iter do
-                found_type.clone types.push
-            done
-            types.length = inner_count
-        fi
-        # Store inner values from stack into temp locals
-        std::List[u64]::new = temps
-        0 = index: u64
-        while index inner_count > do
-            compiler.allocate_local = local_index
-            local_index temps.push
-            local_index InstValue::LocalSet bytecode.push
-            1 += index
-        done
-
-        # Allocate heap
-        compiler.allocate_local = ptr_local
         casa_enum compiler.enum_size i64::try_from.unwrap InstValue::Push bytecode.push
         InstValue::HeapAlloc bytecode.push
-        ptr_local InstValue::LocalSet bytecode.push
-
-        # Store ordinal at offset 0
+        InstValue::Dup bytecode.push
         compiler variant require_variant_ordinal InstValue::Push bytecode.push
-        ptr_local InstValue::LocalGet bytecode.push
+        InstValue::Swap bytecode.push
         InstValue::Store64 bytecode.push
-
-        # Store inner values at their padded payload offsets.
-        0 = inner_index: u64
-        while inner_index inner_count > do
-            inner_index variant_name.as_str casa_enum compiler.get_enum_field_plan = plan
-            ptr_local InstValue::LocalGet bytecode.push
-            plan.offset i64::try_from.unwrap InstValue::Push bytecode.push
-            InstValue::Add bytecode.push
-            inner_index temps.get copy = temp_local
-            temp_local InstValue::LocalGet bytecode.push
-            InstValue::Swap bytecode.push
-            bytecode plan inner_index types.get compiler.emit_field_store
-            1 += inner_index
-        done
-
-        # Push pointer
-        ptr_local InstValue::LocalGet bytecode.push
+        if variant.variant_name casa_enum.variant_types.get std::Option::Some(types) is then
+            0 = index: u64
+            for typ in types.iter do
+                InstValue::Swap bytecode.push
+                InstValue::Over bytecode.push
+                index variant.variant_name.as_str casa_enum compiler.get_enum_field_plan = plan
+                plan.offset i64::try_from.unwrap InstValue::Push bytecode.push
+                InstValue::Add bytecode.push
+                bytecode plan typ compiler.emit_field_store
+                1 += index
+            done
+        fi
     }
 }
-
 # Compile is check
 impl FunctionPlanner {
     fn compile_is_check
@@ -1408,7 +1436,6 @@ impl FunctionPlanner {
         fi
     }
 }
-
 # Compile struct literal
 impl FunctionPlanner {
     fn compile_struct_literal
@@ -1466,7 +1493,6 @@ impl FunctionPlanner {
         fi
     }
 }
-
 # Compile push array
 impl FunctionPlanner {
     fn compile_static_array_fns compiler:mut$FunctionPlanner items:$std::List[common::Op] {
@@ -1725,7 +1751,6 @@ impl FunctionPlanner {
         list_local InstValue::LocalGet bytecode.push
     }
 }
-
 # Compile function call
 impl FunctionPlanner {
     fn compile_named_function compiler:mut$FunctionPlanner name:$str -> bool {
@@ -1788,6 +1813,22 @@ impl FunctionPlanner {
         drop_name
     }
 
+    fn compile_call self:mut$FunctionPlanner name:$str bytecode:mut$std::List[InstValue] {
+        if name self.compile_named_function then
+            if
+                name self
+                    .state
+                    .program
+                    .native_calls
+                    .has_str
+            then
+                name.to_str InstValue::ExternCall bytecode.push
+            else
+                name.to_str InstValue::FnCall bytecode.push
+            fi
+        fi
+    }
+
     fn compile_function_ops
         compiler:mut$FunctionPlanner
         store:$common::SymbolStore
@@ -1798,13 +1839,7 @@ impl FunctionPlanner {
 
         op.value match
             common::OpValue::FnCall => {
-                if name.as_str compiler.compile_named_function then
-                    name.as_str store.get_function.unwrap = called_function
-                    called_function.extern_symbol match
-                        std::Option::Some(_) => name InstValue::ExternCall bytecode.push
-                        std::Option::None => name InstValue::FnCall bytecode.push
-                    end
-                fi
+                bytecode name.as_str compiler.compile_call
             }
             common::OpValue::FnPush => {
                 if name.as_str compiler.compile_named_function ! then
@@ -1861,7 +1896,6 @@ impl FunctionPlanner {
         end
     }
 }
-
 # Compile enum comparison (data-carrying enums)
 impl FunctionPlanner {
     fn compile_enum_comparison
@@ -1877,7 +1911,6 @@ impl FunctionPlanner {
         compare_value bytecode.push
     }
 }
-
 # Compile single op
 impl FunctionPlanner {
     fn emit_inline_size
@@ -2013,7 +2046,10 @@ impl FunctionPlanner {
         then
             if compiler.state.store target common::type_inline_size std::Option::Some(size) is then
                 if common::VALUE_REPR_INDIRECT representation == then
-                    size InstValue::WriteIndirect bytecode.push
+                    target compiler
+                        .state
+                        .checked
+                        .is_copy_aggregate ! size InstValue::WriteIndirect bytecode.push
                 elif 1 size == then
                     InstValue::Store8 bytecode.push
                 elif 2 size == then
@@ -2543,13 +2579,13 @@ impl FunctionPlanner {
         bytecode leaf.facts self.compile_facts
         leaf.action match
             semantic_body::Action::Primitive(kind typ) => bytecode leaf lower_leaf_operation typ kind self.compile_primitive
-            semantic_body::Action::Intrinsic(kind) => bytecode leaf lower_leaf_operation kind self.compile_intrinsic
+            semantic_body::Action::Intrinsic(kind) => bytecode leaf kind self.compile_intrinsic
             semantic_body::Action::Integer(value typ) => value.value InstValue::Push bytecode.push
             semantic_body::Action::Float(value typ) => bytecode leaf lower_leaf_operation self.compile_value_op drop
             semantic_body::Action::Boolean(value) => value InstValue::Push bytecode.push
             semantic_body::Action::Character(value) => value InstValue::PushChar bytecode.push
             semantic_body::Action::String(value) => value.as_str self.intern_string InstValue::PushStr bytecode.push
-            semantic_body::Action::Call(_) => bytecode leaf lower_leaf_operation self.state.store self.compile_function_ops
+            semantic_body::Action::Call(call) => bytecode call.name.as_str self.compile_call
             semantic_body::Action::Closure(_) => bytecode leaf lower_leaf_operation self.state.store self.compile_function_ops
             semantic_body::Action::Binding(kind binding typ) => {
                 leaf lower_leaf_operation = operation
@@ -2580,7 +2616,7 @@ impl FunctionPlanner {
             semantic_body::Action::StructMemberStore(_) => bytecode "" leaf lower_leaf_operation self.compile_structural_op drop
             semantic_body::Action::DestructionFn(typ) => {
                 if typ self.destruction_needs_function then
-                    typ self.ensure_destruction_function InstValue::DropFn bytecode.push
+                    true typ self.ensure_destruction_function InstValue::DropFn bytecode.push
                 else
                     0 InstValue::Push bytecode.push
                 fi
@@ -2600,7 +2636,6 @@ impl FunctionPlanner {
         end
     }
 }
-
 # Materialize compatibility storage operands only for actions that need them.
 fn lower_leaf_operation leaf:$semantic_body::Leaf -> common::Op {
     leaf.lower = operation
@@ -2692,6 +2727,74 @@ impl FunctionPlanner {
         self.loop_targets.pop drop
     }
 
+    fn plan_enum_dispatch
+        self:mut$FunctionPlanner
+        body:$semantic_body::Match
+    -> std::Option[EnumDispatch] {
+        if ENUM_DISPATCH_MIN_ARMS body.arms.length < then
+            std::Option[EnumDispatch]::None return
+        fi
+        std::String::new = enum_name
+        false = wildcard_seen
+        for arm in body.arms.iter do
+            if wildcard_seen then
+                std::Option[EnumDispatch]::None return
+            fi
+            if
+                arm
+                    .guard
+                    .get_nodes
+                    .is_empty !
+            then
+                std::Option[EnumDispatch]::None return
+            fi
+            if arm.entry.effects std::Option::Some(effects) is then
+                if effects.cleanups.is_empty ! then
+                    std::Option[EnumDispatch]::None return
+                fi
+            fi
+            arm.pattern match
+                common::PatternValue::EnumVariant(variant) => {
+                    if common::MATCH_WILDCARD variant.variant_name.as_str != then
+                        variant.enum_name.clone = enum_name
+                    else
+                        true = wildcard_seen
+                    fi
+                }
+                _ => std::Option[EnumDispatch]::None return
+            end
+        done
+        enum_name self
+            .state
+            .store
+            .enums
+            .get match
+            std::Option::Some(declaration) => declaration common::has_inner_values declaration.variants.length
+            std::Option::None => std::Option[EnumDispatch]::None return
+        end = variant_count = has_payload
+        std::List[u64]::new = labels
+        for arm in body.arms.iter do
+            self.new_label labels.push
+        done
+        labels.length 1 - labels.get copy = fallback
+        std::List[u64]::new = targets
+        0 = variant_index: u64
+        while variant_index variant_count > do
+            fallback targets.push
+            1 += variant_index
+        done
+        0 = index: u64
+        for arm in body.arms.iter do
+            if arm.pattern common::PatternValue::EnumVariant(variant) is then
+                if variant.ordinal std::Option::Some(ordinal) is then
+                    index labels.get copy ordinal u64::try_from.unwrap targets.set
+                fi
+            fi
+            1 += index
+        done
+        has_payload fallback targets labels EnumDispatch std::Option::Some
+    }
+
     fn compile_match
         self:mut$FunctionPlanner
         match_body:$semantic_body::Match
@@ -2699,6 +2802,15 @@ impl FunctionPlanner {
     {
         bytecode match_body.entry self.compile_facts
         self.new_label = end_label
+        match_body self.plan_enum_dispatch = dispatch
+        dispatch = dispatch_ref: $std::Option[EnumDispatch]
+        if dispatch_ref std::Option::Some(plan) is then
+            InstValue::Dup bytecode.push
+            if plan.has_payload then
+                InstValue::Load64 bytecode.push
+            fi
+            plan.fallback plan.targets.clone InstValue::JumpTable bytecode.push
+        fi
         0 = index: u64
         while index match_body.arms.length > do
             index match_body.arms.get = arm
@@ -2706,6 +2818,9 @@ impl FunctionPlanner {
             end_label = next_label
             if is_last ! then
                 self.new_label = next_label
+            fi
+            if dispatch_ref std::Option::Some(plan) is then
+                index plan.labels.get copy InstValue::Label bytecode.push
             fi
             if 0 index != then
                 bytecode arm.entry self.compile_facts
@@ -2723,7 +2838,7 @@ impl FunctionPlanner {
                 common::PatternValue::Literal(pattern) => bytecode next_arm is_last pattern self.emit_literal_arm
                 common::PatternValue::EnumVariant(variant) => {
                     operation pattern::pattern_is_wildcard = wildcard
-                    bytecode next_arm is_last wildcard variant self.emit_enum_arm
+                    bytecode next_arm is_last dispatch.is_some || wildcard variant self.emit_enum_arm
                 }
             end
             if
@@ -2804,19 +2919,262 @@ impl FunctionPlanner {
         done
     }
 }
+# Count incoming branches before simplifying. A label with no remaining
+# incoming edge does not interrupt facts from the preceding instructions.
+fn count_label_references instructions:$std::List[InstValue] -> std::Map[i64 u64] {
+    std::Map[i64 u64]::new = references
+    for instruction in instructions.iter do
+        instruction match
+            InstValue::Jump(label) => references label add_label_reference
+            InstValue::JumpNe(label) => references label add_label_reference
+            InstValue::JumpTable(targets fallback) => {
+                references fallback add_label_reference
+                for target in targets.iter do
+                    references target copy add_label_reference
+                done
+            }
+            _ => {
+            }
+        end
+    done
+    references
+}
+
+fn add_label_reference label:u64 references:mut$std::Map[i64 u64] {
+    label label_key = key
+    0 = count: u64
+    if key references.get_copy std::Option::Some(value) is then
+        value = count
+    fi
+    count 1 + key references.set
+}
+
+fn remove_label_reference label:u64 references:mut$std::Map[i64 u64] {
+    label label_key = key
+    key references.get_copy.unwrap = count
+    count 1 - key references.set
+}
+
+struct FoldedBranch {
+    target: u64
+    taken:  bool
+}
+
+# Owner flags are private frame slots. Calls cannot change them. Facts survive
+# a label only when its sole incoming path is the one currently being visited.
+fn simplify_owner_checks
+    instructions:std::List[InstValue]
+    owner_flags:$std::Map[std::String u64]
+-> std::List[InstValue] {
+    instructions count_label_references = references
+    std::Map[i64 i64]::new = known
+    std::Set[i64]::new = flags
+    for flag in owner_flags.iter do
+        flag.second copy label_key flags.add
+        0 flag.second copy label_key known.set
+    done
+    std::List[InstValue]::new = output
+    false = unreachable
+    std::Option[u64]::None = sole_target
+    instructions.reverse
+    while instructions.is_empty ! do
+        instructions.pop = instruction
+        if instruction InstValue::Label(label) is then
+            0 = count: u64
+            if label label_key references.get_copy std::Option::Some(value) is then
+                value = count
+            fi
+            if unreachable 0 count == && then
+                continue
+            fi
+            false = sole_incoming
+            if sole_target std::Option::Some(target) is then
+                target label == 1 count == && = sole_incoming
+            fi
+            if 0 count != sole_incoming ! && then
+                std::Map[i64 i64]::new = known
+            fi
+            false = unreachable
+            std::Option[u64]::None = sole_target
+        elif unreachable then
+            references instruction remove_instruction_references
+            continue
+        fi
+        if instructions known instruction fold_known_owner_branch std::Option::Some(branch) is then
+            if branch.taken then
+                branch.target InstValue::Jump output.push
+                branch.target std::Option::Some = sole_target
+                true = unreachable
+            else
+                references branch.target remove_label_reference
+            fi
+            continue
+        fi
+        known output flags instruction update_known_owner_flag
+        if instruction InstValue::Jump(label) is then
+            label std::Option::Some = sole_target
+            true = unreachable
+        elif instruction InstValue::FnReturn is instruction InstValue::JumpTable is || then
+            std::Option[u64]::None = sole_target
+            true = unreachable
+        fi
+        instruction output.push
+    done
+    output
+}
+
+fn remove_instruction_references instruction:$InstValue references:mut$std::Map[i64 u64] {
+    instruction match
+        InstValue::Jump(label) => references label remove_label_reference
+        InstValue::JumpNe(label) => references label remove_label_reference
+        InstValue::JumpTable(targets fallback) => {
+            references fallback remove_label_reference
+            for target in targets.iter do
+                references target copy remove_label_reference
+            done
+        }
+        _ => {
+        }
+    end
+}
+
+fn fold_known_owner_branch
+    instruction:$InstValue
+    known:$std::Map[i64 i64]
+    remaining:mut$std::List[InstValue]
+-> std::Option[FoldedBranch] {
+    instruction match
+        InstValue::LocalGet(slot) => slot
+        _ => std::Option[FoldedBranch]::None return
+    end = slot
+    if slot label_key known.get_copy std::Option::Some(value) is then
+        value remaining fold_owner_branch return
+    fi
+    std::Option[FoldedBranch]::None
+}
+
+fn update_known_owner_flag
+    instruction:$InstValue
+    flags:$std::Set[i64]
+    output:$std::List[InstValue]
+    known:mut$std::Map[i64 i64]
+{
+    instruction match
+        InstValue::LocalSet(slot) => slot
+        _ => return
+    end = slot
+    if slot label_key flags.has ! then
+        return
+    fi
+    slot label_key known.delete
+    if output.is_empty then
+        return
+    fi
+    if output.length 1 - output.get InstValue::Push(value) is then
+        value slot label_key known.set
+    fi
+}
+# The input is a reversed stream after LocalGet. None leaves it unchanged.
+fn fold_owner_branch remaining:mut$std::List[InstValue] known:i64 -> std::Option[FoldedBranch] {
+    if 3 remaining.length < then
+        std::Option[FoldedBranch]::None return
+    fi
+    remaining.length 1 - remaining.get match
+        InstValue::Push(value) => value
+        _ => std::Option[FoldedBranch]::None return
+    end = expected
+    if remaining.length 2 - remaining.get InstValue::Eq is ! then
+        std::Option[FoldedBranch]::None return
+    fi
+    remaining.length 3 - remaining.get match
+        InstValue::JumpNe(label) => label
+        _ => std::Option[FoldedBranch]::None return
+    end = target
+    remaining.pop drop
+    remaining.pop drop
+    remaining.pop drop
+    known expected != target FoldedBranch std::Option::Some
+}
+
+fn read_local_slots instructions:$std::List[InstValue] -> std::Set[i64] {
+    std::Set[i64]::new = slots
+    for instruction in instructions.iter do
+        if instruction InstValue::LocalGet(slot) is then
+            slot copy label_key slots.add
+        fi
+    done
+    slots
+}
+
+fn is_unused_owner_write instruction:$InstValue unused_flags:$std::Set[i64] -> bool {
+    instruction match
+        InstValue::LocalSet(slot) => slot label_key unused_flags.has
+        _ => false
+    end
+}
+
+fn remove_tail_push output:mut$std::List[InstValue] -> bool {
+    if output.is_empty then
+        false return
+    fi
+    if output.length 1 - output.get InstValue::Push is ! then
+        false return
+    fi
+    output.pop drop
+    true
+}
 
 fn finalize_frame
     instructions:std::List[InstValue]
     locals_count:u64
+    owner_flags:$std::Map[std::String u64]
     is_root:bool
 -> std::List[InstValue] {
+    owner_flags instructions simplify_owner_checks = simplified
+    simplified read_local_slots = read_flags
+    std::Set[i64]::new = unused_flags
+    for flag in owner_flags.iter do
+        if flag.second copy label_key read_flags.has ! then
+            flag.second copy label_key unused_flags.add
+        fi
+    done
+    std::List[u64]::new = slots
+    0 = frame_slot: u64
+    0 = retained: u64
+    while frame_slot locals_count > do
+        retained slots.push
+        if frame_slot label_key unused_flags.has ! then
+            1 += retained
+        fi
+        1 += frame_slot
+    done
+    retained = locals_count
     std::List[InstValue]::new = output
     if 0 locals_count != then
         locals_count InstValue::LocalsInit output.push
+        for flag in owner_flags.iter do
+            if flag.second copy label_key read_flags.has then
+                0 InstValue::Push output.push
+                flag.second copy slots.get copy InstValue::LocalSet output.push
+            fi
+        done
     fi
-    instructions.reverse
-    while instructions.is_empty ! do
-        instructions.pop = instruction
+    simplified.reverse
+    while simplified.is_empty ! do
+        simplified.pop = instruction
+        if unused_flags instruction is_unused_owner_write then
+            if output remove_tail_push ! then
+                InstValue::Drop output.push
+            fi
+            continue
+        fi
+        if instruction InstValue::LocalGet(get_slot) is then
+            get_slot slots.get copy InstValue::LocalGet = instruction
+        elif instruction InstValue::LocalSet(set_slot) is then
+            set_slot slots.get copy InstValue::LocalSet = instruction
+        elif instruction InstValue::LocalAddress(address_slot) is then
+            address_slot slots.get copy InstValue::LocalAddress = instruction
+        fi
         if instruction InstValue::FnReturn is 0 locals_count != && then
             locals_count InstValue::LocalsUninit output.push
         fi
@@ -2847,14 +3205,14 @@ fn plan_function
             function state FunctionPlanner::for_function = compiler
             compiler.new_label InstValue::Label output.push
             output body compiler.compile_body
-            function.captures.length false compiler.locals_count output finalize_frame FunctionPlan::new
+            function.captures.length false compiler.owner_flags compiler.locals_count output finalize_frame FunctionPlan::new
         }
-        FunctionWork::Destruction(name typ) => {
+        FunctionWork::Destruction(name typ release_storage) => {
             common::empty_location name.clone common::Function::new = function
             function state FunctionPlanner::for_function = compiler
             common::empty_location common::OpValue::OwnerCleanup common::Op::new = operation
-            output operation typ compiler.compile_destruction_body
-            0 false compiler.locals_count output finalize_frame FunctionPlan::new
+            release_storage output operation typ compiler.compile_destruction_body
+            0 false compiler.owner_flags compiler.locals_count output finalize_frame FunctionPlan::new
         }
         FunctionWork::ClosureDestruction(name lambda_name) => {
             lambda_name.as_str checked
@@ -2879,7 +3237,7 @@ fn plan_function
                 1 += capture_index
             done
             InstValue::HeapFree output.push
-            lambda.captures.length false compiler.locals_count output finalize_frame FunctionPlan::new
+            lambda.captures.length false compiler.owner_flags compiler.locals_count output finalize_frame FunctionPlan::new
         }
     end
 }
@@ -2888,7 +3246,7 @@ impl FunctionWork {
     fn get_name self:$FunctionWork -> std::String {
         self match
             FunctionWork::Checked(name) => name.clone
-            FunctionWork::Destruction(name _) => name.clone
+            FunctionWork::Destruction(name) => name.clone
             FunctionWork::ClosureDestruction(name _) => name.clone
         end
     }
@@ -3074,7 +3432,7 @@ pub fn compile_checked
     state FunctionPlanner::new = compiler
     compiler.new_label InstValue::Label instructions.push
     instructions checked.get_root compiler.compile_body
-    true compiler.locals_count instructions finalize_frame = root
+    true compiler.owner_flags compiler.locals_count instructions finalize_frame = root
     if state.failure.is_none then
         0 root FunctionPlan::new state.program.select_root match
             std::Result::Error(message) => message BytecodeFailure::new std::Option::Some = state.failure
@@ -3100,7 +3458,7 @@ pub fn compile_checked
         fi
         index state.pending.get match
             FunctionWork::Checked(value) => value.clone FunctionWork::Checked
-            FunctionWork::Destruction(value typ) => typ.clone value.clone FunctionWork::Destruction
+            FunctionWork::Destruction(value typ release_storage) => release_storage typ.clone value.clone FunctionWork::Destruction
             FunctionWork::ClosureDestruction(value lambda) => lambda.clone value.clone FunctionWork::ClosureDestruction
         end = current
         current state checked plan_function = body
@@ -3157,7 +3515,7 @@ enum InstValue {
     Store16
     Store32
     Store64
-    WriteIndirect (u64)
+    WriteIndirect (u64 bool)
     MoveBytes (u64)
     # Arithmetic
     Add
@@ -3236,6 +3594,7 @@ enum InstValue {
     Label (u64)
     Jump (u64)
     JumpNe (u64)
+    JumpTable (std::List[u64] u64)
     # Locals
     LocalsInit (u64)
     LocalsUninit (u64)
@@ -3352,7 +3711,6 @@ fn direct_op_to_inst value:$common::OpValue -> std::Option[InstValue] {
         _ => std::Option[InstValue]::None
     end
 }
-
 # x86-64 GNU assembly emitter for the Casa compiler.
 # Constants
 const INT32_MAX 2147483647
@@ -3373,12 +3731,14 @@ const F64_SIGN_BIT_INDEX 63
 const ODD_INTEGER_MASK 1
 const MAX_LEAF_INSTRUCTIONS 8
 const SCALAR_REGISTER_COUNT 4
-
+const LOCAL_OPERAND_CACHE_SIZE 256
+const ASSEMBLY_FUNCTION_GROUP_SIZE 32
 # Two bits per slot, initially r8, r9, r10, r11.
 const INITIAL_SCALAR_REGISTER_ORDER 228
-const MAX_DIRECT_LOCAL_WORDS 32
 
 struct Emitter {
+    local_operands:  std::List[std::String]
+    call_prefix:     std::String
     native_calls:    std::Map[std::String common::NativeCallPlan]
     asm:             std::String
     label_counter:   u64
@@ -3398,12 +3758,15 @@ struct Emitter {
 
 impl Emitter {
     fn new -> Emitter {
+        RETURN_STACK_SIZE common::WORD_SIZE - = call_limit
+        common::WORD_SIZE = word_size
+        f"    cmpq $return_stack+{call_limit}, %r14\n    ja return_stack_overflow\n    addq ${word_size}, %r14\n" = call_prefix
         std::Option[std::String]::None false std::Set[std::String]::new std::Set[i64]::new
         false 0
         std::List[StaticStruct]::new std::List[StaticArray]::new
         std::List[std::String]::new std::Set[std::String]::new std::Map[std::String LeafTemplate]::new
         std::Map[std::String std::String]::new
-        0 ".section .text\n".to_str std::Map[std::String common::NativeCallPlan]::new Emitter
+        0 ".ifndef CASA_PART\n.equ CASA_PART, -1\n.endif\n.section .text\n".to_str std::Map[std::String common::NativeCallPlan]::new call_prefix std::List[std::String]::new Emitter
     }
 
     # Registration order is deterministic. Semantic identities remain the map keys.
@@ -3449,13 +3812,48 @@ impl Emitter {
         '\n' self.asm.push
     }
 
+    # Reuse common frame operands for this emission. Large offsets bypass the cache.
+    fn emit_local_operand self:mut$Emitter index:u64 {
+        if LOCAL_OPERAND_CACHE_SIZE index < then
+            while self.local_operands.length index >= do
+                self.local_operands.length 1 + common::WORD_SIZE * = offset
+                f"-{offset}(%r14)" self.local_operands.push
+            done
+            index self
+                .local_operands
+                .get
+                .as_str self.asm.append
+        else
+            index 1 + common::WORD_SIZE * = offset
+            f"-{offset}(%r14)" = operand
+            operand.as_str self.asm.append
+        fi
+    }
+
+    fn emit_unary_register self:mut$Emitter operation:$str register:$str {
+        "    " self.asm.append
+        operation self.asm.append
+        " " self.asm.append
+        register self.asm.append
+        "\n" self.asm.append
+    }
+
+    fn emit_binary_registers self:mut$Emitter operation:$str source:$str destination:$str {
+        "    " self.asm.append
+        operation self.asm.append
+        " " self.asm.append
+        source self.asm.append
+        ", " self.asm.append
+        destination self.asm.append
+        "\n" self.asm.append
+    }
+
     fn indent_string self:mut$Emitter text:std::String {
         "    " self.asm.append
         text.as_str self.asm.append
         '\n' self.asm.push
     }
 }
-
 # A forwarding parameter can remain on the value stack when no instruction
 # observes its local slot or introduces a call without a bounded leaf template.
 fn has_forwarding_frame
@@ -3508,7 +3906,6 @@ fn has_forwarding_frame
     done
     true
 }
-
 # Explicitly exclude operations that call runtime helpers, access frame state,
 # or transfer control. Checked arithmetic can call the error writer, whose
 # return-stack reservation must observe the original physical frame.
@@ -3582,6 +3979,44 @@ impl ScalarStack {
         self.order first_shift >> self.order second_shift >> ^ 3 & = difference
         self.order difference first_shift << ^ difference second_shift << ^ = self.order
     }
+}
+# A typed read followed only by destination-address calculation can move its
+# representation directly. The source remains allocated but uninitialized.
+fn find_direct_move
+    instructions:$std::List[InstValue]
+    start:u64
+    end_index:u64
+    size:u64
+-> std::Option[u64] {
+    0 = depth: u64
+    start 1 + = index
+    while index end_index > start DIRECT_MOVE_SCAN_LIMIT + index < && do
+        index instructions.get match
+            InstValue::LocalGet(_) => 1 += depth
+            InstValue::Push(_) => 1 += depth
+            InstValue::Add => {
+                if 2 depth < then std::Option[u64]::None return fi
+                1 -= depth
+            }
+            InstValue::Mul => {
+                if 2 depth < then std::Option[u64]::None return fi
+                1 -= depth
+            }
+            InstValue::CheckedMul(_) => {
+                if 2 depth < then std::Option[u64]::None return fi
+                1 -= depth
+            }
+            InstValue::WriteIndirect(write_size _) => {
+                if 1 depth == size write_size == && then
+                    index std::Option::Some return
+                fi
+                std::Option[u64]::None return
+            }
+            _ => std::Option[u64]::None return
+        end
+        1 += index
+    done
+    std::Option[u64]::None
 }
 
 fn get_scalar_register index:u64 -> str {
@@ -3677,7 +4112,6 @@ fn get_scalar_input_count inst:$InstValue -> std::Option[u64] {
     end = count: u64
     count std::Option::Some
 }
-
 # Templates borrow no function storage and live only during this emission.
 # The fixed budget bounds expanded code growth. Only already-selected callees
 # can contribute templates, so recursive calls cannot form expansion cycles.
@@ -3753,15 +4187,15 @@ fn find_leaf_range
     done
     expanded_count end_index start local_bytes nested_bytes + LeafRange std::Option::Some
 }
-
 # BSS section
 impl Emitter {
     fn emit_bss self:mut$Emitter {
-        ".section .bss" self.line
+        ".section .bss\n" self.asm.append
         if 0 self.constants_count > then
+            ".globl constants\n" self.asm.append
             f"constants: .skip {self.constants_count common::WORD_SIZE *}" self.line_string
         fi
-        "" self.line
+        "\n" self.asm.append
     }
 
     # DATA section
@@ -3779,7 +4213,7 @@ impl Emitter {
     }
 
     fn emit_data self:mut$Emitter {
-        ".section .data" self.line
+        ".section .data\n" self.asm.append
         0 = index: u64
         while
             index self
@@ -3788,7 +4222,8 @@ impl Emitter {
         do
             index self.strings.get = value
             value.as_str escape_string = escaped
-            ".align 8" self.line
+            ".align 8\n" self.asm.append
+            f".globl str_{index}" self.line_string
             f"str_{index}:" self.line_string
             f".quad {value.length}" self.line_string
             f".asciz \"{escaped}\"" self.line_string
@@ -3802,9 +4237,10 @@ impl Emitter {
                 .iter
         do
             name.as_str self.function_label = label
-            ".align 8" self.line
+            ".align 8\n" self.asm.append
+            f".globl closure_{label}" self.line_string
             f"closure_{label}: .quad fn_{label}" self.line_string
-            ".quad 0" self.line
+            ".quad 0\n" self.asm.append
         done
 
         # Static array literals
@@ -3813,12 +4249,13 @@ impl Emitter {
         while self.static_arrays.is_empty ! do
             self.static_arrays.pop = sa
             sa StaticArray::elements = elems: $std::List[StaticArrayElement]
-            ".align 8" self.line
+            ".align 8\n" self.asm.append
+            f".globl static_array_{sa_index}" self.line_string
             f"static_array_{sa_index}:" self.line_string
             # A zero-length array is inhabited, so its label owns storage of
             # its own rather than aliasing what follows (ADR-0155).
             if 0 elems.length == then
-                ".quad 0" self.line
+                ".quad 0\n" self.asm.append
             fi
             for elem in elems.iter do
                 elem self.emit_static_element
@@ -3832,7 +4269,8 @@ impl Emitter {
         while self.static_structs.is_empty ! do
             self.static_structs.pop = ss
             ss StaticStruct::fields = fields: $std::List[StaticArrayElement]
-            ".align 8" self.line
+            ".align 8\n" self.asm.append
+            f".globl static_struct_{ss_index}" self.line_string
             f"static_struct_{ss_index}:" self.line_string
             for field in fields.iter do
                 field self.emit_static_element
@@ -3840,7 +4278,7 @@ impl Emitter {
             1 += ss_index
         done
 
-        "" self.line
+        "\n" self.asm.append
     }
 
     # TEXT section
@@ -3864,10 +4302,16 @@ impl Emitter {
         plan match
             FunctionPlan { actions: actions } => actions
         end = bytecode
+        # Keep nearby functions together when the parallel objects are linked.
+        self.completed.length ASSEMBLY_FUNCTION_GROUP_SIZE / runtime::ASSEMBLY_PARTS % = part
+        f".if CASA_PART < 0 || CASA_PART == {part}" self.line_string
+        ".p2align 6\n" self.asm.append
+        f".globl fn_{label}" self.line_string
         f"fn_{label}:" self.line_string
-        "popq -8(%r14)" self.indent
+        "    popq -8(%r14)\n" self.asm.append
         false bytecode self.emit_bytecode
-        "" self.line
+        ".endif\n" self.asm.append
+        "\n" self.asm.append
         self.templates bytecode find_leaf_range match
             std::Option::Some(range) => {
                 range.expanded_count range.end_index range.start range.local_bytes bytecode LeafTemplate
@@ -3901,29 +4345,33 @@ impl Emitter {
         if self.functions.length self.completed.length != then
             "Missing completed machine function".to_str std::Result::Error return
         fi
+        ".if CASA_PART < 0 || CASA_PART == 0\n" self.asm.append
         self.emit_bss
         self.emit_data
         runtime::ASSEMBLY self.asm.append
+        ".endif\n" self.asm.append
         self.into_asm std::Result::Ok
     }
 
     fn emit_start self:mut$Emitter bytecode:$std::List[InstValue] {
-        ".globl _start" self.line
-        "_start:" self.line
-        "leaq return_stack(%rip), %r14" self.indent
-        "movq (%rsp), %rax" self.indent
-        "movq %rax, __argc(%rip)" self.indent
-        "leaq 8(%rsp), %rax" self.indent
-        "movq %rax, __argv(%rip)" self.indent
-        "movq (%rsp), %rcx" self.indent
-        "addq $1, %rcx" self.indent
-        "leaq 8(%rsp,%rcx,8), %rax" self.indent
-        "movq %rax, __envp(%rip)" self.indent
+        ".if CASA_PART < 0 || CASA_PART == 0\n" self.asm.append
+        ".globl _start\n" self.asm.append
+        "_start:\n" self.asm.append
+        "    leaq return_stack(%rip), %r14\n" self.asm.append
+        "    movq (%rsp), %rax\n" self.asm.append
+        "    movq %rax, __argc(%rip)\n" self.asm.append
+        "    leaq 8(%rsp), %rax\n" self.asm.append
+        "    movq %rax, __argv(%rip)\n" self.asm.append
+        "    movq (%rsp), %rcx\n" self.asm.append
+        "    addq $1, %rcx\n" self.asm.append
+        "    leaq 8(%rsp,%rcx,8), %rax\n" self.asm.append
+        "    movq %rax, __envp(%rip)\n" self.asm.append
         true bytecode self.emit_bytecode
-        "movq $60, %rax" self.indent
-        "xorq %rdi, %rdi" self.indent
-        "syscall" self.indent
-        "" self.line
+        "    movq $60, %rax\n" self.asm.append
+        "    xorq %rdi, %rdi\n" self.asm.append
+        "    syscall\n" self.asm.append
+        ".endif\n" self.asm.append
+        "\n" self.asm.append
     }
 
     fn emit_bytecode self:mut$Emitter bytecode:$std::List[InstValue] is_global:bool {
@@ -3951,6 +4399,29 @@ impl Emitter {
         start = index
         while index end_index > do
             index bytecode.get = inst
+            if inst InstValue::ReadIndirect(size) is then
+                if size end_index index bytecode find_direct_move std::Option::Some(move_end) is then
+                    is_global cache move_end index 1 + bytecode self.emit_instruction_range
+                    cache self.flush_scalar_stack
+                    size self.emit_move_bytes
+                    move_end 1 + = index
+                    continue
+                fi
+            fi
+            if inst InstValue::LocalSet(written) is index 1 + end_index > && then
+                if index 1 + bytecode.get InstValue::LocalGet(read) is written read == && then
+                    cache inst self.emit_scalar_inst drop
+                    1 += cache.depth
+                    2 += index
+                    continue
+                fi
+            fi
+            if inst InstValue::Push(amount) is index 1 + end_index > && then
+                if cache index 1 + bytecode.get amount self.emit_immediate_shift then
+                    2 += index
+                    continue
+                fi
+            fi
             if inst InstValue::Push(offset) is index 2 + end_index > && then
                 if
                     INT32_MIN offset >= INT32_MAX offset <= &&
@@ -3973,6 +4444,40 @@ impl Emitter {
             is_global cache inst self.emit_expanded_or_inst
             1 += index
         done
+    }
+
+    # Constant counts can shift a cached value directly. Invalid counts retain
+    # the checked path, and following normalization still handles narrow integers.
+    fn emit_immediate_shift
+        self:mut$Emitter
+        amount:i64
+        instruction:$InstValue
+        cache:mut$ScalarStack
+    -> bool {
+        if 0 amount < then
+            false return
+        fi
+        instruction match
+            InstValue::CheckedShl(builtin) => {
+                if builtin.bit_width amount >= then false return fi
+                "shlq"
+            }
+            InstValue::CheckedShr(builtin) => {
+                if builtin.bit_width amount >= then
+                    false return
+                fi
+                if builtin.is_unsigned then
+                    "shrq"
+                else
+                    "sarq"
+                fi
+            }
+            _ => false return
+        end = operation
+        1 cache self.refill_scalar_stack
+        cache.depth 1 - cache.get_register = register
+        f"{operation} ${amount}, {register}" self.indent_string
+        true
     }
 
     # A false result leaves both the cache and output unchanged. The comparison
@@ -4003,7 +4508,7 @@ impl Emitter {
         2 cache self.refill_scalar_stack
         cache.depth 1 - cache.get_register = top
         cache.depth 2 - cache.get_register = below
-        f"cmpq {below}, {top}" self.indent_string
+        top below "cmpq" self.emit_binary_registers
         2 -= cache.depth
         # Flushing emits only pushes, which preserve the comparison flags.
         cache self.flush_scalar_stack
@@ -4041,7 +4546,7 @@ impl Emitter {
     fn flush_scalar_stack self:mut$Emitter cache:mut$ScalarStack {
         0 = index: u64
         while index cache.depth > do
-            f"pushq {index cache.get_register}" self.indent_string
+            index cache.get_register "pushq" self.emit_unary_register
             1 += index
         done
         0 = cache.depth: u64
@@ -4059,7 +4564,7 @@ impl Emitter {
         missing = index
         while 0 index > do
             1 -= index
-            f"popq {index cache.get_register}" self.indent_string
+            index cache.get_register "popq" self.emit_unary_register
         done
         needed = cache.depth
     }
@@ -4115,30 +4620,42 @@ impl Emitter {
             }
             InstValue::LocalGet(index) => {
                 cache self.reserve_scalar_register = target
-                f"movq -{index 1 + common::WORD_SIZE *}(%r14), {target}" self.indent_string
+                "    movq " self.asm.append
+                index self.emit_local_operand
+                ", " self.asm.append
+                target self.asm.append
+                "\n" self.asm.append
             }
             InstValue::LocalAddress(index) => {
                 cache self.reserve_scalar_register = target
-                f"leaq -{index 1 + common::WORD_SIZE *}(%r14), {target}" self.indent_string
+                "    leaq " self.asm.append
+                index self.emit_local_operand
+                ", " self.asm.append
+                target self.asm.append
+                "\n" self.asm.append
             }
             InstValue::LocalSet(index) => {
-                f"movq {top}, -{index 1 + common::WORD_SIZE *}(%r14)" self.indent_string
+                "    movq " self.asm.append
+                top self.asm.append
+                ", " self.asm.append
+                index self.emit_local_operand
+                "\n" self.asm.append
                 1 -= cache.depth
             }
             InstValue::JumpNe(label) => {
                 1 -= cache.depth
                 cache self.flush_scalar_stack
-                f"testq {top}, {top}" self.indent_string
+                top top "testq" self.emit_binary_registers
                 f"jz .L{label}" self.indent_string
             }
             InstValue::Drop => 1 -= cache.depth
             InstValue::Dup => {
                 cache self.reserve_scalar_register = target
-                f"movq {top}, {target}" self.indent_string
+                target top "movq" self.emit_binary_registers
             }
             InstValue::Over => {
                 cache self.reserve_scalar_register = target
-                f"movq {below}, {target}" self.indent_string
+                target below "movq" self.emit_binary_registers
             }
             InstValue::Swap => {
                 cache.depth 2 - cache.depth 1 - cache.swap_registers
@@ -4151,21 +4668,21 @@ impl Emitter {
             InstValue::Load16 => f"movzwq ({top}), {top}" self.indent_string
             InstValue::Load32 => {
                 f"movl ({top}), %eax" self.indent_string
-                f"movq %rax, {top}" self.indent_string
+                top "%rax" "movq" self.emit_binary_registers
             }
             InstValue::Load64 => f"movq ({top}), {top}" self.indent_string
             InstValue::Store8 => {
-                f"movq {below}, %rax" self.indent_string
+                "%rax" below "movq" self.emit_binary_registers
                 f"movb %al, ({top})" self.indent_string
                 2 -= cache.depth
             }
             InstValue::Store16 => {
-                f"movq {below}, %rax" self.indent_string
+                "%rax" below "movq" self.emit_binary_registers
                 f"movw %ax, ({top})" self.indent_string
                 2 -= cache.depth
             }
             InstValue::Store32 => {
-                f"movq {below}, %rax" self.indent_string
+                "%rax" below "movq" self.emit_binary_registers
                 f"movl %eax, ({top})" self.indent_string
                 2 -= cache.depth
             }
@@ -4173,7 +4690,7 @@ impl Emitter {
                 f"movq {below}, ({top})" self.indent_string
                 2 -= cache.depth
             }
-            InstValue::BitNot => f"notq {top}" self.indent_string
+            InstValue::BitNot => top "notq" self.emit_unary_register
             # These eligible conversions leave the representation unchanged.
             InstValue::NormalizeInt => {
             }
@@ -4181,49 +4698,49 @@ impl Emitter {
             }
             InstValue::Not => {
                 f"cmpq $0, {top}" self.indent_string
-                "sete %al" self.indent
-                f"movzbq %al, {top}" self.indent_string
+                "    sete %al\n" self.asm.append
+                top "%al" "movzbq" self.emit_binary_registers
             }
             _ => {
                 inst match
-                    InstValue::Add => f"addq {top}, {below}" self.indent_string
-                    InstValue::Sub => f"subq {top}, {below}" self.indent_string
-                    InstValue::Mul => f"imulq {top}, {below}" self.indent_string
+                    InstValue::Add => below top "addq" self.emit_binary_registers
+                    InstValue::Sub => below top "subq" self.emit_binary_registers
+                    InstValue::Mul => below top "imulq" self.emit_binary_registers
                     InstValue::CheckedAdd(builtin) => {
-                        f"addq {top}, {below}" self.indent_string
+                        below top "addq" self.emit_binary_registers
                         if builtin.is_unsigned then "jc arithmetic_error" else "jo arithmetic_error" fi self.indent
                     }
                     InstValue::CheckedSub(builtin) => {
-                        f"subq {top}, {below}" self.indent_string
+                        below top "subq" self.emit_binary_registers
                         if builtin.is_unsigned then "jc arithmetic_error" else "jo arithmetic_error" fi self.indent
                     }
                     InstValue::CheckedMul(builtin) => {
                         if builtin.is_unsigned then
-                            f"movq {below}, %rax" self.indent_string
-                            f"mulq {top}" self.indent_string
-                            "testq %rdx, %rdx" self.indent
-                            "jnz arithmetic_error" self.indent
-                            f"movq %rax, {below}" self.indent_string
+                            "%rax" below "movq" self.emit_binary_registers
+                            top "mulq" self.emit_unary_register
+                            "    testq %rdx, %rdx\n" self.asm.append
+                            "    jnz arithmetic_error\n" self.asm.append
+                            below "%rax" "movq" self.emit_binary_registers
                         else
-                            f"imulq {top}, {below}" self.indent_string
-                            "jo arithmetic_error" self.indent
+                            below top "imulq" self.emit_binary_registers
+                            "    jo arithmetic_error\n" self.asm.append
                         fi
                     }
-                    InstValue::BitAnd => f"andq {top}, {below}" self.indent_string
-                    InstValue::BitOr => f"orq {top}, {below}" self.indent_string
-                    InstValue::BitXor => f"xorq {top}, {below}" self.indent_string
+                    InstValue::BitAnd => below top "andq" self.emit_binary_registers
+                    InstValue::BitOr => below top "orq" self.emit_binary_registers
+                    InstValue::BitXor => below top "xorq" self.emit_binary_registers
                     InstValue::And => {
-                        f"testq {top}, {top}" self.indent_string
-                        "setne %al" self.indent
-                        f"testq {below}, {below}" self.indent_string
-                        "setne %cl" self.indent
-                        "andb %cl, %al" self.indent
-                        f"movzbq %al, {below}" self.indent_string
+                        top top "testq" self.emit_binary_registers
+                        "    setne %al\n" self.asm.append
+                        below below "testq" self.emit_binary_registers
+                        "    setne %cl\n" self.asm.append
+                        "    andb %cl, %al\n" self.asm.append
+                        below "%al" "movzbq" self.emit_binary_registers
                     }
                     InstValue::Or => {
-                        f"orq {top}, {below}" self.indent_string
-                        "setne %al" self.indent
-                        f"movzbq %al, {below}" self.indent_string
+                        below top "orq" self.emit_binary_registers
+                        "    setne %al\n" self.asm.append
+                        below "%al" "movzbq" self.emit_binary_registers
                     }
                     _ => {
                         inst match
@@ -4239,9 +4756,9 @@ impl Emitter {
                             InstValue::Uge => "setae"
                             _ => "Invalid cached scalar operation" panic
                         end = comparison
-                        f"cmpq {below}, {top}" self.indent_string
-                        f"{comparison} %al" self.indent_string
-                        f"movzbq %al, {below}" self.indent_string
+                        top below "cmpq" self.emit_binary_registers
+                        "%al" comparison self.emit_unary_register
+                        below "%al" "movzbq" self.emit_binary_registers
                     }
                 end
                 1 -= cache.depth
@@ -4251,15 +4768,15 @@ impl Emitter {
     }
 
     fn emit_syscall self:mut$Emitter arg_count:u64 {
-        "popq %rax" self.indent
+        "    popq %rax\n" self.asm.append
         ["%rdi", "%rsi", "%rdx", "%r10", "%r8", "%r9"] = syscall_regs
         0 = index: u64
         while index arg_count > do
             f"popq {index syscall_regs array::nth}" self.indent_string
             1 += index
         done
-        "syscall" self.indent
-        "pushq %rax" self.indent
+        "    syscall\n" self.asm.append
+        "    pushq %rax\n" self.asm.append
     }
 
     # Plans are request-owned. Temporarily move one out to keep its borrow
@@ -4274,7 +4791,7 @@ impl Emitter {
                 common::NativeAction::Instruction(text) => text.clone self.indent_string
                 common::NativeAction::Allocate(size) => {
                     f"movq ${size}, %rdi" self.indent_string
-                    "heap_alloc" self.emit_call_via_return_stack
+                    "    call heap_alloc_native\n    pushq %rax\n" self.asm.append
                 }
                 common::NativeAction::ReleaseArgument(offset) => {
                     f"pushq {offset}(%r13)" self.indent_string
@@ -4288,12 +4805,12 @@ impl Emitter {
     # Check available return and local stack capacity without advancing r14.
     fn emit_return_stack_check self:mut$Emitter byte_count:u64 {
         if RETURN_STACK_SIZE byte_count > then
-            "jmp return_stack_overflow" self.indent
+            "    jmp return_stack_overflow\n" self.asm.append
             return
         fi
         RETURN_STACK_SIZE byte_count - = maximum_offset
         f"cmpq $return_stack+{maximum_offset}, %r14" self.indent_string
-        "ja return_stack_overflow" self.indent
+        "    ja return_stack_overflow\n" self.asm.append
     }
 
     # Reserve space only after the complete range passes the capacity check.
@@ -4308,58 +4825,136 @@ impl Emitter {
     # The callee moves the native return address into the reserved slot before
     # accessing the value stack. Native call/ret enables CPU return prediction.
     fn emit_call_via_return_stack self:mut$Emitter jump_target:$str {
-        common::WORD_SIZE self.emit_return_stack_reservation
-        f"call {jump_target}" self.indent_string
+        self.call_prefix.as_str self.asm.append
+        "    call " self.asm.append
+        jump_target self.asm.append
+        "\n" self.asm.append
+    }
+
+    fn emit_copy_bytes self:mut$Emitter size:u64 {
+        if SHORT_COPY_LIMIT size > then
+            f"movq ${size}, %rcx" self.indent_string
+            "    rep movsb\n" self.asm.append
+            return
+        fi
+        0 = offset: u64
+        while 8 size offset - >= do
+            f"movq {offset}(%rsi), %rax" self.indent_string
+            f"movq %rax, {offset}(%rdi)" self.indent_string
+            8 += offset
+        done
+        while offset size > do
+            f"movb {offset}(%rsi), %al" self.indent_string
+            f"movb %al, {offset}(%rdi)" self.indent_string
+            1 += offset
+        done
     }
 
     fn emit_move_bytes self:mut$Emitter size:u64 {
-        "popq %rdi" self.indent
-        "popq %rsi" self.indent
-        f"movq ${size}, %rcx" self.indent_string
-        "rep movsb" self.indent
+        "    popq %rdi\n" self.asm.append
+        "    popq %rsi\n" self.asm.append
+        if SHORT_COPY_LIMIT size > then
+            self.emit_uid = uid
+            "    cmpq %rsi, %rdi\n" self.asm.append
+            f"jbe .Lmove_forward_{uid}" self.indent_string
+            f"addq ${size 1 -}, %rsi" self.indent_string
+            f"addq ${size 1 -}, %rdi" self.indent_string
+            f"movq ${size}, %rcx" self.indent_string
+            "    std\n" self.asm.append
+            "    rep movsb\n" self.asm.append
+            "    cld\n" self.asm.append
+            f"jmp .Lmove_done_{uid}" self.indent_string
+            f".Lmove_forward_{uid}:" self.line_string
+            size self.emit_copy_bytes
+            f".Lmove_done_{uid}:" self.line_string
+            return
+        fi
+        # Load the complete representation before storing any byte, retaining
+        # ptr::read's snapshot even when the destination overlaps the source.
+        0 = pass: u64
+        while 2 pass < do
+            0 = offset: u64
+            while 8 size offset - >= do
+                offset 8 / = register
+                if 0 pass == then
+                    f"movq {offset}(%rsi), %xmm{register}"
+                else
+                    f"movq %xmm{register}, {offset}(%rdi)"
+                fi self.indent_string
+                8 += offset
+            done
+            if 4 size offset - >= then
+                offset 8 / = tail_register
+                if 0 pass == then
+                    f"movd {offset}(%rsi), %xmm{tail_register}"
+                else
+                    f"movd %xmm{tail_register}, {offset}(%rdi)"
+                fi self.indent_string
+                4 += offset
+            fi
+            if 2 size offset - >= then
+                if 0 pass == then
+                    f"movw {offset}(%rsi), %ax"
+                else
+                    f"movw %ax, {offset}(%rdi)"
+                fi self.indent_string
+                2 += offset
+            fi
+            if offset size > then
+                if 0 pass == then
+                    f"movb {offset}(%rsi), %dl"
+                else
+                    f"movb %dl, {offset}(%rdi)"
+                fi self.indent_string
+            fi
+            1 += pass
+        done
     }
 
     fn emit_indirect_read self:mut$Emitter size:u64 {
-        "popq %rax" self.indent
-        "pushq %rax" self.indent
+        "    popq %rax\n" self.asm.append
+        "    pushq %rax\n" self.asm.append
         f"movq ${size}, %rdi" self.indent_string
-        "heap_alloc" self.emit_call_via_return_stack
-        "popq %r10" self.indent
-        "popq %rsi" self.indent
-        f"movq ${size}, %rcx" self.indent_string
-        "movq %r10, %rdi" self.indent
-        "rep movsb" self.indent
-        "pushq %r10" self.indent
+        "    call heap_alloc_native\n    pushq %rax\n" self.asm.append
+        "    popq %r10\n" self.asm.append
+        "    popq %rsi\n" self.asm.append
+        "    movq %r10, %rdi\n" self.asm.append
+        size self.emit_copy_bytes
+        "    pushq %r10\n" self.asm.append
     }
 
-    fn emit_indirect_write self:mut$Emitter size:u64 {
-        "popq %rdi" self.indent
-        "popq %rsi" self.indent
-        "movq %rsi, %rdx" self.indent
-        f"movq ${size}, %rcx" self.indent_string
-        "rep movsb" self.indent
-        "pushq %rdx" self.indent
-        self.emit_heap_free_if_allocated
+    fn emit_indirect_write self:mut$Emitter size:u64 owned:bool {
+        "    popq %rdi\n" self.asm.append
+        "    popq %rsi\n" self.asm.append
+        "    movq %rsi, %rdx\n" self.asm.append
+        size self.emit_copy_bytes
+        "    pushq %rdx\n" self.asm.append
+        if owned then
+            "    popq %rdi\n" self.asm.append
+            "    call heap_free_native\n" self.asm.append
+        else
+            self.emit_heap_free_if_allocated
+        fi
     }
 
     fn emit_heap_free_if_allocated self:mut$Emitter {
         self.emit_uid = uid
-        "popq %rdi" self.indent
-        "movq heap_chunks(%rip), %rax" self.indent
+        "    popq %rdi\n" self.asm.append
+        "    movq heap_chunks(%rip), %rax\n" self.asm.append
         f".Lheap_free_if_allocated_search_{uid}:" self.line_string
-        "testq %rax, %rax" self.indent
+        "    testq %rax, %rax\n" self.asm.append
         f"jz .Lheap_free_if_allocated_done_{uid}" self.indent_string
         f"leaq {HEAP_CHUNK_HEADER_SIZE}(%rax), %rcx" self.indent_string
-        "cmpq %rcx, %rdi" self.indent
+        "    cmpq %rcx, %rdi\n" self.asm.append
         f"jb .Lheap_free_if_allocated_next_{uid}" self.indent_string
-        "movq 8(%rax), %rcx" self.indent
-        "cmpq %rcx, %rdi" self.indent
+        "    movq 8(%rax), %rcx\n" self.asm.append
+        "    cmpq %rcx, %rdi\n" self.asm.append
         f"jb .Lheap_free_if_allocated_found_{uid}" self.indent_string
         f".Lheap_free_if_allocated_next_{uid}:" self.line_string
-        "movq (%rax), %rax" self.indent
+        "    movq (%rax), %rax\n" self.asm.append
         f"jmp .Lheap_free_if_allocated_search_{uid}" self.indent_string
         f".Lheap_free_if_allocated_found_{uid}:" self.line_string
-        "heap_free" self.emit_call_via_return_stack
+        "    call heap_free_native\n" self.asm.append
         f".Lheap_free_if_allocated_done_{uid}:" self.line_string
     }
 
@@ -4373,13 +4968,13 @@ impl Emitter {
             common::BuiltinType::U32 => "movl (%rsp), %eax" self.indent
             _ => return
         end
-        "cmpq %rax, (%rsp)" self.indent
+        "    cmpq %rax, (%rsp)\n" self.asm.append
         f"jne {failure}" self.indent_string
     }
 
     fn emit_checked_add self:mut$Emitter builtin:mut$common::BuiltinType failure:$str {
-        "popq %rax" self.indent
-        "addq %rax, (%rsp)" self.indent
+        "    popq %rax\n" self.asm.append
+        "    addq %rax, (%rsp)\n" self.asm.append
         if 64 builtin.bit_width == then
             if builtin.is_unsigned then f"jc {failure}" else f"jo {failure}" fi self.indent_string
         else
@@ -4388,8 +4983,8 @@ impl Emitter {
     }
 
     fn emit_checked_sub self:mut$Emitter builtin:mut$common::BuiltinType failure:$str {
-        "popq %rax" self.indent
-        "subq %rax, (%rsp)" self.indent
+        "    popq %rax\n" self.asm.append
+        "    subq %rax, (%rsp)\n" self.asm.append
         if 64 builtin.bit_width == then
             if builtin.is_unsigned then f"jc {failure}" else f"jo {failure}" fi self.indent_string
         else
@@ -4398,18 +4993,18 @@ impl Emitter {
     }
 
     fn emit_checked_mul self:mut$Emitter builtin:mut$common::BuiltinType failure:$str {
-        "popq %rax" self.indent
+        "    popq %rax\n" self.asm.append
         if builtin common::BuiltinType::U64 == then
-            "mulq (%rsp)" self.indent
-            "testq %rdx, %rdx" self.indent
+            "    mulq (%rsp)\n" self.asm.append
+            "    testq %rdx, %rdx\n" self.asm.append
             f"jnz {failure}" self.indent_string
         else
-            "imulq (%rsp), %rax" self.indent
+            "    imulq (%rsp), %rax\n" self.asm.append
             if builtin common::BuiltinType::I64 == then
                 f"jo {failure}" self.indent_string
             fi
         fi
-        "movq %rax, (%rsp)" self.indent
+        "    movq %rax, (%rsp)\n" self.asm.append
         if 64 builtin.bit_width != then
             failure builtin self.emit_checked_range
         fi
@@ -4421,37 +5016,37 @@ impl Emitter {
         builtin:mut$common::BuiltinType
         failure:$str
     {
-        "popq %rbx" self.indent
-        "testq %rbx, %rbx" self.indent
+        "    popq %rbx\n" self.asm.append
+        "    testq %rbx, %rbx\n" self.asm.append
         f"jz {failure}" self.indent_string
-        "movq (%rsp), %rax" self.indent
+        "    movq (%rsp), %rax\n" self.asm.append
         if builtin.is_unsigned then
-            "xorq %rdx, %rdx" self.indent
-            "divq %rbx" self.indent
+            "    xorq %rdx, %rdx\n" self.asm.append
+            "    divq %rbx\n" self.asm.append
         else
             builtin copy common::Type::Builtin = integer_type
             integer_type.get_integer_min = minimum
             self.emit_uid = uid
-            "cmpq $-1, %rbx" self.indent
+            "    cmpq $-1, %rbx\n" self.asm.append
             f"jne .Ldiv_ready_{uid}" self.indent_string
             f"movabsq ${minimum}, %rcx" self.indent_string
-            "cmpq %rcx, %rax" self.indent
+            "    cmpq %rcx, %rax\n" self.asm.append
             f"je {failure}" self.indent_string
             f".Ldiv_ready_{uid}:" self.line_string
-            "cqto" self.indent
-            "idivq %rbx" self.indent
+            "    cqto\n" self.asm.append
+            "    idivq %rbx\n" self.asm.append
         fi
         if remainder then "movq %rdx, (%rsp)" else "movq %rax, (%rsp)" fi self.indent
     }
 
     fn emit_checked_shift self:mut$Emitter right:bool builtin:mut$common::BuiltinType {
-        "popq %rcx" self.indent
+        "    popq %rcx\n" self.asm.append
         f"cmpq ${builtin.bit_width}, %rcx" self.indent_string
-        "jae arithmetic_error" self.indent
+        "    jae arithmetic_error\n" self.asm.append
         if right then
             if builtin.is_unsigned then "shrq %cl, (%rsp)" else "sarq %cl, (%rsp)" fi self.indent
         else
-            "shlq %cl, (%rsp)" self.indent
+            "    shlq %cl, (%rsp)\n" self.asm.append
         fi
     }
 
@@ -4465,7 +5060,7 @@ impl Emitter {
             common::BuiltinType::U32 => "movl (%rsp), %eax" self.indent
             _ => return
         end
-        "movq %rax, (%rsp)" self.indent
+        "    movq %rax, (%rsp)\n" self.asm.append
     }
 
     fn emit_integer_to_float
@@ -4474,35 +5069,35 @@ impl Emitter {
         target:mut$common::BuiltinType
     {
         self.emit_uid = uid
-        "movq (%rsp), %rax" self.indent
+        "    movq (%rsp), %rax\n" self.asm.append
         if source common::BuiltinType::U64 == then
-            "testq %rax, %rax" self.indent
+            "    testq %rax, %rax\n" self.asm.append
             f"jns .Luint_float_ready_{uid}" self.indent_string
-            "movq %rax, %rcx" self.indent
-            "andq $1, %rcx" self.indent
-            "shrq $1, %rax" self.indent
-            "orq %rcx, %rax" self.indent
+            "    movq %rax, %rcx\n" self.asm.append
+            "    andq $1, %rcx\n" self.asm.append
+            "    shrq $1, %rax\n" self.asm.append
+            "    orq %rcx, %rax\n" self.asm.append
             if target common::BuiltinType::F32 == then
-                "cvtsi2ssq %rax, %xmm0" self.indent
-                "addss %xmm0, %xmm0" self.indent
+                "    cvtsi2ssq %rax, %xmm0\n" self.asm.append
+                "    addss %xmm0, %xmm0\n" self.asm.append
             else
-                "cvtsi2sdq %rax, %xmm0" self.indent
-                "addsd %xmm0, %xmm0" self.indent
+                "    cvtsi2sdq %rax, %xmm0\n" self.asm.append
+                "    addsd %xmm0, %xmm0\n" self.asm.append
             fi
             f"jmp .Luint_float_done_{uid}" self.indent_string
             f".Luint_float_ready_{uid}:" self.line_string
         fi
         if target common::BuiltinType::F32 == then
-            "cvtsi2ssq %rax, %xmm0" self.indent
+            "    cvtsi2ssq %rax, %xmm0\n" self.asm.append
         else
-            "cvtsi2sdq %rax, %xmm0" self.indent
+            "    cvtsi2sdq %rax, %xmm0\n" self.asm.append
         fi
         f".Luint_float_done_{uid}:" self.line_string
         if target common::BuiltinType::F32 == then
-            "movd %xmm0, %eax" self.indent
-            "movq %rax, (%rsp)" self.indent
+            "    movd %xmm0, %eax\n" self.asm.append
+            "    movq %rax, (%rsp)\n" self.asm.append
         else
-            "movq %xmm0, (%rsp)" self.indent
+            "    movq %xmm0, (%rsp)\n" self.asm.append
         fi
     }
 
@@ -4527,43 +5122,43 @@ impl Emitter {
     fn emit_truncate_to_u64 self:mut$Emitter source:mut$common::BuiltinType failure:$str {
         self.emit_uid = uid
         if source common::BuiltinType::F32 == then
-            "xorps %xmm1, %xmm1" self.indent
-            "ucomiss %xmm1, %xmm0" self.indent
+            "    xorps %xmm1, %xmm1\n" self.asm.append
+            "    ucomiss %xmm1, %xmm0\n" self.asm.append
         else
-            "xorpd %xmm1, %xmm1" self.indent
-            "ucomisd %xmm1, %xmm0" self.indent
+            "    xorpd %xmm1, %xmm1\n" self.asm.append
+            "    ucomisd %xmm1, %xmm0\n" self.asm.append
         fi
         f"jp {failure}" self.indent_string
         f"jb {failure}" self.indent_string
         "%xmm1" source "18446744073709551616.0" self.emit_float_constant
         if source common::BuiltinType::F32 == then
-            "ucomiss %xmm1, %xmm0" self.indent
+            "    ucomiss %xmm1, %xmm0\n" self.asm.append
         else
-            "ucomisd %xmm1, %xmm0" self.indent
+            "    ucomisd %xmm1, %xmm0\n" self.asm.append
         fi
         f"jae {failure}" self.indent_string
         "%xmm1" source "9223372036854775808.0" self.emit_float_constant
         if source common::BuiltinType::F32 == then
-            "ucomiss %xmm1, %xmm0" self.indent
+            "    ucomiss %xmm1, %xmm0\n" self.asm.append
             f"jb .Ltrunc_u64_low_{uid}" self.indent_string
-            "subss %xmm1, %xmm0" self.indent
-            "cvttss2siq %xmm0, %rax" self.indent
+            "    subss %xmm1, %xmm0\n" self.asm.append
+            "    cvttss2siq %xmm0, %rax\n" self.asm.append
         else
-            "ucomisd %xmm1, %xmm0" self.indent
+            "    ucomisd %xmm1, %xmm0\n" self.asm.append
             f"jb .Ltrunc_u64_low_{uid}" self.indent_string
-            "subsd %xmm1, %xmm0" self.indent
-            "cvttsd2siq %xmm0, %rax" self.indent
+            "    subsd %xmm1, %xmm0\n" self.asm.append
+            "    cvttsd2siq %xmm0, %rax\n" self.asm.append
         fi
-        "btc $63, %rax" self.indent
+        "    btc $63, %rax\n" self.asm.append
         f"jmp .Ltrunc_u64_done_{uid}" self.indent_string
         f".Ltrunc_u64_low_{uid}:" self.line_string
         if source common::BuiltinType::F32 == then
-            "cvttss2siq %xmm0, %rax" self.indent
+            "    cvttss2siq %xmm0, %rax\n" self.asm.append
         else
-            "cvttsd2siq %xmm0, %rax" self.indent
+            "    cvttsd2siq %xmm0, %rax\n" self.asm.append
         fi
         f".Ltrunc_u64_done_{uid}:" self.line_string
-        "movq %rax, (%rsp)" self.indent
+        "    movq %rax, (%rsp)\n" self.asm.append
     }
 
     fn emit_float_to_integer
@@ -4573,30 +5168,30 @@ impl Emitter {
         failure:$str
     {
         if source common::BuiltinType::F32 == then
-            "movss (%rsp), %xmm0" self.indent
+            "    movss (%rsp), %xmm0\n" self.asm.append
         else
-            "movsd (%rsp), %xmm0" self.indent
+            "    movsd (%rsp), %xmm0\n" self.asm.append
         fi
         if target common::BuiltinType::U64 == then
             failure source self.emit_truncate_to_u64 return
         fi
         if source common::BuiltinType::F32 == then
-            "cvttss2siq %xmm0, %rax" self.indent
+            "    cvttss2siq %xmm0, %rax\n" self.asm.append
         else
-            "cvttsd2siq %xmm0, %rax" self.indent
+            "    cvttsd2siq %xmm0, %rax\n" self.asm.append
         fi
-        "movq %rax, (%rsp)" self.indent
+        "    movq %rax, (%rsp)\n" self.asm.append
         if target common::BuiltinType::I64 == then
             self.emit_uid = uid
-            "movabsq $-9223372036854775808, %rcx" self.indent
-            "cmpq %rcx, %rax" self.indent
+            "    movabsq $-9223372036854775808, %rcx\n" self.asm.append
+            "    cmpq %rcx, %rax\n" self.asm.append
             f"jne .Ltrunc_i64_done_{uid}" self.indent_string
             if source common::BuiltinType::F32 == then
-                "cvtsi2ssq %rax, %xmm1" self.indent
-                "ucomiss %xmm1, %xmm0" self.indent
+                "    cvtsi2ssq %rax, %xmm1\n" self.asm.append
+                "    ucomiss %xmm1, %xmm0\n" self.asm.append
             else
-                "cvtsi2sdq %rax, %xmm1" self.indent
-                "ucomisd %xmm1, %xmm0" self.indent
+                "    cvtsi2sdq %rax, %xmm1\n" self.asm.append
+                "    ucomisd %xmm1, %xmm0\n" self.asm.append
             fi
             f"jp {failure}" self.indent_string
             f"jne {failure}" self.indent_string
@@ -4626,19 +5221,19 @@ impl Emitter {
             conversion.source common::BuiltinType::F32 ==
             conversion.target common::BuiltinType::F64 == &&
         then
-            "movss (%rsp), %xmm0" self.indent
-            "cvtss2sd %xmm0, %xmm0" self.indent
-            "movq %xmm0, (%rsp)" self.indent
+            "    movss (%rsp), %xmm0\n" self.asm.append
+            "    cvtss2sd %xmm0, %xmm0\n" self.asm.append
+            "    movq %xmm0, (%rsp)\n" self.asm.append
             return
         fi
         if
             conversion.source common::BuiltinType::F64 ==
             conversion.target common::BuiltinType::F32 == &&
         then
-            "movsd (%rsp), %xmm0" self.indent
-            "cvtsd2ss %xmm0, %xmm0" self.indent
-            "movd %xmm0, %eax" self.indent
-            "movq %rax, (%rsp)" self.indent
+            "    movsd (%rsp), %xmm0\n" self.asm.append
+            "    cvtsd2ss %xmm0, %xmm0\n" self.asm.append
+            "    movd %xmm0, %eax\n" self.asm.append
+            "    movq %rax, (%rsp)\n" self.asm.append
             return
         fi
         if conversion.source.is_float conversion.target.is_integer && then
@@ -4650,77 +5245,77 @@ impl Emitter {
         self.emit_uid = uid
         f".Lnumeric_try_fail_{uid}" = failure
         f".Lnumeric_try_done_{uid}" = done_label
-        "movq (%rsp), %r10" self.indent
+        "    movq (%rsp), %r10\n" self.asm.append
 
         if source.is_integer target.is_integer && then
             target self.emit_normalize_numeric
             if source.is_unsigned ! target.is_unsigned && then
-                "testq %r10, %r10" self.indent
+                "    testq %r10, %r10\n" self.asm.append
                 f"js {failure}" self.indent_string
             elif source.is_unsigned target.is_unsigned ! && then
-                "cmpq $0, (%rsp)" self.indent
+                "    cmpq $0, (%rsp)\n" self.asm.append
                 f"jl {failure}" self.indent_string
             fi
-            "cmpq %r10, (%rsp)" self.indent
+            "    cmpq %r10, (%rsp)\n" self.asm.append
             f"jne {failure}" self.indent_string
         elif source.is_integer target.is_float && then
             target source self.emit_integer_to_float
             if target common::BuiltinType::F32 == then
-                "movss (%rsp), %xmm0" self.indent
+                "    movss (%rsp), %xmm0\n" self.asm.append
             else
-                "movsd (%rsp), %xmm0" self.indent
+                "    movsd (%rsp), %xmm0\n" self.asm.append
             fi
             if source common::BuiltinType::U64 == then
                 "%xmm1" target "18446744073709551616.0" self.emit_float_constant
                 if target common::BuiltinType::F32 == then
-                    "ucomiss %xmm1, %xmm0" self.indent
+                    "    ucomiss %xmm1, %xmm0\n" self.asm.append
                 else
-                    "ucomisd %xmm1, %xmm0" self.indent
+                    "    ucomisd %xmm1, %xmm0\n" self.asm.append
                 fi
                 f"jae {failure}" self.indent_string
                 "%xmm1" target "9223372036854775808.0" self.emit_float_constant
                 if target common::BuiltinType::F32 == then
-                    "ucomiss %xmm1, %xmm0" self.indent
+                    "    ucomiss %xmm1, %xmm0\n" self.asm.append
                     f"jb .Lnumeric_try_uint_low_{uid}" self.indent_string
-                    "subss %xmm1, %xmm0" self.indent
-                    "cvttss2siq %xmm0, %rax" self.indent
+                    "    subss %xmm1, %xmm0\n" self.asm.append
+                    "    cvttss2siq %xmm0, %rax\n" self.asm.append
                 else
-                    "ucomisd %xmm1, %xmm0" self.indent
+                    "    ucomisd %xmm1, %xmm0\n" self.asm.append
                     f"jb .Lnumeric_try_uint_low_{uid}" self.indent_string
-                    "subsd %xmm1, %xmm0" self.indent
-                    "cvttsd2siq %xmm0, %rax" self.indent
+                    "    subsd %xmm1, %xmm0\n" self.asm.append
+                    "    cvttsd2siq %xmm0, %rax\n" self.asm.append
                 fi
-                "btc $63, %rax" self.indent
+                "    btc $63, %rax\n" self.asm.append
                 f"jmp .Lnumeric_try_uint_done_{uid}" self.indent_string
                 f".Lnumeric_try_uint_low_{uid}:" self.line_string
                 if target common::BuiltinType::F32 == then
-                    "cvttss2siq %xmm0, %rax" self.indent
+                    "    cvttss2siq %xmm0, %rax\n" self.asm.append
                 else
-                    "cvttsd2siq %xmm0, %rax" self.indent
+                    "    cvttsd2siq %xmm0, %rax\n" self.asm.append
                 fi
                 f".Lnumeric_try_uint_done_{uid}:" self.line_string
             elif target common::BuiltinType::F32 == then
-                "cvttss2siq %xmm0, %rax" self.indent
+                "    cvttss2siq %xmm0, %rax\n" self.asm.append
             else
-                "cvttsd2siq %xmm0, %rax" self.indent
+                "    cvttsd2siq %xmm0, %rax\n" self.asm.append
             fi
-            "cmpq %r10, %rax" self.indent
+            "    cmpq %r10, %rax\n" self.asm.append
             f"jne {failure}" self.indent_string
         elif source.is_float target.is_integer && then
             failure.as_str target source self.emit_float_to_integer
-            "movq (%rsp), %r11" self.indent
+            "    movq (%rsp), %r11\n" self.asm.append
             source target self.emit_integer_to_float
-            "movq %r10, %xmm1" self.indent
+            "    movq %r10, %xmm1\n" self.asm.append
             if source common::BuiltinType::F32 == then
-                "movss (%rsp), %xmm0" self.indent
-                "ucomiss %xmm1, %xmm0" self.indent
+                "    movss (%rsp), %xmm0\n" self.asm.append
+                "    ucomiss %xmm1, %xmm0\n" self.asm.append
             else
-                "movsd (%rsp), %xmm0" self.indent
-                "ucomisd %xmm1, %xmm0" self.indent
+                "    movsd (%rsp), %xmm0\n" self.asm.append
+                "    ucomisd %xmm1, %xmm0\n" self.asm.append
             fi
             f"jp {failure}" self.indent_string
             f"jne {failure}" self.indent_string
-            "movq %r11, (%rsp)" self.indent
+            "    movq %r11, (%rsp)\n" self.asm.append
         elif source.is_float target.is_float && then
             false = check_narrowing
             if source target != then
@@ -4729,50 +5324,50 @@ impl Emitter {
                 conversion self.emit_numeric_conversion
             fi
             if check_narrowing then
-                "movq (%rsp), %r11" self.indent
+                "    movq (%rsp), %r11\n" self.asm.append
                 common::BuiltinType::F64 common::BuiltinType::F32 common::NumericConversionKind::Exact common::NumericConversion
                 self.emit_numeric_conversion
-                "movq %r10, %xmm1" self.indent
-                "movsd (%rsp), %xmm0" self.indent
-                "ucomisd %xmm1, %xmm0" self.indent
+                "    movq %r10, %xmm1\n" self.asm.append
+                "    movsd (%rsp), %xmm0\n" self.asm.append
+                "    ucomisd %xmm1, %xmm0\n" self.asm.append
                 f"jp {failure}" self.indent_string
                 f"jne {failure}" self.indent_string
-                "movq %r11, (%rsp)" self.indent
+                "    movq %r11, (%rsp)\n" self.asm.append
             fi
         else
             f"jmp {failure}" self.indent_string
         fi
-        "movq $1, %rax" self.indent
+        "    movq $1, %rax\n" self.asm.append
         f"jmp {done_label}" self.indent_string
         f"{failure}:" self.line_string
-        "movq $0, (%rsp)" self.indent
-        "xorq %rax, %rax" self.indent
+        "    movq $0, (%rsp)\n" self.asm.append
+        "    xorq %rax, %rax\n" self.asm.append
         f"{done_label}:" self.line_string
-        "pushq %rax" self.indent
+        "    pushq %rax\n" self.asm.append
     }
 
     fn emit_float_binary self:mut$Emitter instruction:str {
-        "movq (%rsp), %xmm0" self.indent
-        "addq $8, %rsp" self.indent
-        "movq (%rsp), %xmm1" self.indent
+        "    movq (%rsp), %xmm0\n" self.asm.append
+        "    addq $8, %rsp\n" self.asm.append
+        "    movq (%rsp), %xmm1\n" self.asm.append
         f"{instruction} %xmm0, %xmm1" self.indent_string
-        "movq %xmm1, (%rsp)" self.indent
+        "    movq %xmm1, (%rsp)\n" self.asm.append
     }
 
     fn emit_float_comparison self:mut$Emitter setcc:str instruction:str {
-        "movq (%rsp), %xmm0" self.indent
-        "addq $8, %rsp" self.indent
+        "    movq (%rsp), %xmm0\n" self.asm.append
+        "    addq $8, %rsp\n" self.asm.append
         f"{instruction} (%rsp), %xmm0" self.indent_string
         f"{setcc} %al" self.indent_string
         if "setne" setcc == then
-            "setp %cl" self.indent
-            "orb %cl, %al" self.indent
+            "    setp %cl\n" self.asm.append
+            "    orb %cl, %al\n" self.asm.append
         else
-            "setnp %cl" self.indent
-            "andb %cl, %al" self.indent
+            "    setnp %cl\n" self.asm.append
+            "    andb %cl, %al\n" self.asm.append
         fi
-        "movzbq %al, %rax" self.indent
-        "movq %rax, (%rsp)" self.indent
+        "    movzbq %al, %rax\n" self.asm.append
+        "    movq %rax, (%rsp)\n" self.asm.append
     }
 
     fn emit_float_round self:mut$Emitter kind:RoundingKind target:common::BuiltinType {
@@ -4784,44 +5379,44 @@ impl Emitter {
         # Values at or above the significand limit are already integral. This
         # also preserves infinities and NaNs without requiring SSE4.1.
         if target common::BuiltinType::F32 == then
-            "movss (%rsp), %xmm0" self.indent
-            "movd %xmm0, %eax" self.indent
-            "movl %eax, %ecx" self.indent
+            "    movss (%rsp), %xmm0\n" self.asm.append
+            "    movd %xmm0, %eax\n" self.asm.append
+            "    movl %eax, %ecx\n" self.asm.append
             f"andl ${F32_ABSOLUTE_MASK}, %ecx" self.indent_string
             f"cmpl ${F32_INTEGRAL_THRESHOLD_BITS}, %ecx" self.indent_string
             f"jae {done_label}" self.indent_string
-            "cvttss2siq %xmm0, %rax" self.indent
-            "cvtsi2ssq %rax, %xmm1" self.indent
+            "    cvttss2siq %xmm0, %rax\n" self.asm.append
+            "    cvtsi2ssq %rax, %xmm1\n" self.asm.append
         else
-            "movsd (%rsp), %xmm0" self.indent
-            "movq %xmm0, %rax" self.indent
-            "movq %rax, %rcx" self.indent
+            "    movsd (%rsp), %xmm0\n" self.asm.append
+            "    movq %xmm0, %rax\n" self.asm.append
+            "    movq %rax, %rcx\n" self.asm.append
             f"btrq ${F64_SIGN_BIT_INDEX}, %rcx" self.indent_string
             f"movabsq ${F64_INTEGRAL_THRESHOLD_BITS}, %rdx" self.indent_string
-            "cmpq %rdx, %rcx" self.indent
+            "    cmpq %rdx, %rcx\n" self.asm.append
             f"jae {done_label}" self.indent_string
-            "cvttsd2siq %xmm0, %rax" self.indent
-            "cvtsi2sdq %rax, %xmm1" self.indent
+            "    cvttsd2siq %xmm0, %rax\n" self.asm.append
+            "    cvtsi2sdq %rax, %xmm1\n" self.asm.append
         fi
 
         kind match
             RoundingKind::Floor => {
                 if target common::BuiltinType::F32 == then
-                    "ucomiss %xmm1, %xmm0" self.indent
+                    "    ucomiss %xmm1, %xmm0\n" self.asm.append
                 else
-                    "ucomisd %xmm1, %xmm0" self.indent
+                    "    ucomisd %xmm1, %xmm0\n" self.asm.append
                 fi
                 f"jae {result_label}" self.indent_string
-                "decq %rax" self.indent
+                "    decq %rax\n" self.asm.append
             }
             RoundingKind::Ceil => {
                 if target common::BuiltinType::F32 == then
-                    "ucomiss %xmm1, %xmm0" self.indent
+                    "    ucomiss %xmm1, %xmm0\n" self.asm.append
                 else
-                    "ucomisd %xmm1, %xmm0" self.indent
+                    "    ucomisd %xmm1, %xmm0\n" self.asm.append
                 fi
                 f"jbe {result_label}" self.indent_string
-                "incq %rax" self.indent
+                "    incq %rax\n" self.asm.append
             }
             RoundingKind::Trunc => {
             }
@@ -4829,18 +5424,18 @@ impl Emitter {
                 f".Lfloat_round_adjust_{label_id}" = adjust_label
                 f".Lfloat_round_negative_{label_id}" = negative_label
                 if target common::BuiltinType::F32 == then
-                    "movaps %xmm0, %xmm2" self.indent
-                    "subss %xmm1, %xmm2" self.indent
-                    "movd %xmm2, %ecx" self.indent
+                    "    movaps %xmm0, %xmm2\n" self.asm.append
+                    "    subss %xmm1, %xmm2\n" self.asm.append
+                    "    movd %xmm2, %ecx\n" self.asm.append
                     f"andl ${F32_ABSOLUTE_MASK}, %ecx" self.indent_string
                     f"cmpl ${F32_HALF_BITS}, %ecx" self.indent_string
                 else
-                    "movapd %xmm0, %xmm2" self.indent
-                    "subsd %xmm1, %xmm2" self.indent
-                    "movq %xmm2, %rcx" self.indent
+                    "    movapd %xmm0, %xmm2\n" self.asm.append
+                    "    subsd %xmm1, %xmm2\n" self.asm.append
+                    "    movq %xmm2, %rcx\n" self.asm.append
                     f"btrq ${F64_SIGN_BIT_INDEX}, %rcx" self.indent_string
                     f"movabsq ${F64_HALF_BITS}, %rdx" self.indent_string
-                    "cmpq %rdx, %rcx" self.indent
+                    "    cmpq %rdx, %rcx\n" self.asm.append
                 fi
                 f"jb {result_label}" self.indent_string
                 f"ja {adjust_label}" self.indent_string
@@ -4848,35 +5443,35 @@ impl Emitter {
                 f"jz {result_label}" self.indent_string
                 f"{adjust_label}:" self.line_string
                 if target common::BuiltinType::F32 == then
-                    "cmpl $0, (%rsp)" self.indent
+                    "    cmpl $0, (%rsp)\n" self.asm.append
                 else
-                    "cmpq $0, (%rsp)" self.indent
+                    "    cmpq $0, (%rsp)\n" self.asm.append
                 fi
                 f"js {negative_label}" self.indent_string
-                "incq %rax" self.indent
+                "    incq %rax\n" self.asm.append
                 f"jmp {result_label}" self.indent_string
                 f"{negative_label}:" self.line_string
-                "decq %rax" self.indent
+                "    decq %rax\n" self.asm.append
             }
         end
 
         f"{result_label}:" self.line_string
         if target common::BuiltinType::F32 == then
-            "cvtsi2ssq %rax, %xmm0" self.indent
-            "movd %xmm0, %eax" self.indent
-            "cmpl $0, (%rsp)" self.indent
+            "    cvtsi2ssq %rax, %xmm0\n" self.asm.append
+            "    movd %xmm0, %eax\n" self.asm.append
+            "    cmpl $0, (%rsp)\n" self.asm.append
             f"jns {store_label}" self.indent_string
             f"btsl ${F32_SIGN_BIT_INDEX}, %eax" self.indent_string
             f"{store_label}:" self.line_string
-            "movq %rax, (%rsp)" self.indent
+            "    movq %rax, (%rsp)\n" self.asm.append
         else
-            "cvtsi2sdq %rax, %xmm0" self.indent
-            "movq %xmm0, %rax" self.indent
-            "cmpq $0, (%rsp)" self.indent
+            "    cvtsi2sdq %rax, %xmm0\n" self.asm.append
+            "    movq %xmm0, %rax\n" self.asm.append
+            "    cmpq $0, (%rsp)\n" self.asm.append
             f"jns {store_label}" self.indent_string
             f"btsq ${F64_SIGN_BIT_INDEX}, %rax" self.indent_string
             f"{store_label}:" self.line_string
-            "movq %rax, (%rsp)" self.indent
+            "    movq %rax, (%rsp)\n" self.asm.append
         fi
         f"{done_label}:" self.line_string
     }
@@ -4903,123 +5498,150 @@ impl Emitter {
             }
         end
         integer_try.target self.emit_normalize_numeric
-        "pushq $1" self.indent
+        "    pushq $1\n" self.asm.append
         f"jmp {done_label}" self.indent_string
         f"{failure}:" self.line_string
-        "movq $0, (%rsp)" self.indent
-        "pushq $0" self.indent
+        "    movq $0, (%rsp)\n" self.asm.append
+        "    pushq $0\n" self.asm.append
         f"{done_label}:" self.line_string
     }
 
     fn emit_float_from_decimal self:mut$Emitter {
         self.emit_uid = uid
-        "fildq (%rsp)" self.indent
-        "addq $8, %rsp" self.indent
-        "popq %rcx" self.indent
-        "testq %rcx, %rcx" self.indent
+        "    fildq (%rsp)\n" self.asm.append
+        "    addq $8, %rsp\n" self.asm.append
+        "    popq %rcx\n" self.asm.append
+        "    testq %rcx, %rcx\n" self.asm.append
         f"jz .Ldecimal_float_done_{uid}" self.indent_string
-        "xorq %rdx, %rdx" self.indent
-        "testq %rcx, %rcx" self.indent
+        "    xorq %rdx, %rdx\n" self.asm.append
+        "    testq %rcx, %rcx\n" self.asm.append
         f"jns .Ldecimal_float_abs_ready_{uid}" self.indent_string
-        "negq %rcx" self.indent
-        "movq $1, %rdx" self.indent
+        "    negq %rcx\n" self.asm.append
+        "    movq $1, %rdx\n" self.asm.append
         f".Ldecimal_float_abs_ready_{uid}:" self.line_string
-        "fld1" self.indent
-        "fildl float_decimal_ten(%rip)" self.indent
+        "    fld1\n" self.asm.append
+        "    fildl float_decimal_ten(%rip)\n" self.asm.append
         f".Ldecimal_float_power_loop_{uid}:" self.line_string
-        "testq $1, %rcx" self.indent
+        "    testq $1, %rcx\n" self.asm.append
         f"jz .Ldecimal_float_power_skip_{uid}" self.indent_string
-        "fmul %st(0), %st(1)" self.indent
+        "    fmul %st(0), %st(1)\n" self.asm.append
         f".Ldecimal_float_power_skip_{uid}:" self.line_string
-        "shrq $1, %rcx" self.indent
+        "    shrq $1, %rcx\n" self.asm.append
         f"jz .Ldecimal_float_power_done_{uid}" self.indent_string
-        "fmul %st(0), %st(0)" self.indent
+        "    fmul %st(0), %st(0)\n" self.asm.append
         f"jmp .Ldecimal_float_power_loop_{uid}" self.indent_string
         f".Ldecimal_float_power_done_{uid}:" self.line_string
-        "fstp %st(0)" self.indent
-        "testq %rdx, %rdx" self.indent
+        "    fstp %st(0)\n" self.asm.append
+        "    testq %rdx, %rdx\n" self.asm.append
         f"jnz .Ldecimal_float_divide_{uid}" self.indent_string
-        "fmulp %st(0), %st(1)" self.indent
+        "    fmulp %st(0), %st(1)\n" self.asm.append
         f"jmp .Ldecimal_float_done_{uid}" self.indent_string
         f".Ldecimal_float_divide_{uid}:" self.line_string
-        "fdivrp %st(0), %st(1)" self.indent
+        "    fdivrp %st(0), %st(1)\n" self.asm.append
         f".Ldecimal_float_done_{uid}:" self.line_string
-        "subq $8, %rsp" self.indent
-        "fstpl (%rsp)" self.indent
+        "    subq $8, %rsp\n" self.asm.append
+        "    fstpl (%rsp)\n" self.asm.append
     }
 
     fn emit_float_significand self:mut$Emitter {
         self.emit_uid = uid
-        "fldl (%rsp)" self.indent
-        "addq $8, %rsp" self.indent
-        "popq %rcx" self.indent
-        "testq %rcx, %rcx" self.indent
+        "    fldl (%rsp)\n" self.asm.append
+        "    addq $8, %rsp\n" self.asm.append
+        "    popq %rcx\n" self.asm.append
+        "    testq %rcx, %rcx\n" self.asm.append
         f"jz .Lfloat_significand_done_{uid}" self.indent_string
-        "xorq %rdx, %rdx" self.indent
-        "testq %rcx, %rcx" self.indent
+        "    xorq %rdx, %rdx\n" self.asm.append
+        "    testq %rcx, %rcx\n" self.asm.append
         f"jns .Lfloat_significand_abs_ready_{uid}" self.indent_string
-        "negq %rcx" self.indent
-        "movq $1, %rdx" self.indent
+        "    negq %rcx\n" self.asm.append
+        "    movq $1, %rdx\n" self.asm.append
         f".Lfloat_significand_abs_ready_{uid}:" self.line_string
-        "fld1" self.indent
-        "fildl float_decimal_ten(%rip)" self.indent
+        "    fld1\n" self.asm.append
+        "    fildl float_decimal_ten(%rip)\n" self.asm.append
         f".Lfloat_significand_power_loop_{uid}:" self.line_string
-        "testq $1, %rcx" self.indent
+        "    testq $1, %rcx\n" self.asm.append
         f"jz .Lfloat_significand_power_skip_{uid}" self.indent_string
-        "fmul %st(0), %st(1)" self.indent
+        "    fmul %st(0), %st(1)\n" self.asm.append
         f".Lfloat_significand_power_skip_{uid}:" self.line_string
-        "shrq $1, %rcx" self.indent
+        "    shrq $1, %rcx\n" self.asm.append
         f"jz .Lfloat_significand_power_done_{uid}" self.indent_string
-        "fmul %st(0), %st(0)" self.indent
+        "    fmul %st(0), %st(0)\n" self.asm.append
         f"jmp .Lfloat_significand_power_loop_{uid}" self.indent_string
         f".Lfloat_significand_power_done_{uid}:" self.line_string
-        "fstp %st(0)" self.indent
-        "testq %rdx, %rdx" self.indent
+        "    fstp %st(0)\n" self.asm.append
+        "    testq %rdx, %rdx\n" self.asm.append
         f"jnz .Lfloat_significand_divide_{uid}" self.indent_string
-        "fmulp %st(0), %st(1)" self.indent
+        "    fmulp %st(0), %st(1)\n" self.asm.append
         f"jmp .Lfloat_significand_done_{uid}" self.indent_string
         f".Lfloat_significand_divide_{uid}:" self.line_string
-        "fdivrp %st(0), %st(1)" self.indent
+        "    fdivrp %st(0), %st(1)\n" self.asm.append
         f".Lfloat_significand_done_{uid}:" self.line_string
-        "frndint" self.indent
-        "subq $8, %rsp" self.indent
-        "fistpq (%rsp)" self.indent
+        "    frndint\n" self.asm.append
+        "    subq $8, %rsp\n" self.asm.append
+        "    fistpq (%rsp)\n" self.asm.append
+    }
+
+    fn emit_string_bytes_equal self:mut$Emitter {
+        self.emit_uid = uid
+        "    movq %rcx, %rdx\n" self.asm.append
+        "    shrq $3, %rcx\n" self.asm.append
+        f"jz .Lbytes_tail_{uid}" self.indent_string
+        f".Lbytes_words_{uid}:" self.line_string
+        "    movq (%rdi), %rax\n" self.asm.append
+        "    cmpq (%rsi), %rax\n" self.asm.append
+        f"jne .Lbytes_done_{uid}" self.indent_string
+        "    addq $8, %rdi\n" self.asm.append
+        "    addq $8, %rsi\n" self.asm.append
+        "    decq %rcx\n" self.asm.append
+        f"jnz .Lbytes_words_{uid}" self.indent_string
+        f".Lbytes_tail_{uid}:" self.line_string
+        "    andq $7, %rdx\n" self.asm.append
+        f"jz .Lbytes_done_{uid}" self.indent_string
+        f".Lbytes_next_{uid}:" self.line_string
+        "    movb (%rdi), %al\n" self.asm.append
+        "    cmpb (%rsi), %al\n" self.asm.append
+        f"jne .Lbytes_done_{uid}" self.indent_string
+        "    incq %rdi\n" self.asm.append
+        "    incq %rsi\n" self.asm.append
+        "    decq %rdx\n" self.asm.append
+        f"jnz .Lbytes_next_{uid}" self.indent_string
+        f".Lbytes_done_{uid}:" self.line_string
     }
 
     fn emit_str_eq self:mut$Emitter {
         self.emit_uid = uid
-        "popq %rsi" self.indent
-        "popq %rdi" self.indent
-        "movq (%rdi), %rcx" self.indent
-        "cmpq (%rsi), %rcx" self.indent
+        "    popq %rsi\n" self.asm.append
+        "    popq %rdi\n" self.asm.append
+        "    movq (%rdi), %rcx\n" self.asm.append
+        "    cmpq (%rsi), %rcx\n" self.asm.append
         f"jne .Lstreq_ne_{uid}" self.indent_string
-        "leaq 8(%rdi), %rdi" self.indent
-        "leaq 8(%rsi), %rsi" self.indent
-        "repe cmpsb" self.indent
+        "    leaq 8(%rdi), %rdi\n" self.asm.append
+        "    leaq 8(%rsi), %rsi\n" self.asm.append
+        self.emit_string_bytes_equal
         f"jne .Lstreq_ne_{uid}" self.indent_string
-        "pushq $1" self.indent
+        "    pushq $1\n" self.asm.append
         f"jmp .Lstreq_done_{uid}" self.indent_string
         f".Lstreq_ne_{uid}:" self.line_string
-        "pushq $0" self.indent
+        "    pushq $0\n" self.asm.append
         f".Lstreq_done_{uid}:" self.line_string
     }
 
     fn emit_mixed_string_eq self:mut$Emitter owned_register:$str {
         self.emit_uid = uid
-        "popq %rsi" self.indent
-        "popq %rdi" self.indent
+        "    popq %rsi\n" self.asm.append
+        "    popq %rdi\n" self.asm.append
         f"movq ({owned_register}), {owned_register}" self.indent_string
-        "movq (%rdi), %rcx" self.indent
-        "cmpq (%rsi), %rcx" self.indent
+        "    movq (%rdi), %rcx\n" self.asm.append
+        "    cmpq (%rsi), %rcx\n" self.asm.append
         f"jne .Lstreq_ne_{uid}" self.indent_string
-        "leaq 8(%rdi), %rdi" self.indent
-        "leaq 8(%rsi), %rsi" self.indent
-        "repe cmpsb" self.indent
+        "    leaq 8(%rdi), %rdi\n" self.asm.append
+        "    leaq 8(%rsi), %rsi\n" self.asm.append
+        self.emit_string_bytes_equal
         f"jne .Lstreq_ne_{uid}" self.indent_string
-        "pushq $1" self.indent
+        "    pushq $1\n" self.asm.append
         f"jmp .Lstreq_done_{uid}" self.indent_string
         f".Lstreq_ne_{uid}:" self.line_string
-        "pushq $0" self.indent
+        "    pushq $0\n" self.asm.append
         f".Lstreq_done_{uid}:" self.line_string
     }
 
@@ -5031,71 +5653,71 @@ impl Emitter {
     fn emit_inst self:mut$Emitter inst:$InstValue is_global:bool {
         inst match
             InstValue::PushFloat32(value) => {
-                "jmp 1f" self.indent
-                ".align 4" self.line
-                "0:" self.line
+                "    jmp 1f\n" self.asm.append
+                ".align 4\n" self.asm.append
+                "0:\n" self.asm.append
                 f".float {value}" self.line_string
-                "1:" self.line
-                "movl 0b(%rip), %eax" self.indent
-                "pushq %rax" self.indent
+                "1:\n" self.asm.append
+                "    movl 0b(%rip), %eax\n" self.asm.append
+                "    pushq %rax\n" self.asm.append
             }
             InstValue::PushFloat64(value) => {
-                "jmp 1f" self.indent
-                ".align 8" self.line
-                "0:" self.line
+                "    jmp 1f\n" self.asm.append
+                ".align 8\n" self.asm.append
+                "0:\n" self.asm.append
                 f".double {value}" self.line_string
-                "1:" self.line
-                "pushq 0b(%rip)" self.indent
+                "1:\n" self.asm.append
+                "    pushq 0b(%rip)\n" self.asm.append
             }
             InstValue::PushStaticArray(array_index byte_count) => {
                 f"movq ${byte_count}, %rdi" self.indent_string
-                "heap_alloc" self.emit_call_via_return_stack
-                "movq (%rsp), %rdi" self.indent
+                "    call heap_alloc_native\n    pushq %rax\n" self.asm.append
+                "    movq (%rsp), %rdi\n" self.asm.append
                 f"leaq static_array_{array_index}(%rip), %rsi" self.indent_string
                 f"movq ${byte_count}, %rcx" self.indent_string
-                "rep movsb" self.indent
+                "    rep movsb\n" self.asm.append
             }
 
             # Arithmetic / bitshift / bitwise / boolean / comparison
             InstValue::Div => {
-                "popq %rbx" self.indent
-                "popq %rax" self.indent
-                "cqto" self.indent
-                "idivq %rbx" self.indent
-                "pushq %rax" self.indent
+                "    popq %rbx\n" self.asm.append
+                "    popq %rax\n" self.asm.append
+                "    cqto\n" self.asm.append
+                "    idivq %rbx\n" self.asm.append
+                "    pushq %rax\n" self.asm.append
             }
             InstValue::Mod => {
-                "popq %rbx" self.indent
-                "popq %rax" self.indent
-                "cqto" self.indent
-                "idivq %rbx" self.indent
-                "pushq %rdx" self.indent
+                "    popq %rbx\n" self.asm.append
+                "    popq %rax\n" self.asm.append
+                "    cqto\n" self.asm.append
+                "    idivq %rbx\n" self.asm.append
+                "    pushq %rdx\n" self.asm.append
             }
             InstValue::Shl => {
-                "popq %rcx" self.indent
-                "shlq %cl, (%rsp)" self.indent
+                "    popq %rcx\n" self.asm.append
+                "    shlq %cl, (%rsp)\n" self.asm.append
             }
             InstValue::Shr => {
-                "popq %rcx" self.indent
-                "sarq %cl, (%rsp)" self.indent
+                "    popq %rcx\n" self.asm.append
+                "    sarq %cl, (%rsp)\n" self.asm.append
             }
             InstValue::UDiv => {
-                "popq %rbx" self.indent
-                "popq %rax" self.indent
-                "xorq %rdx, %rdx" self.indent
-                "divq %rbx" self.indent
-                "pushq %rax" self.indent
+                "    popq %rbx\n" self.asm.append
+                "    popq %rax\n" self.asm.append
+                "    xorq %rdx, %rdx\n" self.asm.append
+                "    divq %rbx\n" self.asm.append
+                "    pushq %rax\n" self.asm.append
             }
             InstValue::UMod => {
-                "popq %rbx" self.indent
-                "popq %rax" self.indent
-                "xorq %rdx, %rdx" self.indent
-                "divq %rbx" self.indent
-                "pushq %rdx" self.indent
+                "    popq %rbx\n" self.asm.append
+                "    popq %rax\n" self.asm.append
+                "    xorq %rdx, %rdx\n" self.asm.append
+                "    divq %rbx\n" self.asm.append
+                "    pushq %rdx\n" self.asm.append
             }
             InstValue::UShr => {
-                "popq %rcx" self.indent
-                "shrq %cl, (%rsp)" self.indent
+                "    popq %rcx\n" self.asm.append
+                "    shrq %cl, (%rsp)\n" self.asm.append
             }
             InstValue::NormalizeInt(builtin) => builtin self.emit_normalize_numeric
             InstValue::CheckedAdd(builtin) => "arithmetic_error" builtin self.emit_checked_add
@@ -5135,27 +5757,27 @@ impl Emitter {
             # Control flow / variables / functions
             InstValue::Label(label) => f".L{label}:" self.line_string
             InstValue::Jump(label) => f"jmp .L{label}" self.indent_string
+            InstValue::JumpTable(targets fallback) => {
+                self.emit_uid = identity
+                targets.length = count
+                "    popq %rax\n" self.asm.append
+                f"cmpq ${count}, %rax" self.indent_string
+                f"jae .L{fallback}" self.indent_string
+                f"jmp *.Ldispatch_{identity}(,%rax,8)" self.indent_string
+                ".p2align 3\n" self.asm.append
+                f".Ldispatch_{identity}:" self.line_string
+                for target in targets.iter do
+                    f".quad .L{target}" self.line_string
+                done
+            }
             InstValue::LocalsInit(count) => {
                 if 0 count == then
                     return
                 fi
                 count common::WORD_SIZE * = byte_count
-                "movq %r14, %rdi" self.indent
+                # Every value slot is assigned before use. Ownership flags are
+                # initialized explicitly when the complete frame is finalized.
                 byte_count self.emit_return_stack_reservation
-                if MAX_DIRECT_LOCAL_WORDS count <= then
-                    "xorq %rax, %rax" self.indent
-                    0 u64::try_from.unwrap = index
-                    while index count > do
-                        f"movq %rax, {index common::WORD_SIZE *}(%rdi)" self.indent_string
-                        1 += index
-                    done
-                    f"leaq {byte_count}(%rdi), %rdi" self.indent_string
-                    "movq $0, %rcx" self.indent
-                else
-                    f"movq ${count}, %rcx" self.indent_string
-                    "xorq %rax, %rax" self.indent
-                    "rep stosq" self.indent
-                fi
             }
             InstValue::LocalsUninit(count) => {
                 if 0 count != then
@@ -5165,86 +5787,86 @@ impl Emitter {
             InstValue::ConstantLoad(constant_index) => {
                 constant_index common::WORD_SIZE * = offset
                 f"movq constants+{offset}(%rip), %rax" self.indent_string
-                "pushq %rax" self.indent
+                "    pushq %rax\n" self.asm.append
             }
             InstValue::ConstantStore(constant_index) => {
                 constant_index common::WORD_SIZE * = offset
-                "popq %rax" self.indent
+                "    popq %rax\n" self.asm.append
                 f"movq %rax, constants+{offset}(%rip)" self.indent_string
             }
             InstValue::CaptureLoad(capture_index) => {
                 capture_index 2 * 2 + common::WORD_SIZE * = offset
-                "movq current_env(%rip), %rax" self.indent
+                "    movq current_env(%rip), %rax\n" self.asm.append
                 f"movq {offset}(%rax), %rax" self.indent_string
-                "pushq %rax" self.indent
+                "    pushq %rax\n" self.asm.append
             }
             InstValue::CaptureSet(capture_index) => {
                 capture_index 2 * 2 + common::WORD_SIZE * = offset
-                "popq %rax" self.indent
-                "movq current_env(%rip), %rbx" self.indent
+                "    popq %rax\n" self.asm.append
+                "    movq current_env(%rip), %rbx\n" self.asm.append
                 f"movq %rax, {offset}(%rbx)" self.indent_string
             }
             InstValue::CaptureFlagLoad(capture_index) => {
                 capture_index 2 * 3 + common::WORD_SIZE * = offset
-                "movq current_env(%rip), %rax" self.indent
+                "    movq current_env(%rip), %rax\n" self.asm.append
                 f"movq {offset}(%rax), %rax" self.indent_string
-                "pushq %rax" self.indent
+                "    pushq %rax\n" self.asm.append
             }
             InstValue::CaptureFlagClear(capture_index) => {
                 capture_index 2 * 3 + common::WORD_SIZE * = offset
-                "movq current_env(%rip), %rax" self.indent
+                "    movq current_env(%rip), %rax\n" self.asm.append
                 f"movq $0, {offset}(%rax)" self.indent_string
             }
             InstValue::CaptureFlagMark(capture_index) => {
                 capture_index 2 * 3 + common::WORD_SIZE * = offset
-                "movq current_env(%rip), %rax" self.indent
+                "    movq current_env(%rip), %rax\n" self.asm.append
                 f"movq $1, {offset}(%rax)" self.indent_string
             }
             InstValue::ClosureDrop => {
                 self.emit_uid = uid
-                "popq %rax" self.indent
-                "movq 8(%rax), %rdx" self.indent
-                "testq %rdx, %rdx" self.indent
+                "    popq %rax\n" self.asm.append
+                "    movq 8(%rax), %rdx\n" self.asm.append
+                "    testq %rdx, %rdx\n" self.asm.append
                 f"jz .Lclosure_drop_done_{uid}" self.indent_string
                 common::WORD_SIZE self.emit_return_stack_reservation
-                "movq current_env(%rip), %rbx" self.indent
-                "movq env_sp(%rip), %rcx" self.indent
+                "    movq current_env(%rip), %rbx\n" self.asm.append
+                "    movq env_sp(%rip), %rcx\n" self.asm.append
                 f"cmpq ${RETURN_STACK_SIZE}, %rcx" self.indent_string
-                "jge env_stack_overflow" self.indent
-                "movq %rbx, env_stack(%rcx)" self.indent
-                "addq $8, %rcx" self.indent
-                "movq %rcx, env_sp(%rip)" self.indent
-                "movq %rax, current_env(%rip)" self.indent
-                "pushq %rax" self.indent
-                "callq *%rdx" self.indent
-                "movq env_sp(%rip), %rcx" self.indent
-                "subq $8, %rcx" self.indent
-                "movq %rcx, env_sp(%rip)" self.indent
-                "movq env_stack(%rcx), %rax" self.indent
-                "movq %rax, current_env(%rip)" self.indent
+                "    jge env_stack_overflow\n" self.asm.append
+                "    movq %rbx, env_stack(%rcx)\n" self.asm.append
+                "    addq $8, %rcx\n" self.asm.append
+                "    movq %rcx, env_sp(%rip)\n" self.asm.append
+                "    movq %rax, current_env(%rip)\n" self.asm.append
+                "    pushq %rax\n" self.asm.append
+                "    callq *%rdx\n" self.asm.append
+                "    movq env_sp(%rip), %rcx\n" self.asm.append
+                "    subq $8, %rcx\n" self.asm.append
+                "    movq %rcx, env_sp(%rip)\n" self.asm.append
+                "    movq env_stack(%rcx), %rax\n" self.asm.append
+                "    movq %rax, current_env(%rip)\n" self.asm.append
                 f".Lclosure_drop_done_{uid}:" self.line_string
             }
             InstValue::ClosureRecord(capture_count) => {
                 capture_count 2 * 2 + common::WORD_SIZE * = record_size
                 f"movq ${record_size}, %rdi" self.indent_string
-                "heap_alloc" self.emit_call_via_return_stack
-                "popq %rdx" self.indent
+                "    call heap_alloc_native\n    pushq %rax\n" self.asm.append
+                "    popq %rdx\n" self.asm.append
                 # Stack top is the destruction function, followed by the call function.
-                "popq %rax" self.indent
-                "movq %rax, 8(%rdx)" self.indent
-                "popq %rax" self.indent
-                "movq %rax, (%rdx)" self.indent
+                "    popq %rax\n" self.asm.append
+                "    movq %rax, 8(%rdx)\n" self.asm.append
+                "    popq %rax\n" self.asm.append
+                "    movq %rax, (%rdx)\n" self.asm.append
                 capture_count 0 + = capture_remaining
                 while 0 capture_remaining > do
                     capture_remaining 1 - 2 * 2 + common::WORD_SIZE * = field_offset
                     field_offset 8 + = flag_offset
-                    "popq %rax" self.indent
+                    "    popq %rax\n" self.asm.append
                     f"movq %rax, {flag_offset}(%rdx)" self.indent_string
-                    "popq %rax" self.indent
+                    "    popq %rax\n" self.asm.append
                     f"movq %rax, {field_offset}(%rdx)" self.indent_string
                     capture_remaining 1 - = capture_remaining
                 done
-                "pushq %rdx" self.indent
+                "    pushq %rdx\n" self.asm.append
             }
             InstValue::FnCall(fn_name) => {
                 fn_name.as_str self.function_label = fn_label
@@ -5258,72 +5880,72 @@ impl Emitter {
                 # current_env to the popped closure record so its body can access
                 # captured values via InstCaptureLoad. After the callee returns,
                 # restore the previous env.
-                "popq %rax" self.indent
-                "movq current_env(%rip), %rbx" self.indent
-                "movq env_sp(%rip), %rcx" self.indent
+                "    popq %rax\n" self.asm.append
+                "    movq current_env(%rip), %rbx\n" self.asm.append
+                "    movq env_sp(%rip), %rcx\n" self.asm.append
                 f"cmpq ${RETURN_STACK_SIZE}, %rcx" self.indent_string
-                "jge env_stack_overflow" self.indent
-                "movq %rbx, env_stack(%rcx)" self.indent
-                "addq $8, %rcx" self.indent
-                "movq %rcx, env_sp(%rip)" self.indent
-                "movq %rax, current_env(%rip)" self.indent
-                "movq (%rax), %rax" self.indent
-                "callq *%rax" self.indent
-                "movq env_sp(%rip), %rcx" self.indent
-                "subq $8, %rcx" self.indent
-                "movq %rcx, env_sp(%rip)" self.indent
-                "movq env_stack(%rcx), %rax" self.indent
-                "movq %rax, current_env(%rip)" self.indent
+                "    jge env_stack_overflow\n" self.asm.append
+                "    movq %rbx, env_stack(%rcx)\n" self.asm.append
+                "    addq $8, %rcx\n" self.asm.append
+                "    movq %rcx, env_sp(%rip)\n" self.asm.append
+                "    movq %rax, current_env(%rip)\n" self.asm.append
+                "    movq (%rax), %rax\n" self.asm.append
+                "    callq *%rax\n" self.asm.append
+                "    movq env_sp(%rip), %rcx\n" self.asm.append
+                "    subq $8, %rcx\n" self.asm.append
+                "    movq %rcx, env_sp(%rip)\n" self.asm.append
+                "    movq env_stack(%rcx), %rax\n" self.asm.append
+                "    movq %rax, current_env(%rip)\n" self.asm.append
             }
             InstValue::FnPush(fn_name) => {
                 fn_name.as_str self.function_label = fn_label
                 f"leaq fn_{fn_label}(%rip), %rax" self.indent_string
-                "pushq %rax" self.indent
+                "    pushq %rax\n" self.asm.append
             }
             InstValue::FnPushStatic(fn_name) => {
                 fn_name.as_str self.function_label = fn_label
                 f"leaq closure_{fn_label}(%rip), %rax" self.indent_string
-                "pushq %rax" self.indent
+                "    pushq %rax\n" self.asm.append
             }
             InstValue::Panic => {
-                "popq %rdi" self.indent
-                "movq (%rdi), %rdx" self.indent
-                "leaq 8(%rdi), %rsi" self.indent
+                "    popq %rdi\n" self.asm.append
+                "    movq (%rdi), %rdx\n" self.asm.append
+                "    leaq 8(%rdi), %rsi\n" self.asm.append
                 f"movq ${STDERR_FD}, %rdi" self.indent_string
                 "write_all" self.emit_call_via_return_stack
                 f"movq ${EXIT_SYSCALL}, %rax" self.indent_string
                 f"movq ${FAILURE_STATUS}, %rdi" self.indent_string
-                "syscall" self.indent
+                "    syscall\n" self.asm.append
             }
             InstValue::FnReturn => {
                 if is_global then
-                    "movq $60, %rax" self.indent
-                    "xorq %rdi, %rdi" self.indent
-                    "syscall" self.indent
+                    "    movq $60, %rax\n" self.asm.append
+                    "    xorq %rdi, %rdi\n" self.asm.append
+                    "    syscall\n" self.asm.append
                 else
-                    "subq $8, %r14" self.indent
-                    "pushq (%r14)" self.indent
-                    "ret" self.indent
+                    "    subq $8, %r14\n" self.asm.append
+                    "    pushq (%r14)\n" self.asm.append
+                    "    ret\n" self.asm.append
                 fi
             }
             InstValue::DropFn(fn_name) => {
                 fn_name.as_str self.function_label = fn_label
                 f"leaq fn_{fn_label}(%rip), %rax" self.indent_string
-                "pushq %rax" self.indent
+                "    pushq %rax\n" self.asm.append
             }
 
             # Memory operations
             InstValue::HeapAlloc => {
-                "popq %rdi" self.indent
-                "heap_alloc" self.emit_call_via_return_stack
+                "    popq %rdi\n" self.asm.append
+                "    call heap_alloc_native\n    pushq %rax\n" self.asm.append
             }
             InstValue::HeapFree => {
-                "popq %rdi" self.indent
-                "heap_free" self.emit_call_via_return_stack
+                "    popq %rdi\n" self.asm.append
+                "    call heap_free_native\n" self.asm.append
             }
             InstValue::HeapFreeIfAllocated => self.emit_heap_free_if_allocated
             InstValue::ReadIndirect(size) => size self.emit_indirect_read
-            InstValue::WriteIndirect(size) => size self.emit_indirect_write
+            InstValue::WriteIndirect(size owned) => owned size self.emit_indirect_write
             InstValue::MoveBytes(size) => size self.emit_move_bytes
 
             # IO operations
@@ -5332,13 +5954,13 @@ impl Emitter {
             InstValue::PrintBool => self.select_print_bool
             InstValue::PrintStr => self.select_print_str
             InstValue::PrintString => {
-                "popq %r12" self.indent
-                "movq (%r12), %rdi" self.indent
+                "    popq %r12\n" self.asm.append
+                "    movq (%r12), %rdi\n" self.asm.append
                 "print_str" self.emit_call_via_return_stack
-                "movq (%r12), %rdi" self.indent
-                "heap_free" self.emit_call_via_return_stack
-                "movq %r12, %rdi" self.indent
-                "heap_free" self.emit_call_via_return_stack
+                "    movq (%r12), %rdi\n" self.asm.append
+                "    call heap_free_native\n" self.asm.append
+                "    movq %r12, %rdi\n" self.asm.append
+                "    call heap_free_native\n" self.asm.append
             }
             InstValue::PrintChar => self.select_print_char
             InstValue::PrintCstr => self.select_print_cstr
@@ -5347,7 +5969,7 @@ impl Emitter {
                 "str_concat" self.emit_call_via_return_stack
             }
             InstValue::PrimitiveToStr(builtin) => {
-                "popq %rdi" self.indent
+                "    popq %rdi\n" self.asm.append
                 0 = kind
                 if builtin.is_unsigned then
                     1 = kind
@@ -5378,16 +6000,16 @@ impl Emitter {
 
             # argc / argv
             InstValue::Argc => {
-                "movq __argc(%rip), %rax" self.indent
-                "pushq %rax" self.indent
+                "    movq __argc(%rip), %rax\n" self.asm.append
+                "    pushq %rax\n" self.asm.append
             }
             InstValue::Argv => {
-                "movq __argv(%rip), %rax" self.indent
-                "pushq %rax" self.indent
+                "    movq __argv(%rip), %rax\n" self.asm.append
+                "    pushq %rax\n" self.asm.append
             }
             InstValue::Envp => {
-                "movq __envp(%rip), %rax" self.indent
-                "pushq %rax" self.indent
+                "    movq __envp(%rip), %rax\n" self.asm.append
+                "    pushq %rax\n" self.asm.append
             }
             _ => "Cached scalar operation reached fallback emitter" panic
         end
@@ -5396,14 +6018,14 @@ impl Emitter {
 
 impl Emitter {
     fn select_print_int self:mut$Emitter {
-        "popq %rdi" self.indent
+        "    popq %rdi\n" self.asm.append
         "print_int" self.emit_call_via_return_stack
     }
 }
 
 impl Emitter {
     fn select_print_uint self:mut$Emitter {
-        "popq %rdi" self.indent
+        "    popq %rdi\n" self.asm.append
         "print_uint" self.emit_call_via_return_stack
     }
 }
@@ -5411,15 +6033,15 @@ impl Emitter {
 impl Emitter {
     fn select_print_bool self:mut$Emitter {
         self.emit_uid = uid
-        "popq %rax" self.indent
-        "testq %rax, %rax" self.indent
+        "    popq %rax\n" self.asm.append
+        "    testq %rax, %rax\n" self.asm.append
         f"jz .Lpb_false_{uid}" self.indent_string
-        "leaq bool_true(%rip), %rsi" self.indent
-        "movq $4, %rdx" self.indent
+        "    leaq bool_true(%rip), %rsi\n" self.asm.append
+        "    movq $4, %rdx\n" self.asm.append
         f"jmp .Lpb_write_{uid}" self.indent_string
         f".Lpb_false_{uid}:" self.line_string
-        "leaq bool_false(%rip), %rsi" self.indent
-        "movq $5, %rdx" self.indent
+        "    leaq bool_false(%rip), %rsi\n" self.asm.append
+        "    movq $5, %rdx\n" self.asm.append
         f".Lpb_write_{uid}:" self.line_string
         f"movq ${STDOUT_FD}, %rdi" self.indent_string
         "write_all" self.emit_call_via_return_stack
@@ -5428,14 +6050,14 @@ impl Emitter {
 
 impl Emitter {
     fn select_print_str self:mut$Emitter {
-        "popq %rdi" self.indent
+        "    popq %rdi\n" self.asm.append
         "print_str" self.emit_call_via_return_stack
     }
 }
 
 impl Emitter {
     fn select_print_char self:mut$Emitter {
-        "popq %rdi" self.indent
+        "    popq %rdi\n" self.asm.append
         "encode_char" self.emit_call_via_return_stack
         f"movq ${STDOUT_FD}, %rdi" self.indent_string
         "write_all" self.emit_call_via_return_stack
@@ -5445,22 +6067,21 @@ impl Emitter {
 impl Emitter {
     fn select_print_cstr self:mut$Emitter {
         self.emit_uid = uid
-        "popq %rsi" self.indent
-        "movq %rsi, %rdi" self.indent
+        "    popq %rsi\n" self.asm.append
+        "    movq %rsi, %rdi\n" self.asm.append
         f".Lpc_scan_{uid}:" self.line_string
-        "cmpb $0, (%rsi)" self.indent
+        "    cmpb $0, (%rsi)\n" self.asm.append
         f"je .Lpc_done_{uid}" self.indent_string
-        "incq %rsi" self.indent
+        "    incq %rsi\n" self.asm.append
         f"jmp .Lpc_scan_{uid}" self.indent_string
         f".Lpc_done_{uid}:" self.line_string
-        "movq %rsi, %rdx" self.indent
-        "subq %rdi, %rdx" self.indent
-        "movq %rdi, %rsi" self.indent
+        "    movq %rsi, %rdx\n" self.asm.append
+        "    subq %rdi, %rdx\n" self.asm.append
+        "    movq %rdi, %rsi\n" self.asm.append
         f"movq ${STDOUT_FD}, %rdi" self.indent_string
         "write_all" self.emit_call_via_return_stack
     }
 }
-
 # A complete physical function plan owns its actions and capture bounds.
 struct FunctionPlan {
     actions:       std::List[InstValue]
@@ -5495,6 +6116,12 @@ impl Emitter {
             action match
                 InstValue::Jump(label) => label label_key labels.has = valid
                 InstValue::JumpNe(label) => label label_key labels.has = valid
+                InstValue::JumpTable(targets fallback) => {
+                    fallback label_key labels.has targets.is_empty ! && = valid
+                    for target in targets.iter do
+                        target copy label_key labels.has valid && = valid
+                    done
+                }
                 InstValue::FnCall(name) => name self.functions.has = valid
                 InstValue::FnPush(name) => name self.functions.has = valid
                 InstValue::FnPushStatic(name) => name self.functions.has = valid
@@ -5624,13 +6251,13 @@ impl FunctionPlanner {
     fn compile_intrinsic
         self:mut$FunctionPlanner
         kind:$semantic_body::IntrinsicKind
-        operation:$common::Op
+        leaf:$semantic_body::Leaf
         bytecode:mut$std::List[InstValue]
     {
         kind match
-            semantic_body::IntrinsicKind::FnExecOwned => bytecode operation self.compile_terminal_op drop
-            semantic_body::IntrinsicKind::WhileBreak => bytecode "" operation self.compile_structural_op drop
-            semantic_body::IntrinsicKind::WhileContinue => bytecode "" operation self.compile_structural_op drop
+            semantic_body::IntrinsicKind::FnExecOwned => bytecode leaf lower_leaf_operation self.compile_terminal_op drop
+            semantic_body::IntrinsicKind::WhileBreak => bytecode "" leaf lower_leaf_operation self.compile_structural_op drop
+            semantic_body::IntrinsicKind::WhileContinue => bytecode "" leaf lower_leaf_operation self.compile_structural_op drop
             semantic_body::IntrinsicKind::PtrFromRef => {
             }
             semantic_body::IntrinsicKind::PtrIntoRaw => {
@@ -5643,7 +6270,7 @@ impl FunctionPlanner {
             semantic_body::IntrinsicKind::FloatFromDecimal => InstValue::FloatFromDecimal bytecode.push
             semantic_body::IntrinsicKind::FloatSignificand => InstValue::FloatSignificand bytecode.push
             _ => {
-                operation.value direct_op_to_inst match
+                kind.lower direct_op_to_inst match
                     std::Option::Some(action) => action bytecode.push
                     std::Option::None => "Missing checked intrinsic plan" self.record_failure
                 end

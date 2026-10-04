@@ -26,6 +26,8 @@ pub fn utf8_byte offset:u64 source:$str -> std::Option[u32] {
 pub fn is_utf8_continuation byte:u32 -> bool { 128 byte >= 191 byte <= && }
 
 # Decode one scalar without replacing malformed input.
+const ASCII_HIGH_BITS 9259542123273814144
+
 pub fn decode_utf8_scalar offset:u64 source:$str -> std::Option[DecodedUtf8Scalar] {
     source offset utf8_byte = first_opt
     if first_opt.is_none then
@@ -91,7 +93,6 @@ pub fn decode_utf8_scalar offset:u64 source:$str -> std::Option[DecodedUtf8Scala
     fi
     std::Option[DecodedUtf8Scalar]::None
 }
-
 # Pushes a byte-indexed source character into a String builder.
 # str::at returns a byte as a char; this reverses that encoding.
 # SAFETY: Source bytes form valid UTF-8 so pushing them back preserves the invariant.
@@ -753,46 +754,39 @@ impl Lexer {
         final_loc common::TokenKind::Literal result common::Token::new
     }
 
-    pub fn peek_word self:mut$Lexer -> std::Option[std::String] {
-        if self Lexer::cursor.is_eof then
-            std::Option::None return
+    fn ends_arrow source:$str start:u64 end_index:u64 -> bool {
+        if 2 end_index start - < then
+            false return
         fi
-        self Lexer::cursor parser::Cursor::pos = position
-        self Lexer::cursor parser::Cursor::source = source: $str
-        std::String::new = builder
+        if '>' end_index 1 - source.at != then
+            false return
+        fi
+        end_index 2 - source.at = previous
+        '-' previous == '=' previous == ||
+    }
 
+    pub fn peek_word self:mut$Lexer -> std::Option[std::String] {
+        self.cursor.pos = start
+        start = position
+        self.cursor.source = source: $str
         while position source.length > do
             position source.at = character
-            if character common::delimiter_from_char.is_some then
+            if character common::is_delimiter_char character.is_space || then
                 break
             fi
-            if character.is_space then
+            # Preserve delimiter precedence and the existing arrow boundary.
+            if position start source Lexer::ends_arrow then
+                if 2 position start - > then
+                    2 -= position
+                fi
                 break
             fi
-            builder.as_str = word
-            if "->" word == then
-                break
-            fi
-            if "=>" word == then
-                break
-            fi
-            if word "->" str::ends_with then
-                word.length = word_length
-                word 0 word_length 2 - str::substring std::Option::Some return
-            fi
-            if word "=>" str::ends_with then
-                word.length = word_length
-                word 0 word_length 2 - str::substring std::Option::Some return
-            fi
-            character builder push_source_byte
             1 += position
         done
-
-        builder = final_word
-        if 0 final_word.length == then
-            std::Option::None
+        if position start == then
+            std::Option[std::String]::None
         else
-            final_word std::Option::Some
+            source start position start - str::substring std::Option::Some
         fi
     }
 
@@ -1010,7 +1004,7 @@ impl Lexer {
             self.parse_char std::Option::Some return
         fi
         # Single-char delimiter
-        if character common::delimiter_from_char.is_some then
+        if character common::is_delimiter_char then
             self Lexer::cursor parser::Cursor::pos = position
             std::String::new = builder
             character builder.push
@@ -1042,8 +1036,36 @@ impl Lexer {
 
     pub fn lex self:Lexer -> LexResult {
         0 = utf8_offset: u64
-        while utf8_offset self Lexer::cursor parser::Cursor::source.length > do
-            self Lexer::cursor parser::Cursor::source utf8_offset decode_utf8_scalar = decoded_opt
+        while
+            utf8_offset self
+                .cursor
+                .source
+                .length >
+        do
+            if
+                8 self
+                    .cursor
+                    .source
+                    .length utf8_offset - >=
+            then
+                # SAFETY: Eight bytes remain within the source borrow.
+                unsafe { self.cursor.source ptr::from_ref 8 + utf8_offset + load64 } = word
+                if word ASCII_HIGH_BITS & 0 == then
+                    8 += utf8_offset
+                    continue
+                fi
+            fi
+            if
+                128 utf8_offset self
+                    .cursor
+                    .source
+                    .at
+                    .codepoint <
+            then
+                1 += utf8_offset
+                continue
+            fi
+            self.cursor.source utf8_offset decode_utf8_scalar = decoded_opt
             if decoded_opt std::Option::Some(decoded) is then
                 decoded.byte_length += utf8_offset
             else
@@ -1085,7 +1107,6 @@ impl Lexer {
         end
     }
 }
-
 # Escape sequence
 pub fn hex_digit_value character:char -> i64 {
     if '0' character >= '9' character <= && then
@@ -1135,7 +1156,6 @@ pub fn is_float_literal value:$str -> bool {
     value "e" str::contains ||
     value "E" str::contains ||
 }
-
 # Public API
 pub fn lex_source code:$str file:$str -> LexResult { false file.to_str code Lexer::new.lex }
 
