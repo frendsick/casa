@@ -33,7 +33,7 @@ const SHORT_COPY_LIMIT 64
 
 enum FunctionWork {
     Checked (std::String)
-    Destruction (std::String common::Type bool)
+    Destruction (std::String common::Type)
     ClosureDestruction (std::String std::String)
 }
 
@@ -522,7 +522,6 @@ impl FunctionPlanner {
         skipped:mut$std::List[std::String]
         op:$common::Op
         bytecode:mut$std::List[InstValue]
-        release_storage:bool
     {
         casa_struct.type_vars typ common::aggregate_type_bindings = substitutions
         casa_struct.members.length = member_index
@@ -550,7 +549,7 @@ impl FunctionPlanner {
             bytecode plan member.typ compiler.emit_field_load
             bytecode op member_type compiler.compile_destruction
         done
-        if release_storage then InstValue::HeapFree else InstValue::Drop fi bytecode.push
+        InstValue::HeapFree bytecode.push
     }
 
     fn compile_enum_variant_fields
@@ -561,7 +560,6 @@ impl FunctionPlanner {
         skipped_count:u64
         op:$common::Op
         bytecode:mut$std::List[InstValue]
-        release_storage:bool
     {
         casa_enum.type_vars typ common::aggregate_type_bindings = substitutions
         if variant_name casa_enum.variant_types.get_str std::Option::Some(payload_types) is then
@@ -586,7 +584,7 @@ impl FunctionPlanner {
                 bytecode op payload_type compiler.compile_destruction
             done
         fi
-        if release_storage then InstValue::HeapFree else InstValue::Drop fi bytecode.push
+        InstValue::HeapFree bytecode.push
     }
 
     fn compile_enum_fields
@@ -595,7 +593,6 @@ impl FunctionPlanner {
         casa_enum:$common::CasaEnum
         op:$common::Op
         bytecode:mut$std::List[InstValue]
-        release_storage:bool
     {
         compiler.allocate_local = enum_local
         enum_local InstValue::LocalSet bytecode.push
@@ -611,7 +608,7 @@ impl FunctionPlanner {
         for variant_name in casa_enum.variants.iter do
             variant_index labels.get copy InstValue::Label bytecode.push
             enum_local InstValue::LocalGet bytecode.push
-            release_storage bytecode op 0 variant_name.as_str casa_enum typ compiler.compile_enum_variant_fields
+            bytecode op 0 variant_name.as_str casa_enum typ compiler.compile_enum_variant_fields
             end_label InstValue::Jump bytecode.push
             1 += variant_index
         done
@@ -623,7 +620,6 @@ impl FunctionPlanner {
         typ:$common::Type
         op:$common::Op
         bytecode:mut$std::List[InstValue]
-        release_storage:bool
     {
         if
             typ compiler
@@ -632,7 +628,7 @@ impl FunctionPlanner {
                 .has_plain_storage
         then
             bytecode typ compiler.compile_drop_hook
-            if release_storage then InstValue::HeapFree else InstValue::Drop fi bytecode.push
+            InstValue::HeapFree bytecode.push
             return
         fi
         typ compiler
@@ -646,7 +642,7 @@ impl FunctionPlanner {
             InstValue::ClosureDrop bytecode.push return
         fi
         if typ compiler.is_copy_aggregate then
-            if release_storage then InstValue::HeapFreeIfAllocated else InstValue::Drop fi bytecode.push return
+            InstValue::HeapFreeIfAllocated bytecode.push return
         fi
         bytecode typ compiler.compile_drop_hook
         shape match
@@ -654,7 +650,7 @@ impl FunctionPlanner {
                 typ common::get_array_length_parameter.unwrap = length
                 typ.array_element_type.unwrap = element_type
                 bytecode op length element_type compiler.compile_array_destruction
-                if release_storage then InstValue::HeapFree else InstValue::Drop fi bytecode.push
+                InstValue::HeapFree bytecode.push
             }
             typechecker::CheckedShape::Struct => {
                 typ.match_base = name
@@ -665,7 +661,7 @@ impl FunctionPlanner {
                     .get
                     .unwrap = struct_declaration
                 std::List[std::String]::new = skipped
-                release_storage bytecode op skipped struct_declaration typ compiler.compile_struct_fields
+                bytecode op skipped struct_declaration typ compiler.compile_struct_fields
             }
             typechecker::CheckedShape::Enum => {
                 typ.match_base = name
@@ -676,7 +672,7 @@ impl FunctionPlanner {
                     .get
                     .unwrap = enum_declaration
                 if enum_declaration common::has_inner_values then
-                    release_storage bytecode op enum_declaration typ compiler.compile_enum_fields
+                    bytecode op enum_declaration typ compiler.compile_enum_fields
                 else
                     InstValue::Drop bytecode.push
                 fi
@@ -692,13 +688,9 @@ impl FunctionPlanner {
             .needs_destruction
     }
 
-    fn ensure_destruction_function
-        compiler:mut$FunctionPlanner
-        typ:$common::Type
-        release_storage:bool
-    -> std::String {
+    fn ensure_destruction_function compiler:mut$FunctionPlanner typ:$common::Type -> std::String {
         typ.format = type_name
-        if release_storage then f"__drop_{type_name}" else f"__destroy_{type_name}" fi = function_name
+        f"__drop_{type_name}" = function_name
         if
             function_name compiler
                 .state
@@ -712,7 +704,7 @@ impl FunctionPlanner {
             .state
             .program
             .register_function
-        release_storage typ.clone function_name.clone FunctionWork::Destruction compiler
+        typ.clone function_name.clone FunctionWork::Destruction compiler
             .state
             .pending
             .push
@@ -729,15 +721,6 @@ impl FunctionPlanner {
             InstValue::Drop bytecode.push
             return
         fi
-        # A read immediately consumed by destruction needs no temporary owner.
-        # The source storage becomes uninitialized, but its allocation stays live.
-        true = release_storage
-        if bytecode.is_empty ! then
-            if bytecode.length 1 - bytecode.get InstValue::ReadIndirect is then
-                bytecode.pop drop
-                false = release_storage
-            fi
-        fi
         if
             typ compiler
                 .state
@@ -745,10 +728,10 @@ impl FunctionPlanner {
                 .has_plain_storage
         then
             bytecode typ compiler.compile_drop_hook
-            if release_storage then InstValue::HeapFree else InstValue::Drop fi bytecode.push
+            InstValue::HeapFree bytecode.push
             return
         fi
-        release_storage typ compiler.ensure_destruction_function = function_name
+        typ compiler.ensure_destruction_function = function_name
         function_name InstValue::FnCall bytecode.push
     }
 
@@ -769,7 +752,7 @@ impl FunctionPlanner {
             if generic.base store.enums.get std::Option::Some(owned_enum) is then
                 if owned_enum common::has_inner_values then
                     variant.bindings.length = skipped_count
-                    true bytecode op skipped_count variant.variant_name.as_str owned_enum typ
+                    bytecode op skipped_count variant.variant_name.as_str owned_enum typ
                     compiler.compile_enum_variant_fields
                     return
                 fi
@@ -808,7 +791,7 @@ impl FunctionPlanner {
                 if op common::pattern_value_of common::PatternValue::Struct(struct_pattern) is then
                     struct_pattern.bindings.keys = skipped
                 fi
-                true bytecode op skipped owned_struct typ compiler.compile_struct_fields
+                bytecode op skipped owned_struct typ compiler.compile_struct_fields
                 return
             fi
             if generic.base store.enums.get std::Option::Some(owned_enum) is then
@@ -816,7 +799,7 @@ impl FunctionPlanner {
                     InstValue::Drop bytecode.push return
                 fi
                 if op common::pattern_value_of common::PatternValue::EnumVariant(variant) is then
-                    true bytecode op owned_enum typ compiler.compile_enum_fields
+                    bytecode op owned_enum typ compiler.compile_enum_fields
                     return
                 fi
             fi
@@ -2621,7 +2604,7 @@ impl FunctionPlanner {
             semantic_body::Action::StructMemberStore(_) => bytecode "" leaf lower_leaf_operation self.compile_structural_op drop
             semantic_body::Action::DestructionFn(typ) => {
                 if typ self.destruction_needs_function then
-                    true typ self.ensure_destruction_function InstValue::DropFn bytecode.push
+                    typ self.ensure_destruction_function InstValue::DropFn bytecode.push
                 else
                     0 InstValue::Push bytecode.push
                 fi
@@ -3212,11 +3195,11 @@ fn plan_function
             output body compiler.compile_body
             function.captures.length false compiler.owner_flags compiler.locals_count output finalize_frame FunctionPlan::new
         }
-        FunctionWork::Destruction(name typ release_storage) => {
+        FunctionWork::Destruction(name typ) => {
             common::empty_location name.clone common::Function::new = function
             function state FunctionPlanner::for_function = compiler
             common::empty_location common::OpValue::OwnerCleanup common::Op::new = operation
-            release_storage output operation typ compiler.compile_destruction_body
+            output operation typ compiler.compile_destruction_body
             0 false compiler.owner_flags compiler.locals_count output finalize_frame FunctionPlan::new
         }
         FunctionWork::ClosureDestruction(name lambda_name) => {
@@ -3471,7 +3454,7 @@ pub fn compile_partitioned
         fi
         index state.pending.get match
             FunctionWork::Checked(value) => value.clone FunctionWork::Checked
-            FunctionWork::Destruction(value typ release_storage) => release_storage typ.clone value.clone FunctionWork::Destruction
+            FunctionWork::Destruction(value typ) => typ.clone value.clone FunctionWork::Destruction
             FunctionWork::ClosureDestruction(value lambda) => lambda.clone value.clone FunctionWork::ClosureDestruction
         end = current
         current state checked plan_function = body
