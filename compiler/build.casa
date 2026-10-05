@@ -2,19 +2,13 @@
 import "std" as std
 import "os" as os
 import "products" as products
-import "common" as common
-import "runtime" as runtime
 
-const PRIVATE_DIRECTORY_PERMISSIONS 448
-const PARALLEL_ASSEMBLY_THRESHOLD 1048576
-const GETPID_SYSCALL 39
 const PIPE2_SYSCALL 293
 const FORK_SYSCALL 57
 const EXECVE_SYSCALL 59
 const WAIT4_SYSCALL 61
 const O_CLOEXEC 524288
 const EINTR_RESULT -4
-const EIO_RESULT -5
 const SIGNAL_MASK 127
 const EXIT_STATUS_SHIFT 8
 const EXIT_STATUS_MASK 255
@@ -39,145 +33,6 @@ impl BuildFailure: std::Display {
     }
 }
 
-struct NativeChild {
-    pid:    i64
-    errors: i64
-}
-
-impl NativeChild {
-    fn wait self:NativeChild -> std::Result[bool BuildFailure] {
-        self.pid = child_pid
-        self.errors = read_fd
-        8 std::RawBuffer::new = pipe_fds
-        0 = read_result
-        while true do
-            8 pipe_fds.data read_fd file::read = read_result
-            if EINTR_RESULT read_result != then
-                break
-            fi
-        done
-        read_fd file::close drop
-        8 std::RawBuffer::new = status
-        0 = wait_result
-        while true do
-            # SAFETY: status has room for wait4's status word. The child belongs
-            # to this process and null rusage requests no resource record.
-            unsafe { ptr::null 0 status.data child_pid WAIT4_SYSCALL syscall4 = wait_result }
-            if EINTR_RESULT wait_result != then
-                break
-            fi
-        done
-        if 0 read_result < then
-            read_result os::errno_to_io_error BuildFailure::Launch std::Result::Error return
-        fi
-        if 0 read_result > then
-            # SAFETY: The child writes one complete i64 before it exits.
-            unsafe { pipe_fds.data ptr::read[i64] }
-            os::errno_to_io_error BuildFailure::Launch std::Result::Error return
-        fi
-        if 0 wait_result < then
-            wait_result os::errno_to_io_error BuildFailure::Wait std::Result::Error return
-        fi
-        # SAFETY: Successful wait4 initialized the i32 status word.
-        unsafe { status.data ptr::read[i32] i64::from = child_status }
-        child_status SIGNAL_MASK & = signal
-        if 0 signal != then
-            signal BuildFailure::Signal std::Result::Error return
-        fi
-        child_status EXIT_STATUS_SHIFT >> EXIT_STATUS_MASK & = exit_status
-        if 0 exit_status != then
-            exit_status BuildFailure::Exit std::Result::Error return
-        fi
-        true std::Result::Ok
-    }
-}
-
-struct NativeObjects {
-    directory: std::String
-    paths:     std::List[std::String]
-    sources:   std::List[std::String]
-}
-
-impl NativeObjects {
-    fn new output:$str -> std::Result[NativeObjects BuildFailure] {
-        # SAFETY: getpid has no pointer arguments and cannot fail on this target.
-        unsafe { GETPID_SYSCALL syscall0 = pid }
-        0 = attempt: u64
-        while true do
-            f"{output}.parts.{pid}.{attempt}" = directory
-            PRIVATE_DIRECTORY_PERMISSIONS directory
-                .as_str
-                .as_cstr
-                .unwrap dir::create match
-                std::Result::Ok(_) => {
-                    std::List[std::String]::new std::List[std::String]::new directory NativeObjects std::Result::Ok return
-                }
-                std::Result::Error(error) => {
-                    if error os::IoError::AlreadyExists is ! then
-                        error directory BuildFailure::Write std::Result::Error return
-                    fi
-                }
-            end
-            1 += attempt
-        done
-        "Unreachable native object directory search" panic
-    }
-
-    fn drop self:mut$NativeObjects {
-        for path in self.paths.iter do
-            path
-                .as_str
-                .as_cstr
-                .unwrap file::remove drop
-        done
-        for path in self.sources.iter do
-            path
-                .as_str
-                .as_cstr
-                .unwrap file::remove drop
-        done
-        self
-            .directory
-            .as_str
-            .as_cstr
-            .unwrap dir::remove drop
-    }
-}
-# Write emitter-owned ranges without copying the complete assembly buffer.
-fn write_part path:$cstr text:$str spans:$std::List[common::Span] -> std::Result[bool os::IoError] {
-    420 os::O_WRONLY os::O_CREAT | os::O_TRUNC | path file::open = descriptor
-    if 0 descriptor < then
-        descriptor os::errno_to_io_error std::Result::Error return
-    fi
-    for span in spans.iter do
-        0 = written: u64
-        while written span.length > do
-            # SAFETY: The emitter records initialized ranges inside text. Its
-            # shared borrow keeps those bytes live until all writes finish.
-            unsafe {
-                span.length written - text ptr::from_ref 8 + span.offset + written +
-                descriptor 1 syscall3 = count
-            }
-            if EINTR_RESULT count == then
-                continue
-            fi
-            if 0 count == then
-                EIO_RESULT = count
-            fi
-            if 0 count < then
-                descriptor file::close drop
-                count os::errno_to_io_error std::Result::Error return
-            fi
-            count u64::try_from.unwrap += written
-        done
-    done
-    descriptor file::close = closed
-    if 0 closed < then
-        closed os::errno_to_io_error std::Result::Error return
-    fi
-    true std::Result::Ok
-}
-
 pub struct NativeDriver {
     pub executable: std::String
 }
@@ -186,14 +41,14 @@ impl NativeDriver {
     pub fn new -> NativeDriver { "/usr/bin/cc".to_str NativeDriver }
 
     # A close-on-exec pipe separates launch errors from the tool's exit status.
-    # The child retains its forked argv storage until execve. Tool stderr is inherited.
-    fn start arguments:$std::List[std::Bytes] -> std::Result[NativeChild BuildFailure] {
+    # All argv owners stay live until wait4 reaps the child. Tool stderr is inherited.
+    fn run arguments:$std::List[std::Bytes] -> std::Result[bool BuildFailure] {
         arguments.length 1 + size_of[ptr] * std::RawBuffer::new = arguments_buffer
         0 = index: u64
         for argument in arguments.iter do
             if argument.as_cstr std::Option::Some(text) is then
                 # SAFETY: argv has one slot per argument plus a terminator. The
-                # child retains the NUL-terminated argument until execve.
+                # borrowed NUL-terminated argument remains live through wait4.
                 unsafe { text ptr::from_ref arguments_buffer.data index size_of[ptr] * + ptr::write[ptr] }
             else
                 os::EINVAL os::IoError::Other BuildFailure::Launch std::Result::Error return
@@ -238,79 +93,50 @@ impl NativeDriver {
             1 process::exit
         fi
         write_fd file::close drop
-        read_fd child_pid NativeChild std::Result::Ok
-    }
-
-    fn run arguments:$std::List[std::Bytes] -> std::Result[bool BuildFailure] {
-        arguments NativeDriver::start ? NativeChild::wait
-    }
-
-    # Join every started child before temporary objects can be reclaimed.
-    fn assemble_parts
-        self:$NativeDriver
-        source:$products::AssemblySource
-        assembly_path:$str
-        output:$str
-    -> std::Result[NativeObjects BuildFailure] {
-        output NativeObjects::new ? = objects
-        std::List[NativeChild]::new = children
-        std::Option[BuildFailure]::None = failure
-        0 = part: u64
-        while part runtime::ASSEMBLY_PARTS > do
-            objects.directory.as_str = directory
-            f"{directory}/{part}.o" = object_path
-            object_path.clone objects.paths.push
-            std::List[std::Bytes]::new = arguments
-            self.executable.as_str arguments.push_str
-            "-c" arguments.push_str
-            f"-Wa,--defsym,CASA_PART={part}" = selection
-            selection.as_str arguments.push_str
-            assembly_path.to_str = source_path
-            if source.get_parts.is_empty ! then
-                f"{directory}/{part}.s" = source_path
-                source_path.clone objects.sources.push
-                part source.get_parts.get source.get_text.as_str source_path
-                    .as_str
-                    .as_cstr
-                    .unwrap
-                write_part match
-                    std::Result::Ok(_) => {
-                    }
-                    std::Result::Error(error) => {
-                        error source_path BuildFailure::Write std::Option::Some = failure
-                        break
-                    }
-                end
+        0 = read_result
+        while true do
+            8 pipe_fds.data read_fd file::read = read_result
+            if EINTR_RESULT read_result != then
+                break
             fi
-            source_path.as_str arguments.push_str
-            "-o" arguments.push_str
-            object_path.as_str arguments.push_str
-            arguments NativeDriver::start match
-                std::Result::Ok(child) => child children.push
-                std::Result::Error(error) => {
-                    error std::Option::Some = failure
-                    break
-                }
-            end
-            1 += part
         done
-        while children.is_empty ! do
-            children.pop.wait match
-                std::Result::Ok(_) => {
-                }
-                std::Result::Error(error) => {
-                    if failure.is_none then error std::Option::Some = failure fi
-                }
-            end
+        read_fd file::close drop
+        8 std::RawBuffer::new = status
+        0 = wait_result
+        while true do
+            # SAFETY: status has room for wait4's status word. The child belongs
+            # to this process and null rusage requests no resource record.
+            unsafe { ptr::null 0 status.data child_pid WAIT4_SYSCALL syscall4 = wait_result }
+            if EINTR_RESULT wait_result != then
+                break
+            fi
         done
-        if failure std::Option::Some(error) is then
-            error std::Result::Error return
+        if 0 read_result < then
+            read_result os::errno_to_io_error BuildFailure::Launch std::Result::Error return
         fi
-        objects std::Result::Ok
+        if 0 read_result > then
+            # SAFETY: The child writes one complete i64 before it exits.
+            unsafe { pipe_fds.data ptr::read[i64] }
+            os::errno_to_io_error BuildFailure::Launch std::Result::Error return
+        fi
+        if 0 wait_result < then
+            wait_result os::errno_to_io_error BuildFailure::Wait std::Result::Error return
+        fi
+        # SAFETY: Successful wait4 initialized the i32 status word.
+        unsafe { status.data ptr::read[i32] i64::from = child_status }
+        child_status SIGNAL_MASK & = signal
+        if 0 signal != then
+            signal BuildFailure::Signal std::Result::Error return
+        fi
+        child_status EXIT_STATUS_SHIFT >> EXIT_STATUS_MASK & = exit_status
+        if 0 exit_status != then
+            exit_status BuildFailure::Exit std::Result::Error return
+        fi
+        true std::Result::Ok
     }
 
-    # Assemble large outputs in parallel, then link and clean up temporary files.
-    # --keep-asm keeps complete source on success or failure.
+    # Write complete target assembly, assemble and link once, then clean up even
+    # on native failures. --keep-asm keeps the complete source on success or failure.
     pub fn compile_binary
         self:$NativeDriver
         source:$products::AssemblySource
@@ -323,40 +149,13 @@ impl NativeDriver {
             }
         end
         f"{output}.s" = assembly_path
-        if
-            assembly_path
-                .as_str
-                .as_cstr
-                .is_none
-        then
-            os::EINVAL os::IoError::Other assembly_path BuildFailure::Write std::Result::Error return
-        fi
-        PARALLEL_ASSEMBLY_THRESHOLD source.get_text.length >=
-        source.get_text.as_str ".ifndef CASA_PART\n" str::starts_with && = parallel
-        if parallel ! keep_asm || source.get_parts.is_empty || then
-            if assembly_path.as_str.as_cstr std::Option::Some(path) is then
-                source.get_text.as_str std::Bytes::from_str path file::write_all = written
-                if written std::Result::Error(error) is then
-                    error assembly_path BuildFailure::Write std::Result::Error return
-                fi
-            else
-                os::EINVAL os::IoError::Other assembly_path BuildFailure::Write std::Result::Error return
+        if assembly_path.as_str.as_cstr std::Option::Some(path) is then
+            source.get_text.as_str std::Bytes::from_str path file::write_all = written
+            if written std::Result::Error(error) is then
+                error assembly_path BuildFailure::Write std::Result::Error return
             fi
-        fi
-        std::Option[NativeObjects]::None = objects
-        if parallel then
-            output assembly_path.as_str source self.assemble_parts match
-                std::Result::Ok(built_objects) => built_objects std::Option::Some = objects
-                std::Result::Error(error) => {
-                    if keep_asm ! then
-                        assembly_path
-                            .as_str
-                            .as_cstr
-                            .unwrap file::remove drop
-                    fi
-                    error std::Result::Error return
-                }
-            end
+        else
+            os::EINVAL os::IoError::Other assembly_path BuildFailure::Write std::Result::Error return
         fi
         std::List[std::Bytes]::new = arguments
         self.executable.as_str arguments.push_str
@@ -366,14 +165,7 @@ impl NativeDriver {
         "-Wl,-z,noexecstack" arguments.push_str
         "-o" arguments.push_str
         output arguments.push_str
-        objects = object_refs: $std::Option[NativeObjects]
-        if object_refs std::Option::Some(selected) is then
-            for object_path in selected.paths.iter do
-                object_path.as_str arguments.push_str
-            done
-        else
-            assembly_path.as_str arguments.push_str
-        fi
+        assembly_path.as_str arguments.push_str
         for library in libraries.iter do
             "-l" arguments.push_str
             library.as_str arguments.push_str
