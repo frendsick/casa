@@ -46,9 +46,8 @@ allocation_failure_msg: .ascii \"fatal: allocation failed\\n\"
 
 .section .text
 # Each mmap chunk starts with the previous chunk and its end address.
-# Small blocks use exact-size bins. Larger blocks keep first-fit reuse.
-# ponytail: large blocks are not split or coalesced; add both if large-block
-# fragmentation becomes measurable.
+# Small blocks use exact-size bins. Larger free blocks are ordered by address
+# for first-fit reuse, splitting, and coalescing of adjacent large blocks.
 # heap_alloc: requested byte count in %rdi, pushes an aligned pointer.
 heap_alloc:
     popq -8(%r14)
@@ -90,6 +89,27 @@ heap_alloc_native:
     jmp .Lheap_alloc_search
 .Lheap_alloc_reuse:
     movq 8(%rcx), %r8
+    movq (%rcx), %r9
+    subq %rax, %r9
+    # A remainder needs an eight-byte header and at least eight payload bytes.
+    cmpq $16, %r9
+    jb .Lheap_alloc_unlink
+    subq $8, %r9
+    leaq 8(%rcx,%rax), %rdi
+    movq %r9, (%rdi)
+    movq %rax, (%rcx)
+    cmpq $CASA_SMALL_ALLOC_LIMIT, %r9
+    jbe .Lheap_alloc_small_remainder
+    movq %r8, 8(%rdi)
+    movq %rdi, %r8
+    jmp .Lheap_alloc_unlink
+.Lheap_alloc_small_remainder:
+    leaq small_free_lists(%rip), %rax
+    leaq -8(%rax,%r9), %rax
+    movq (%rax), %r9
+    movq %r9, 8(%rdi)
+    movq %rdi, (%rax)
+.Lheap_alloc_unlink:
     testq %rdx, %rdx
     jz .Lheap_alloc_reuse_head
     movq %r8, 8(%rdx)
@@ -198,8 +218,45 @@ heap_free_native:
     jmp .Lheap_free_return
 .Lheap_free_large:
     movq free_list(%rip), %rcx
+    xorq %r8, %r8
+.Lheap_free_search:
+    testq %rcx, %rcx
+    jz .Lheap_free_insert
+    cmpq %rax, %rcx
+    jae .Lheap_free_insert
+    movq %rcx, %r8
+    movq 8(%rcx), %rcx
+    jmp .Lheap_free_search
+.Lheap_free_insert:
     movq %rcx, 8(%rax)
+    testq %r8, %r8
+    jz .Lheap_free_insert_head
+    movq %rax, 8(%r8)
+    jmp .Lheap_free_merge_next
+.Lheap_free_insert_head:
     movq %rax, free_list(%rip)
+.Lheap_free_merge_next:
+    testq %rcx, %rcx
+    jz .Lheap_free_merge_previous
+    leaq 8(%rax,%rdx), %r9
+    cmpq %rcx, %r9
+    jne .Lheap_free_merge_previous
+    movq (%rcx), %r9
+    leaq 8(%rdx,%r9), %rdx
+    movq %rdx, (%rax)
+    movq 8(%rcx), %r9
+    movq %r9, 8(%rax)
+.Lheap_free_merge_previous:
+    testq %r8, %r8
+    jz .Lheap_free_return
+    movq (%r8), %r9
+    leaq 8(%r8,%r9), %rcx
+    cmpq %rax, %rcx
+    jne .Lheap_free_return
+    leaq 8(%rdx,%r9), %rdx
+    movq %rdx, (%r8)
+    movq 8(%rax), %rcx
+    movq %rcx, 8(%r8)
 .Lheap_free_return:
     ret
 
