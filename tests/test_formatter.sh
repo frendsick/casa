@@ -367,6 +367,13 @@ check_formatter_case delimited_requires_commas 1 \
     $'fn f {\n    [1 2 3] use\n}\n' \
     $'fn f {\n    [1 2 3] use\n}\n' \
     'Expected `,` between array items'
+check_formatter_case delimited_nested_requires_commas 1 \
+    $'fn f {\n    [[1][2]] use\n}\n' \
+    $'fn f {\n    [[1][2]] use\n}\n' \
+    'Expected `,` between array items'
+check_formatter_case delimited_nested_items 0 \
+    $'fn f {\n    [[1,2],[3,4],] use\n    [foo::Bar,foo::Baz,] use\n}\n' \
+    $'fn f {\n    [[1, 2], [3, 4]] use\n    [foo::Bar, foo::Baz] use\n}\n'
 # Dropping the optional trailing comma when compacting must not trip the
 # token-equality safety net, since a trailing comma is non-meaningful.
 check_formatter_case delimited_trailing_comma 0 \
