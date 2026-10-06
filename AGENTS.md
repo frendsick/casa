@@ -4,13 +4,9 @@ See [README.md](./README.md) for basic info, language docs, and examples.
 
 ## General principles
 
-- The codebase is the source of truth. Verify against current code before asserting.
 - Don't web-search Casa specifics; this repo is the only authoritative source.
-- When workflow goals conflict, prioritize correctness, fewer user
-  interventions, wall-clock time, then token use.
 - When language features or stdlib functions change, update the corresponding
   documentation, examples, and tests.
-- Never mention Claude or AI usage
 
 ## Code conventions
 
@@ -47,23 +43,15 @@ from the release in `casa-release.env`.
   do not require a release.
 - Create a prerelease compiler only when the user explicitly requests one.
 
-## Progress updates
-
-- For multi-phase work, state the phases before implementation.
-- Report after a commit, validation, review, or blocker. During a multi-minute
-  operation, give only short time-based status updates.
-
 ## Agent documentation
 
 Always load the relevant doc when the matching workflow comes up:
 
-- **Testing**: `docs/agents/testing.md`
-- **Releases**: `docs/agents/testing.md#ci-bootstrap-compiler`
-- **Review**: `docs/agents/review.md`
+- **Domain**: use `CONTEXT.md` for the glossary and `docs/adr/` for decisions.
 - **Examples**: `docs/agents/testing.md#when-examples-change`
-- **Issue tracker**: `docs/agents/issue-tracker.md`
-- **Triage labels**: `docs/agents/triage-labels.md`
-- **Domain docs**: `docs/agents/domain.md`
-- **Memory efficiency**: `docs/agents/memory.md`
 - **Functions**: load `function-design` once per task before adding, changing, or
   reviewing non-trivial functions. Reuse that analysis during review.
+- **Memory efficiency**: `docs/agents/memory.md`
+- **Releases**: `docs/agents/testing.md#ci-bootstrap-compiler`
+- **Review**: `docs/agents/review.md`
+- **Testing**: `docs/agents/testing.md`
