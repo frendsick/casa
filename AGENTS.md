@@ -56,4 +56,3 @@ Always load the relevant doc when the matching workflow comes up:
 - **Releases**: `docs/agents/testing.md#ci-bootstrap-compiler`
 - **Review**: `docs/agents/review.md`
 - **Testing**: `docs/agents/testing.md`
-- **Triage labels**: `docs/agents/triage-labels.md`
