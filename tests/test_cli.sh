@@ -22,7 +22,6 @@ matched=false
 if matches_filter version "$@"; then
     matched=true
     [ "$($COMPILER --version /does/not/exist.casa)" = "$expected" ]
-    [ "$($COMPILER -v)" = "$expected" ]
     if $COMPILER --version --unknown >/tmp/casa_cli_version_out 2>&1; then
         echo "version accepted an unknown argument" >&2
         exit 1
@@ -32,9 +31,11 @@ fi
 
 if matches_filter verbose "$@"; then
     matched=true
-    output=$($COMPILER --verbose examples/hello_world.casa -o /tmp/casa_cli_test 2>&1)
-    printf '%s\n' "$output" | grep -q 'Analyzing examples/hello_world.casa'
-    rm -f /tmp/casa_cli_test
+    for flag in -v --verbose; do
+        output=$("$COMPILER" "$flag" examples/hello_world.casa -o "$CLI_TMP/hello_world" 2>&1)
+        printf '%s\n' "$output" | grep -q 'Analyzing examples/hello_world.casa'
+        [ "$("$CLI_TMP/hello_world")" = 'Hello world!' ]
+    done
 fi
 
 if matches_filter process_exit "$@"; then
