@@ -52,8 +52,8 @@ Common compiler options:
 | `-l`, `--link-library` | Link a native library |
 | `-o`, `--output` | Set the output binary name |
 | `-r`, `--run` | Run the program after compilation |
-| `--verbose` | Print compiler progress |
-| `-v`, `--version` | Print the compiler version |
+| `-v`, `--verbose` | Print compiler progress |
+| `--version` | Print the compiler version |
 
 ## Learn Casa
 
