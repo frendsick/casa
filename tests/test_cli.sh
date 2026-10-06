@@ -38,6 +38,21 @@ if matches_filter verbose "$@"; then
     done
 fi
 
+if matches_filter missing_import "$@"; then
+    matched=true
+    if "$COMPILER" casa.casa -o "$CLI_TMP/missing_import" >"$CLI_TMP/import.out" 2>&1; then
+        echo "compilation accepted a missing library search path" >&2
+        exit 1
+    fi
+    grep -q 'module `std` not found, searched:' "$CLI_TMP/import.out"
+    grep -q 'compiler/common.casa:2:' "$CLI_TMP/import.out"
+    if grep -q 'called unwrap on error' "$CLI_TMP/import.out"; then
+        echo "missing import caused an unwrap failure" >&2
+        exit 1
+    fi
+    [ ! -e "$CLI_TMP/missing_import" ]
+fi
+
 if matches_filter process_exit "$@"; then
     matched=true
     process_exit_binary="$CLI_TMP/process_exit"
