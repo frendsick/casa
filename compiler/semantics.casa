@@ -3,6 +3,7 @@
 # Maintains a virtual stack of types and validates that operations
 # are type-safe.
 import "std" as std
+import "shared" as shared
 import "common" as common
 import "binding" as binding
 import "error" as error
@@ -298,7 +299,6 @@ fn should_preserve_contained_origin origin:$Origin place:$std::Option[Place] -> 
     fi
     true
 }
-
 # Ignore the loan used to access a container while preserving origins stored in it.
 fn merge_contained_origins
     target:std::Option[std::List[Origin]]
@@ -473,7 +473,6 @@ impl source_body::SourceLeaf {
         uses
     }
 }
-
 # Source uses are measured before checking, while lexical spelling is intact.
 fn collect_source_variable_uses body:$source_body::SourceBody uses:VariableUses -> VariableUses {
     body.get_nodes = nodes
@@ -643,46 +642,46 @@ pub fn clone_type_binding
         std::Option[common::Type]::None
     fi
 }
+const SHARED_BORROW_SHAPE 1
+const EXCLUSIVE_BORROW_SHAPE 2
 
-pub fn type_has_shared_borrow typ:$common::Type store:mut$common::SymbolStore -> bool {
+fn get_borrow_shape typ:$common::Type store:mut$common::SymbolStore -> i64 {
     if typ.is_shared_borrow then
-        true return
+        SHARED_BORROW_SHAPE return
+    fi
+    if typ.is_exclusive_borrow then
+        EXCLUSIVE_BORROW_SHAPE return
     fi
     if typ common::Type::Generic is ! then
-        false return
+        0 return
     fi
-    f"shared:{typ.format}" = key
+    typ.format = key
     if key store.borrow_shapes.get std::Option::Some(cached) is then
-        cached.clone return
+        cached copy return
     fi
-    std::List[std::String]::new = visiting
-    visiting store false typ type_contains_borrow = result
-    result key store.borrow_shapes.set
-    result
+    std::List[std::String]::new = shared_visiting
+    std::List[std::String]::new = exclusive_visiting
+    0 = shape
+    if shared_visiting store false typ type_contains_borrow then
+        SHARED_BORROW_SHAPE shape | = shape
+    fi
+    if exclusive_visiting store true typ type_contains_borrow then
+        EXCLUSIVE_BORROW_SHAPE shape | = shape
+    fi
+    shape key store.borrow_shapes.set
+    shape
+}
+
+pub fn type_has_shared_borrow typ:$common::Type store:mut$common::SymbolStore -> bool {
+    store typ get_borrow_shape SHARED_BORROW_SHAPE & 0 !=
 }
 
 pub fn type_has_exclusive_borrow typ:$common::Type store:mut$common::SymbolStore -> bool {
-    if typ.is_exclusive_borrow then
-        true return
-    fi
-    if typ common::Type::Generic is ! then
-        false return
-    fi
-    f"exclusive:{typ.format}" = key
-    if key store.borrow_shapes.get std::Option::Some(cached) is then
-        cached.clone return
-    fi
-    std::List[std::String]::new = visiting
-    visiting store true typ type_contains_borrow = result
-    result key store.borrow_shapes.set
-    result
+    store typ get_borrow_shape EXCLUSIVE_BORROW_SHAPE & 0 !=
 }
 
 pub fn type_has_borrow typ:$common::Type store:mut$common::SymbolStore -> bool {
-    if store typ type_has_shared_borrow then
-        true return
-    fi
-    store typ type_has_exclusive_borrow
+    store typ get_borrow_shape 0 !=
 }
 
 fn does_cleanup_observe_borrow
@@ -931,12 +930,7 @@ impl TypedStack {
         0 = index: u64
         while index self.values.length > do
             index self.values.get_mut = value
-            value.callables.clone
-            value.is_literal_constant value.loan_spans.clone value.cleanup_origins.clone
-            value.origins.clone
-            value.source.clone value.binding.clone value.capability value.place.clone
-            value.literals.clone value.origin.clone
-            index types.get.clone TypedValue index self.values.set
+            index types.get.clone = value.type_value
             1 += index
         done
     }
@@ -1082,7 +1076,6 @@ impl TypedStack {
         unified
     }
 }
-
 # Branch contexts — one specialized struct per branch kind (if / while / match).
 struct BindingLoans derives std::Clone {
     origins:         std::Option[std::List[Origin]]
@@ -1355,7 +1348,6 @@ impl MatchContext {
         MatchContext
     }
 }
-
 # Own the diagnostic inputs until the parameter check finishes. Source-name
 # lookup and message construction run only when a diagnostic needs the text.
 struct ParameterContext {
@@ -1742,7 +1734,6 @@ impl SemanticChecks {
         std::Map[std::String FunctionWork]::new SemanticChecks
     }
 }
-
 # Rejected analysis retains occurrences but cannot be committed as backend input.
 pub enum AnalysisBody {
     Checked (semantic_body::Body)
@@ -2068,7 +2059,7 @@ pub fn resolve_numeric_literal_default type_value:$common::Type -> common::Type 
             for parameter in generic.params.iter do
                 parameter resolve_numeric_literal_default parameters.push
             done
-            parameters generic.base.clone common::GenericType common::Type::Generic
+            parameters generic.base.clone common::GenericType::with_params common::Type::Generic
         }
         common::Type::Function(function_type) => {
             std::List[common::Type]::new = parameters
@@ -2313,14 +2304,12 @@ impl TypeChecker {
         std::Set[std::String]::new
     }
 }
-
 # Raise a TypeMismatch error at the type checker's current location.
 impl TypeChecker {
     pub fn raise_type_mismatch tc:mut$TypeChecker message:std::String {
         tc.current_location message common::ErrorKind::TypeMismatch tc.diagnostics.record_error_string
     }
 }
-
 # Stack operations
 impl TypeChecker {
     # A branch-local binding cannot identify the value after control-flow joins.
@@ -3425,6 +3414,21 @@ impl TypeChecker {
             .stack
             .values
             .length 1 - = top
+        if
+            top tc
+                .stack
+                .values
+                .get
+                .literals
+                .is_empty
+        then
+            top tc
+                .stack
+                .values
+                .get
+                .type_value
+                .clone return
+        fi
         top tc
             .stack
             .values
@@ -3510,7 +3514,6 @@ impl TypeChecker {
         value tc.finish_value_use
     }
 }
-
 # Infer a lambda's missing left operand from the concrete right operand.
 impl TypeChecker {
     pub fn stack_pop_left_like tc:mut$TypeChecker right:mut$TypedValue -> TypedValue {
@@ -3599,7 +3602,6 @@ impl TypeChecker {
         value expected tc.expect_value_type_t
     }
 }
-
 # Type compatibility
 pub fn type_exists_recursive_t
     typ:$common::Type
@@ -3700,7 +3702,6 @@ impl TypeChecker {
         location f"type `{typ.format}` does not exist" common::ErrorKind::Syntax self.diagnostics.record_error_string
     }
 }
-
 # Unify stack element types. Return an empty list on a mismatch.
 pub fn stacks_compatible
     stack_a:$std::List[common::Type]
@@ -3738,7 +3739,6 @@ pub fn stacks_equal stack_a:$std::List[common::Type] stack_b:$std::List[common::
     done
     true
 }
-
 # Apply stack effect: pop params, push returns, with type variable binding.
 pub fn resolve_return_type_t
     bindings:$std::Map[std::String common::Type]
@@ -3768,13 +3768,13 @@ pub fn resolve_return_type_t
                 if generic.base bindings.get std::Option::Some(bound) is then
                     bound.clone return
                 fi
-                generic.params.clone generic.base.clone common::GenericType common::Type::Generic return
+                generic.params.clone generic.base.clone common::GenericType::with_params common::Type::Generic return
             fi
             std::List[common::Type]::new = new_params
             for param in generic.params.iter do
                 param bindings resolve_return_type_t new_params.push
             done
-            new_params generic.base.clone common::GenericType common::Type::Generic
+            new_params generic.base.clone common::GenericType::with_params common::Type::Generic
         }
         common::Type::Function(fn_type) => {
             std::List[common::Type]::new = new_params
@@ -4250,8 +4250,7 @@ impl TypeChecker {
                 .stack
                 .values
                 .get = argument: $TypedValue
-            argument.origins.clone = argument_origins_opt
-            argument_origins_opt match
+            argument.origins match
                 std::Option::Some(argument_origins) => {
                     for origin in argument_origins.iter do
                         if
@@ -4374,10 +4373,10 @@ impl TypeChecker {
     pub fn check_call_borrow_pair
         tc:mut$TypeChecker
         first_type:$common::Type
-        first_value:$TypedValue
+        first_place:$std::Option[Place]
         first_parameter:$common::Parameter
         second_type:$common::Type
-        second_value:$TypedValue
+        second_place:$std::Option[Place]
         second_parameter:$common::Parameter
         operation:$str
     {
@@ -4387,8 +4386,8 @@ impl TypeChecker {
         if first_type.is_exclusive_borrow second_type.is_exclusive_borrow || ! then
             return
         fi
-        if first_value.place std::Option::Some(first_name) is then
-            if second_value.place std::Option::Some(second_name) is then
+        if first_place std::Option::Some(first_name) is then
+            if second_place std::Option::Some(second_name) is then
                 if first_name second_name.overlaps ! then
                     return
                 fi
@@ -4445,7 +4444,8 @@ impl TypeChecker {
                     .stack
                     .values
                     .get
-                    .clone = first_value
+                    .place
+                    .clone = first_place
                 first_index 1 + = second_index
                 while second_index effect.parameters.length > second_index depth > && do
                     second_index effect.parameters.get = second_parameter
@@ -4455,8 +4455,9 @@ impl TypeChecker {
                         .stack
                         .values
                         .get
-                        .clone = second_value
-                    operation second_parameter second_value second_type first_parameter first_value first_type
+                        .place
+                        .clone = second_place
+                    operation second_parameter second_place second_type first_parameter first_place first_type
                     tc.check_call_borrow_pair
                     1 += second_index
                 done
@@ -4491,8 +4492,9 @@ impl TypeChecker {
                     .stack
                     .values
                     .get
-                    .clone = argument
-                if argument.place std::Option::Some(place) is then
+                    .place
+                    .clone = argument_place
+                if argument_place std::Option::Some(place) is then
                     if
                         parameter_type.is_exclusive_borrow before_arguments place
                         tc.find_conflicting_loan std::Option::Some(conflict) is
@@ -4561,13 +4563,19 @@ impl TypeChecker {
                 .stack
                 .values
                 .get
-                .clone = value
+                .literals
+                .is_empty = has_no_literals
             index effect.parameters.get = parameter
-            if 0 value.literals.length == then
+            if has_no_literals then
                 tc.current_location.clone = binding_location
                 binding_location bindings effect stack_index parameter tc.bind_stack_parameter = bindings
             else
-                value.type_value.clone = actual
+                stack_index tc
+                    .stack
+                    .values
+                    .get
+                    .type_value
+                    .clone = actual
                 if actual.borrow_target std::Option::Some(target) is then
                     target.clone = actual
                 fi
@@ -5417,7 +5425,7 @@ impl TypeChecker {
                     call.target common::Type::Builtin std::Option::Some op common::Op::set_type_hint
                     std::List[common::Type]::new = option_params
                     call.target common::Type::Builtin option_params.push
-                    option_params common::STD_OPTION_TYPE.to_str common::GenericType common::Type::Generic tc.stack_push_type
+                    option_params common::STD_OPTION_TYPE.to_str common::GenericType::with_params common::Type::Generic tc.stack_push_type
                     return
                 fi
                 op.location f"Conversion `{call.target.format}::try_from` requires a numeric value" common::ErrorKind::TypeMismatch tc.diagnostics.record_error_string
@@ -5591,7 +5599,6 @@ impl TypeChecker {
         target tc.stack_push_type
     }
 }
-
 # Check comparison operations
 # Primitive comparisons are emitted as direct bytecode. `str` is handled
 # separately because it only supports `==`/`!=` and carries a type hint.
@@ -5876,7 +5883,6 @@ impl TypeChecker {
         std::Option[common::Function]::None op tc.apply_fixed_semantics
     }
 }
-
 # Check memory operations
 # Returns true if `bound` names `Word` directly or transitively via supertraits.
 pub fn bound_implies_word bound:$common::TraitBound store:$common::SymbolStore -> bool {
@@ -5897,7 +5903,6 @@ pub fn bound_implies_word bound:$common::TraitBound store:$common::SymbolStore -
     fi
     false
 }
-
 # Validate that `type_name` satisfies the `Word` marker trait at the given op
 # location. Concrete single-slot types always satisfy `Word` in current Casa.
 # A type variable from the enclosing function satisfies `Word` only when its
@@ -6227,7 +6232,6 @@ impl TypeChecker {
         fi
     }
 }
-
 # Check assignment operations
 impl TypeChecker {
     fn does_type_need_symbolic_origin typ:$common::Type -> bool {
@@ -6926,7 +6930,6 @@ impl TypeChecker {
         std::List[common::Type]::new std::List[common::Type]::new common::FunctionType common::Type::Function tc.stack_push_type
     }
 }
-
 # Check push variable / capture
 impl TypeChecker {
     fn apply_binding_callables self:mut$TypeChecker name:$str {
@@ -7005,7 +7008,6 @@ impl TypeChecker {
         fi
     }
 }
-
 # Check if/elif/else/fi blocks
 impl TypeChecker {
     pub fn merge_if_branch_stack self:mut$TypeChecker op:mut$common::Op if_ctx:mut$IfContext {
@@ -7149,7 +7151,6 @@ impl TypeChecker {
         fi
     }
 }
-
 # Check while/do/break/continue/done blocks
 impl TypeChecker {
     pub fn current_while_scope_depth tc:mut$TypeChecker -> std::Option[u64] {
@@ -7358,7 +7359,6 @@ impl TypeChecker {
         fi
     }
 }
-
 # Trait support: bind_generic_params_standalone and type_satisfies_trait
 pub fn bind_standalone_type_variable
     bindings:std::Map[std::String common::Type]
@@ -7444,7 +7444,6 @@ pub fn bind_generic_params_standalone
     fi
     bindings
 }
-
 # Bind every symbolic constant parameter in `expected` to the argument in the
 # matching position of `actual` (ADR-0152). The bound value is either a concrete
 # constant or the caller's own constant parameter when the call forwards it.
@@ -7737,7 +7736,6 @@ pub fn try_bind_caller_tvar
         concrete.clone caller_type_var.clone bindings.set
     fi
 }
-
 # Given a single (trait-side expected type, concrete-side actual type) pair
 # from a method stack-effect diff, if the expected type references a trait
 # type parameter that maps (via the current bound's type args) to an unbound
@@ -7999,8 +7997,8 @@ impl TypeChecker {
             .stack
             .values
             .get
-            .clone = value
-        value.type_value.clone = actual
+            .type_value
+            .clone = actual
         if actual.borrow_target std::Option::Some(target) is then
             target.clone = actual
         fi
@@ -8031,14 +8029,21 @@ impl TypeChecker {
         bindings:std::Map[std::String common::Type]
         location:$common::Location
     -> std::Map[std::String common::Type] {
+        if
+            stack_index tc
+                .stack
+                .values
+                .get
+                .literals
+                .is_empty
+        then
+            bindings return
+        fi
         stack_index tc
             .stack
             .values
             .get
             .clone = value
-        if 0 value.literals.length == then
-            bindings return
-        fi
         bindings parameter.typ.substitute_t resolve_numeric_literal_default = target
         tc.literal_resolutions tc.diagnostics target value.resolve_literals drop
         target.clone = value.type_value
@@ -8191,7 +8196,6 @@ impl TypeChecker {
         done
     }
 }
-
 # Check function-related operations
 impl TypeChecker {
     fn materialize_named_lambda
@@ -8888,7 +8892,8 @@ impl TypeChecker {
             if fn_opt.is_some then
                 fn_opt.unwrap = function
                 function.is_non_returning = is_non_returning
-                function.into_parts = is_unsafe = effect
+                function.into_parts = is_unsafe = signature
+                signature.get = effect
                 if is_unsafe then
                     fn_name.as_str op tc.require_unsafe
                 fi
@@ -9081,7 +9086,8 @@ impl TypeChecker {
             ensure_checked_function = push_fn_opt
             if push_fn_opt.is_some then
                 push_fn_opt.unwrap = push_fn
-                push_fn.into_parts = is_unsafe = effect
+                push_fn.into_parts = is_unsafe = signature
+                signature.get.clone = effect
                 std::Map[std::String common::Type]::new = specialization_bindings
                 if
                     0 effect.type_vars.length !=
@@ -9240,7 +9246,6 @@ impl TypeChecker {
         self.end_path
     }
 }
-
 # Check literal push operations
 impl common::OpValue {
     pub fn clone_array_literal_items self:$common::OpValue -> std::List[common::Op] {
@@ -9358,7 +9363,6 @@ impl TypeChecker {
         fi
     }
 }
-
 # Check print dispatch
 impl TypeChecker {
     pub fn check_io
@@ -9440,7 +9444,6 @@ impl TypeChecker {
         fi
     }
 }
-
 # Check enum variant push
 pub fn get_enum_variant_shape
     enum_name:$str
@@ -9535,7 +9538,6 @@ impl TypeChecker {
         fi
     }
 }
-
 # diagnose_bare_enum_pattern — emit a targeted error if a match arm uses an
 # unqualified enum variant (e.g. `North =>` instead of `Direction::North =>`).
 impl TypeChecker {
@@ -10023,7 +10025,6 @@ impl TypeChecker {
         top_frame self.branched_stacks.push
     }
 }
-
 # Check is keyword
 impl TypeChecker {
     fn bind_is_subject
@@ -10415,7 +10416,6 @@ impl TypeChecker {
         end
     }
 }
-
 # Check struct new
 impl TypeChecker {
     pub fn resolve_aggregate_literal
@@ -10491,7 +10491,6 @@ impl TypeChecker {
         fi
     }
 }
-
 # Check struct literal
 pub fn get_struct_literal_shape
     literal:$common::StructLiteral
@@ -10571,7 +10570,6 @@ impl TypeChecker {
         fi
     }
 }
-
 # Instantiate default trait method for a concrete type
 pub fn get_default_trait_specialization_parts
     trait_name:$str
@@ -10614,7 +10612,7 @@ fn instantiate_default_trait_method
     for type_parameter in type_params.iter do
         type_parameter.clone common::Type::TypeVar required_trait_arguments.push
     done
-    required_trait_arguments semantics.trait_name.clone common::GenericType common::Type::Generic
+    required_trait_arguments semantics.trait_name.clone common::GenericType::with_params common::Type::Generic
     = required_trait_type
     if semantics.trait_type std::Option::Some(resolved_trait_type) is then
         resolved_trait_type.clone = required_trait_type
@@ -10815,7 +10813,6 @@ impl TypeChecker {
         common::DeferredTraitCall::new common::OpValue::TraitMethodCall op common::Op::set_value
     }
 }
-
 # Check method call
 impl TypeChecker {
     pub fn check_char_codepoint tc:mut$TypeChecker op:mut$common::Op method_name:$str -> bool {
@@ -10865,7 +10862,7 @@ impl TypeChecker {
             target_type.clone std::Option::Some op common::Op::set_type_hint
             std::List[common::Type]::new = option_params
             target_type.clone option_params.push
-            option_params common::STD_OPTION_TYPE.to_str common::GenericType common::Type::Generic tc.stack_push_type
+            option_params common::STD_OPTION_TYPE.to_str common::GenericType::with_params common::Type::Generic tc.stack_push_type
             true return
         fi
         f"Method requires integer operands, got `{receiver.type_value.format}` and `{other.type_value.format}`" tc.raise_type_mismatch
@@ -11055,7 +11052,8 @@ impl TypeChecker {
                     checked_function_opt match
                         std::Option::Some(function) => {
                             function.is_non_returning = is_non_returning
-                            function.into_parts = is_unsafe = effect
+                            function.into_parts = is_unsafe = signature
+                            signature.get = effect
                             if is_unsafe then
                                 fn_name.as_str op tc.require_unsafe
                             fi
@@ -11106,7 +11104,6 @@ impl TypeChecker {
         fi
     }
 }
-
 # Check f-string expression conversion (Display trait dispatch)
 impl TypeChecker {
     pub fn check_fstring_to_str
@@ -11173,7 +11170,6 @@ impl TypeChecker {
         function_opt emitted_ops op tc.check_method_call
     }
 }
-
 # Ensure a function is typechecked
 # The private active owner keeps the recipe alive through recursive specialization.
 struct ActiveSpecialization {
@@ -11209,21 +11205,23 @@ impl CompletedFunction {
 }
 
 struct CheckedFunction derives std::Clone {
-    stack_effect:     common::StackEffect
+    signature:        shared::Shared[common::StackEffect]
     is_unsafe:        bool
     is_non_returning: bool
 }
 
 impl CheckedFunction {
-    pub fn into_parts self:CheckedFunction -> common::StackEffect bool {
+    pub fn stack_effect self:$CheckedFunction -> $common::StackEffect { self.signature.get }
+
+    pub fn into_parts self:CheckedFunction -> shared::Shared[common::StackEffect] bool {
         self match
-            CheckedFunction { stack_effect: stack_effect is_unsafe: is_unsafe } => stack_effect is_unsafe
+            CheckedFunction { signature: signature is_unsafe: is_unsafe } => signature is_unsafe
         end
     }
 }
 
 fn checked_function_summary function:$common::Function -> CheckedFunction {
-    CheckedFunction { stack_effect: function.stack_effect.clone is_unsafe: function.is_unsafe is_non_returning: function.is_non_returning }
+    CheckedFunction { signature: function.stack_effect.clone shared::Shared[common::StackEffect]::new is_unsafe: function.is_unsafe is_non_returning: function.is_non_returning }
 }
 
 fn ensure_checked_function
@@ -11278,7 +11276,6 @@ fn ensure_checked_function
         .unwrap
         .clone std::Option::Some
 }
-
 # The active frame consumes source and publishes the declaration with its completed body.
 # Recursion can observe the reserved signature, never this frame's mutable operations.
 struct ActiveFunction {
@@ -12623,7 +12620,6 @@ pub fn checked_generic_body_effect_matches
     done
     true
 }
-
 # A stack value can be consumed after its source operation has been emitted.
 # Resolve those private pending moves before publishing the checked body.
 fn attach_checked_moves ops:mut$std::List[common::Op] moved:$std::Set[i64] {
@@ -13276,7 +13272,6 @@ pub fn function_receiver_bindings
     bindings actual pattern rules::bind_trait_impl_type drop
     bindings
 }
-
 # Recipes and concrete instances stay in the checking owner until publication.
 struct SemanticSpecializer {
     store:       mut$common::SymbolStore
@@ -13718,7 +13713,7 @@ impl TypeChecker {
         self.branched_stacks.length 1 - self.branched_stacks.get = frame
         if frame BranchFrame::BranchWhile(loop) is then
             if visibility.span.offset loop.body_start > then
-                loop.body_start = visibility.span.offset
+                visibility.span.length loop.body_start visibility.with_span = visibility
             fi
         fi
         visibility
