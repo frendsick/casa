@@ -23,9 +23,10 @@ Casa tests.
 
 1. Review the Standards and Spec axes in parallel. The first pass for each axis
    must report all findings from the complete diff.
-2. Include the `ponytail-review` checks in the Standards axis. Apply the task's
-   existing `function-design` analysis to changed non-trivial functions. Do not
-   run separate passes for these checks.
+2. In the Standards axis, flag duplicated logic, unused flexibility, avoidable
+   dependencies, and abstractions without a current requirement. Apply the
+   task's existing `function-design` analysis to changed non-trivial functions.
+   Do not run separate passes for these checks.
 3. The Standards reviewer must list every changed comparison and
    non-commutative call, translate each Casa expression to conventional
    notation, and confirm its argument order against a focused test.
