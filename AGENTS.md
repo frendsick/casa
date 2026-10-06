@@ -4,6 +4,8 @@ See [README.md](./README.md) for basic info, language docs, and examples.
 
 ## General principles
 
+- Never commit benchmarks, including workload sources, measurement tools, and
+  generated results. Keep benchmark files outside the repository.
 - Don't web-search Casa specifics; this repo is the only authoritative source.
 - When language features or stdlib functions change, update the corresponding
   documentation, examples, and tests.

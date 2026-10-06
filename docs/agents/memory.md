@@ -28,3 +28,7 @@ self-compilation.
 
 Interpret live allocations, reusable allocator bytes, heap high-water, and RSS
 together.
+
+Keep benchmark workloads, measurement tools, and generated results outside the
+repository. Never commit benchmark files or performance reports. Record relevant
+measurements in the pull request description or task conversation.

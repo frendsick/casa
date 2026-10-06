@@ -17,10 +17,8 @@ retention is unclear. Remove obsolete progress, migration plans, saved
 measurements, and implementation details already available in code or reference docs.
 Keep alternatives only when their tradeoff explains the current choice.
 
-Benchmark code and instructions may remain when they support the current
-repository. Never commit benchmark results, raw samples, logs, profiles, or
-historical performance reports. Store output outside the repository or in
-`tests/benchmarks/results/`, which is ignored by git.
+Keep benchmark workloads, measurement tools, and generated results outside the
+repository. Never commit benchmark files or performance reports.
 
 Preserve stable identifiers and filenames for retained records. Use
 `status: amended by [ADR-NNNN](NNNN-slug.md)` when a retained successor changes
