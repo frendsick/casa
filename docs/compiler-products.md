@@ -12,7 +12,9 @@ requests syntax:
 
 Each operation returns `std::Result` with `CompilerFailure` as its error type. Source errors
 return ordinary products. Rejected syntax has no structural facts, and rejected
-assembly has no assembly text. `CompilerFailure` retains the accumulated report,
+assembly has no assembly text. Assembly requests return parser and import errors
+before typechecking. Analysis still checks available source to retain partial editor facts.
+`CompilerFailure` retains the accumulated report,
 phase, message, and optional location. Current failures cover backend errors
 and invalid request bases. Process termination and allocation failure are excluded.
 
