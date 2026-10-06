@@ -5,7 +5,7 @@ caused by the same problem.
 
 ```text
 error[TYPE_MISMATCH]: Type mismatch
-  --> program.casa:7:12
+  --> program.casa:7:8
   |
 7 | "text" consume_number
   |        ^^^^^^^^^^^^^^
@@ -15,7 +15,7 @@ error[TYPE_MISMATCH]: Type mismatch
 
 Read it in this order:
 
-1. `program.casa:7:12` identifies the file, line, and column.
+1. `program.casa:7:8` identifies the file, line, and column.
 2. The carets identify the operation that detected the problem.
 3. `Expected` is what the operation needs at that stack position.
 4. `Got` is the value that was present.

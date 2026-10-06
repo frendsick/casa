@@ -4,11 +4,11 @@ Casa's only compilation target is x86-64. It therefore uses `u64` for in-memory 
 
 Casa does not provide `usize` or `isize`. On the only target they would duplicate `u64` and `i64` while forcing explicit conversions between values with identical representation and range.
 
-```casa
-fn alloc bytes:u64 -> ptr
-fn List::length $self -> u64
-fn List::get $self index:u64 -> Option[$T]
-```
+| Operation | Inputs and result |
+|---|---|
+| `alloc` | `bytes:u64 -> ptr` (unsafe) |
+| `List[T]::get` | `self:$List[T] index:u64 -> $T` (checked) |
+| `List[T]::length` | `self:$List[T] -> u64` |
 
 ## Consequences
 

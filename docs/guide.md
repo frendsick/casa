@@ -68,7 +68,7 @@ fn subtract left:i64 right:i64 -> i64 { left right - }
 ```
 
 The call pushes `3`, then `10`. The topmost value `10` becomes `left`, and `3`
-becomes `right`. The function prints `7`.
+becomes `right`. The function returns `7`, which `print` writes to standard output.
 
 Functions can also use unnamed stack inputs when a local name adds no clarity:
 
@@ -145,7 +145,7 @@ Remember that comparison uses the topmost value as its left operand. Therefore,
 This program adds an [array iterator](collections.md#arrays), a
 [for loop](control-flow.md#for-loops),
 [string interpolation](types-and-literals.md#string-interpolation), and
-`println` from the standard library.
+`std::println_string` from the standard library.
 
 ```casa
 import "std"

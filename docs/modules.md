@@ -40,7 +40,7 @@ import "std"
 import "../lib/parser.casa" as parser
 
 std::List[i64]::new = values
-parser::Cursor::new = cursor
+"name=42" parser::Cursor::new = cursor
 ```
 
 `std` follows the same rule. A full `std` import does not add unqualified names.
@@ -53,6 +53,13 @@ Every imported declaration requires its namespace, including types, constants,
 constructors, enum variants, and function references. Receiver calls such as
 `value.method` keep their normal syntax. Imports never add bare names or
 re-export another module's imports.
+
+Methods on built-in types keep the type namespace, such as `str::split`.
+Namespaces introduced by an `impl` block without a type declaration also keep
+their names. Importing `os` makes `file::`, `dir::`, `env::`, and `path::`
+available, and importing `std` makes `process::` available. These names do not
+take a module prefix. Methods on an imported declared type do, such as
+`std::List[i64]::new`.
 
 Selection clauses are no longer supported. Replace:
 

@@ -114,8 +114,8 @@ fn total [const N:u64] values:$array[i64 N] -> i64 {
 ```
 
 Each evaluation of an array literal produces an independent owned array. The
-literal takes [ownership](ownership.md#move-a-value) of its elements, so an element binding cannot be used
-again afterwards:
+literal takes [ownership](ownership.md#move-a-value) of non-Copy elements, so
+those element bindings cannot be used again afterwards:
 
 The following invalid example uses an owning struct:
 

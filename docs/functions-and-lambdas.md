@@ -96,11 +96,14 @@ fn identity [T] value:T -> T { value }
 
 ## Unsafe boundaries
 
-Raw memory operations, pointer arithmetic and conversion, and Linux system
-calls must be inside an `unsafe` block:
+Raw memory access, pointer arithmetic, conversion from pointers to typed borrows,
+and Linux system calls must be inside an `unsafe` block. Use `unsafe fn` when
+callers must meet a contract that the function cannot check:
 
 ```casa
-fn read_byte address:ptr -> u8 {
+# SAFETY: the caller provides an address with one readable byte.
+unsafe fn read_byte address:ptr -> u8 {
+    # SAFETY: the caller guarantees that the byte is readable.
     unsafe { address load8 }
 }
 ```

@@ -104,7 +104,7 @@ Names such as `std::List` assume `import "std"`. See
   ```casa
   fn id [T] T -> T { }
   fn swap_t [T1 T2] T1 T2 -> T1 T2 { swap }
-  fn get [K:std::Hashable, V] self:std::Map[K V] key:K -> std::Option[V] { ... }
+  fn get [K:std::Hashable, V] self:$std::Map[K V] key:$K -> std::Option[$V] { ... }
   ```
 
 ---
@@ -123,7 +123,7 @@ fn lexer_skip_whitespace lexer:Lexer {
 
 # MUST — impl method
 impl Lexer {
-    fn skip_whitespace self:Lexer {
+    fn skip_whitespace self:mut$Lexer {
         ...
     }
 }
@@ -162,14 +162,15 @@ without a type-name prefix is acceptable.
 
 ## Type annotations
 
-- **SHOULD** annotate parameter types on public-facing functions, even when
-  the type checker can infer them. This documents intent for readers:
+- Named function parameters require types. **SHOULD** use descriptive names
+  on public functions. Lambdas can infer input types from their bodies or context:
 
   ```casa
   fn greet name:$str -> std::String { f"Hello, {name}!" }
   ```
 
-- In function bodies, annotate a variable **only** when inference would fail:
+- In function bodies, annotate a variable when inference needs context or when
+  a literal must use a specific numeric width:
 
   ```casa
   # Required: bare std::Option needs narrowing
@@ -299,17 +300,16 @@ without a type-name prefix is acceptable.
       token process
   done
   # SHOULD NOT — manual indexing where `for` works
-  0 = index
+  0 = index: u64
   while index tokens.length > do
       index tokens.get process
       1 += index
   done
   ```
 
-- Use `while` only when `for` cannot express the loop: condition-driven
-  iteration, parallel iteration over multiple sources, mid-loop mutation of the
-  collection being iterated, or early termination that depends on state outside
-  the iterator.
+- Use `while` when a condition controls iteration or the loop must change the
+  source collection. A `for` loop can use `break` for early termination and
+  `zip` to traverse two iterators together.
 
 ---
 
@@ -326,7 +326,7 @@ without a type-name prefix is acceptable.
   numeric conversion:
 
   ```casa
-  42 = x: i64
+  42 = x: u64
   x u8::try_from = maybe_byte
   # Raw representation boundary
   unsafe { x u64::wrapping_from buf store64 }

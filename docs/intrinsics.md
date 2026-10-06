@@ -151,13 +151,17 @@ compatible input cannot return the borrow and is rejected with `Borrowed return
 has no live input origin`.
 
 ```casa
-fn nth [T const N:u64] array:$array[T N] index:u64 -> $T {
+# SAFETY: the caller keeps `index` below `N`.
+unsafe fn nth [T const N:u64] array:$array[T N] index:u64 -> $T {
+    # SAFETY: the input borrow keeps the array live, and the caller checks the index.
     unsafe { array ptr::from_ref index size_of[T] * + ptr::as_ref[T] }
 }
 ```
 
-The `unsafe` body promises that the address stays valid for as long as the
-anchored input. See ADR-0112 and ADR-0113.
+The input borrow keeps the storage live. The caller must keep `index` in range,
+so this helper is an `unsafe fn`. Prefer the checked array `nth` method in
+normal code. See [ADR-0112](adr/0112-raw-pointer-borrows-use-existing-input-origins.md)
+and [ADR-0113](adr/0113-escaping-raw-mutable-borrows-require-exclusive-input-origins.md).
 
 `unsafe fn memcpy destination:ptr source:ptr count:u64` is a `std` function,
 not an intrinsic. It becomes available after `import "std"` and copies raw

@@ -3,8 +3,8 @@ status: amended by [ADR-0163](0163-standard-trait-derivation-is-a-complete-imple
 related issue: #478
 
 `Copy` is accepted only when duplicating the complete runtime value cannot
-create aliases or require allocation. The compiler checks the value
-representation before it checks fields and trait bounds.
+duplicate ownership or exclusive access, or require allocation. The compiler
+checks the value representation before it checks fields and trait bounds.
 
 The compiler integrates the canonical standard-library methodless Copy marker
 with implicit reuse, `dup`, and `over`. An unrelated trait named Copy does not
@@ -20,8 +20,9 @@ elements directly and implement `Copy` when their element type implements
 `Copy`.
 
 Extern structs have a fixed C-layout body. An extern struct can implement
-`Copy` when all fields implement `Copy`. The compiler copies the body into
-automatic destination storage instead of duplicating its temporary carrier
+`Copy` when all owned fields implement `Copy` and stored borrows are shared.
+Shared-borrow fields preserve their origins under ADR-0150. The compiler copies
+the body into automatic destination storage instead of duplicating its temporary carrier
 pointer. Escaping values receive ordinary owned storage as part of destination
 placement.
 
@@ -38,7 +39,7 @@ weaken the allocation-free Copy contract.
   Stored shared borrows preserve their origins without borrow Copy conformance
   under [ADR-0150](0150-shared-borrow-duplication-is-not-copy-conformance.md).
 - Ordinary structs with only scalar fields and empty structs are non-Copy.
-- Extern structs are Copy-eligible when every field is Copy.
+- Extern structs are Copy-eligible when every owned field is Copy and every stored borrow is shared.
 - Enums with no payload can be Copy. Enums with any payload are non-Copy.
 - Fixed arrays are conditionally Copy, including zero-length arrays.
 - Compiler-internal aggregate values use explicit Clone when they need an

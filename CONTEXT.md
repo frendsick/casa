@@ -21,12 +21,12 @@ NUL-free **OS byte values** can both provide the view.
 _Avoid_: Path, OsString, raw path
 
 **IoError**:
-The single error enum for all fallible OS syscall operations (file, directory, environment). Wraps errno values into named variants (`NotFound`, `PermissionDenied`, `AlreadyExists`, `IsDirectory`, `NotDirectory`, `BadFd`, `NotEmpty`, `Other(i64)`).
+The error enum used by checked file and directory operations. It maps errno values to named variants (`NotFound`, `PermissionDenied`, `AlreadyExists`, `IsDirectory`, `NotDirectory`, `BadFd`, `NotEmpty`, `Other(i64)`).
 _Avoid_: FileError, DirError, OsError
 
 **os module**:
-The stdlib module (`lib/os.casa`) that consolidates all OS syscall wrappers: file I/O (`impl file`), directory operations (`impl dir`), environment variable access (`impl env`), path manipulation (`impl path`), and file metadata (`FileStat`).
-_Avoid_: putting OS operations in std.casa
+The standard-library module (`lib/os.casa`) for file I/O, directory operations, environment lookup, text path utilities, and file metadata (`FileStat`).
+_Avoid_: assuming every OS wrapper belongs to this module
 
 **FileStat**:
 A struct returned by `file::stat` containing file metadata fields (`size`, `mode`, `mtime`, `atime`, `ctime` as raw integers) with helper methods for type checks (`is_dir`, `is_file`, `is_symlink`) and permission checks (`is_readable`, `is_writable`, `is_executable`).
@@ -105,7 +105,7 @@ The source-oriented facts of one compilation used to answer editor queries.
 _Avoid_: Checked operations, declaration-store snapshot
 
 **Parse-and-resolve boundary**:
-The first explicit compiler boundary that keeps parser internals private while returning resolved operations and symbols needed by later phases.
+The private compiler boundary that keeps parser state internal and returns a source program plus diagnostics for semantic checking.
 _Avoid_: Parser result, resolver-owned parser
 
 **Compiler diagnostics schema**:
@@ -117,7 +117,7 @@ The independent result of one analysis request. It owns a report with exact sour
 _Avoid_: Shared compiler session, analysis result, global compiler result
 
 **Array literal**:
-A bracket-delimited list of values (`[1, 2, 3]`, `["a", "b"]`, `[[1], [2]]`, `[my_fn]`) that produces an independent owned `array[T N]`, where the element count `N` is part of the type. Elements may be primitive literals, enum variants, nested array literals, function references, lambda expressions, or struct literals. Storage placement and behavior-preserving sharing remain compiler decisions.
+A bracket-delimited list of values (`[1, 2, 3]`, `["a", "b"]`, `[[1], [2]]`, `[&my_fn]`) that produces an independent owned `array[T N]`, where the element count `N` is part of the type. Elements may be primitive literals, enum variants, nested array literals, function references, lambda expressions, or struct literals. Storage placement and behavior-preserving sharing remain compiler decisions.
 _Avoid_: Static array, const array, inline array
 
 **Text view**:
@@ -412,7 +412,7 @@ _Avoid_: Release lint, tag lint
 - A **bootstrap-override label** is the only normal way to enable a **Bootstrap override** on a pull request.
 - **casa-release.env** is the single tracked source for the **Bootstrap compiler** release tag used by CI.
 - The **Bootstrap policy check** validates both the **casa-release.env** tag name and GitHub release metadata.
-- All OS syscall wrappers live in the **os module**, not in `std.casa`.
-- All fallible OS operations return `Result[T IoError]`. **IoError** is the single error type for file, directory, and environment failures.
+- The **os module** provides filesystem and environment APIs. The `std` module also provides process and output syscall wrappers.
+- Checked file and directory operations return `Result[T IoError]`. Low-level file wrappers return raw syscall results.
 - **FileStat** is returned by `file::stat` and provides both raw metadata fields and convenience query methods.
 - `env::get` returns `Option[Bytes]`, not `Result`. A missing environment variable represents absence rather than an error. A present Linux value is not guaranteed to be UTF-8.

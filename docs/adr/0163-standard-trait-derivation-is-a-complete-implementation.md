@@ -51,10 +51,13 @@ metaprogramming mechanism.
 User-defined structs and enums can implement Copy only with `derives Copy`.
 Compiler-provided implementations for eligible built-in types remain unchanged.
 The compiler accepts a user-derived Copy implementation only when the type has a
-raw value representation, every field or payload is Copy, and the value contains
+raw value representation, every owned field or payload is Copy, and the value contains
 no exclusive borrow, owned indirection, or custom destruction. A type that needs
 custom duplication implements Clone and remains non-Copy. A non-Copy type can
 use `derives Clone` when structural duplication is sufficient.
+
+Stored shared borrows preserve their origins without Copy or Clone conformance
+under [ADR-0150](0150-shared-borrow-duplication-is-not-copy-conformance.md).
 
 A declared generic function that duplicates a parameter or passes it to a
 Copy-bounded operation must expose the ordinary Copy bound. Missing bounds are

@@ -13,8 +13,8 @@ The shared borrow of `pair.left` does not overlap the exclusive borrow used to m
 Indexed places remain conservative because two runtime indexes may identify the same element:
 
 ```casa
-items.get_mut(i) = first
-items.get_mut(j) = second # error while first is live
+i items.get_mut = first
+j items.get_mut = second # error while first is live
 ```
 
 ## Consequences

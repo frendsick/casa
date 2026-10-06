@@ -18,8 +18,11 @@ The backend supplies the query value from its layout plan under ADR-0167.
 Generic raw-storage implementations use it to allocate and address dense elements:
 
 ```casa
-capacity size_of[T] * alloc = data
-index size_of[T] * data + = element_address
+# SAFETY: the caller keeps index below capacity. Multiplication is checked.
+unsafe {
+    capacity size_of[T] * alloc = data
+    data index size_of[T] * + = element_address
+}
 ```
 
 ## Consequences

@@ -46,8 +46,8 @@ fn keep_first [A, B] first:A second:B -> A {
 }
 ```
 
-A type parameter must occur in an input. Casa cannot choose a type that appears
-only in the outputs.
+A type parameter can appear only in the outputs. If context cannot determine
+it, supply it explicitly. For example, `std::List[i64]::new` supplies the element type.
 
 ## Generic data
 
@@ -197,12 +197,13 @@ both derived and explicit implementations.
 ## Copy and Clone
 
 `Copy` marks values whose representation can be duplicated without allocation
-or user code. Scalars, `str` views, raw pointers, C string pointers, named
+or user code. Scalars, `str` views, raw pointers, named
 function references, and `array[T N]` when `T: Copy` are Copy. `String` and
 dynamic collections are not.
 
-[Shared borrows](ownership.md#reborrow-without-moving) can be duplicated with `dup` and `over`, but `$T` does not
-implement or satisfy `Copy`. An exclusive `mut$T` borrow cannot be duplicated.
+[Shared borrows](ownership.md#reborrow-without-moving), including `$cstr`, can be
+duplicated with `dup` and `over`, but they do not implement or satisfy `Copy`.
+An exclusive `mut$T` borrow cannot be duplicated.
 
 Payload-free enums can opt in with `derives Copy`:
 
@@ -293,11 +294,19 @@ struct Box[T] {
 }
 
 impl[T] Box[T] {
-    fn unwrap self:Box[T] -> T { self.value }
+    fn unwrap self:Box[T] -> T {
+        self match
+            Box { value: value } => value
+        end
+    }
 }
 
 impl[T: Describe] Box[T]: Describe {
-    fn describe self:Box[T] -> std::String { self.value.describe }
+    fn describe self:Box[T] -> std::String {
+        self match
+            Box { value: value } => value.describe
+        end
+    }
 }
 ```
 

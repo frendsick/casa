@@ -1,4 +1,5 @@
 # Standard value owners implement Clone
+status: amended by [ADR-0150](0150-shared-borrow-duplication-is-not-copy-conformance.md)
 
 Casa's standard value containers implement explicit `Clone` when all owned contents can be cloned. `String` and `Bytes` implement allocating `Clone`. The `str` view implements `Copy`, so its `Clone` copies the view without allocating. `array[T N]`, `List[T]`, `Option[T]`, `Result[T E]`, `Map[K V]`, and `Set[T]` provide conditional ordinary trait implementations using the required `Clone` bounds on their owned type parameters.
 
@@ -9,6 +10,6 @@ Owned closures, exclusive borrows, files, sockets, and other identity-bearing re
 ## Consequences
 
 - Cloning nested standard containers works by composing their ordinary Clone implementations.
-- A standard library may implement Clone for shared borrows directly. Exclusive borrows do not implement it.
+- Shared borrows can be duplicated while preserving their origins, but do not implement Clone or Copy under ADR-0150. Exclusive borrows cannot be duplicated.
 - Standard Clone implementations may allocate, and allocation failure terminates under ADR-0075.
 - Adding a new owning standard type requires an explicit decision about whether it represents clonable value data or unique identity.
