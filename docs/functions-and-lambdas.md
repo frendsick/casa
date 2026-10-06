@@ -267,6 +267,11 @@ casac -L lib -l c program.casa
 `-L` / `--library-path` remains the Casa module search path. Casa does not use
 `-I` and does not provide a native library search-path option.
 
+The [raylib example](../examples/README.md#raylib-example) combines C booleans,
+small extern structs, and memory-class aggregate parameters and returns. Its
+[reusable module](../lib/raylib.casa) keeps raw native handles private and uses
+Casa owners and borrows to order resource cleanup.
+
 ## Bindings
 
 `= name` pops the top value and binds it. The first assignment fixes the

@@ -1,0 +1,253 @@
+# Curated raylib bindings for Linux x86-64, tested with raylib 6.0.
+# Link raylib and its platform libraries. See examples/README.md.
+import "std"
+
+const MAX_RGBA_PIXELS 536870911
+const PIXELFORMAT_UNCOMPRESSED_R8G8B8A8 7
+
+pub extern struct Color derives std::Copy {
+    pub r: u8
+    pub g: u8
+    pub b: u8
+    pub a: u8
+}
+
+pub extern struct Vector2 derives std::Copy {
+    pub x: f32
+    pub y: f32
+}
+
+extern struct NativeImage derives std::Copy {
+    data:    ptr
+    width:   i32
+    height:  i32
+    mipmaps: i32
+    format:  i32
+}
+
+extern struct NativeTexture derives std::Copy {
+    id:      u32
+    width:   i32
+    height:  i32
+    mipmaps: i32
+    format:  i32
+}
+
+extern fn InitWindow width:i32 height:i32 title:$cstr
+
+extern fn CloseWindow
+
+extern fn WindowShouldClose -> bool
+
+extern fn SetTargetFPS fps:i32
+
+extern fn BeginDrawing
+
+extern fn EndDrawing
+
+extern fn ClearBackground color:Color
+
+extern fn GetMousePosition -> Vector2
+
+extern fn ImageCopy image:NativeImage -> NativeImage
+
+extern fn LoadTextureFromImage image:NativeImage -> NativeTexture
+
+extern fn UnloadImage image:NativeImage
+
+extern fn UnloadTexture texture:NativeTexture
+
+extern fn DrawTextureV texture:NativeTexture position:Vector2 tint:Color
+
+extern fn IsWindowReady -> bool
+
+extern fn IsImageValid image:NativeImage -> bool
+
+extern fn IsTextureValid texture:NativeTexture -> bool
+
+pub struct Window {
+    context: Context
+    drawing: Drawing
+}
+
+pub struct Context {
+    ready: bool
+}
+
+pub struct Drawing {
+    active: bool
+}
+
+pub struct Image {
+    native: NativeImage
+}
+
+pub struct Texture {
+    context: $Context
+    native:  NativeTexture
+}
+
+# A frame retains one texture through EndDrawing. Extend the retained resource
+# set if a later example needs to draw several textures in the same frame.
+pub struct Frame {
+    drawing: mut$Drawing
+    texture: $Texture
+}
+
+impl Window {
+    pub fn new width:i32 height:i32 title:$cstr -> std::Option[Window] {
+        if 0 width <= 0 height <= || then
+            std::Option::None return
+        fi
+        # SAFETY: The module owns raylib's single window. No callbacks or threads
+        # can race the readiness check through this API. The title lives for the call.
+        unsafe {
+            if IsWindowReady then
+                std::Option::None return
+            fi
+            # Raylib retains its previous title pointer for empty input. Always
+            # supply a nonempty title so reopening cannot reuse freed storage.
+            if 0 title ptr::from_ref load8 == then
+                "Casa".as_cstr.unwrap height width InitWindow
+            else
+                title height width InitWindow
+            fi
+            if IsWindowReady ! then
+                std::Option::None return
+            fi
+        }
+        Window { context: Context { ready: true } drawing: Drawing { active: false } }
+        std::Option::Some
+    }
+
+    # Both capabilities keep the complete window loaned. Separating them lets
+    # textures retain shared context access while frames borrow drawing exclusively.
+    pub fn split self:mut$Window -> $Context mut$Drawing {
+        self.context
+        self.drawing
+    }
+}
+
+impl Context {
+    pub fn should_close self:$Context -> bool {
+        # SAFETY: Only a live Window can lend this context.
+        unsafe { WindowShouldClose }
+    }
+
+    pub fn set_target_fps self:$Context fps:i32 {
+        # SAFETY: The context keeps the window open. Nonpositive FPS disables the limit.
+        unsafe { fps SetTargetFPS }
+    }
+
+    pub fn mouse_position self:$Context -> Vector2 {
+        # SAFETY: The context keeps the window and its input state live.
+        unsafe { GetMousePosition }
+    }
+
+    fn drop self:mut$Context {
+        # SAFETY: Window owns this context exactly once. All textures and drawing
+        # capabilities must be released before the window can be destroyed.
+        unsafe { CloseWindow }
+    }
+}
+
+impl Image {
+    pub fn new width:i32 height:i32 color:Color -> std::Option[Image] {
+        if 0 width <= 0 height <= || then
+            std::Option::None return
+        fi
+        # Raylib computes RGBA byte counts with signed C int arithmetic.
+        if MAX_RGBA_PIXELS width i64::from height i64::from * > then
+            std::Option::None return
+        fi
+        width u64::try_from.unwrap height u64::try_from.unwrap * = pixel_count
+        pixel_count size_of[Color] * std::RawBuffer::new = pixels
+        0 = index: u64
+        while pixel_count index < do
+            # SAFETY: Each C-layout Color initializes one disjoint pixel inside
+            # the buffer. Color is Copy and has no owned storage to destroy.
+            unsafe { color pixels.data index size_of[Color] * + ptr::write[Color] }
+            1 += index
+        done
+        NativeImage {
+            data: pixels.data
+            width: width
+            height: height
+            mipmaps: 1
+            format: PIXELFORMAT_UNCOMPRESSED_R8G8B8A8
+        } = source
+        # GenImageColor in raylib 6.0 writes through an unchecked allocation.
+        # ImageCopy checks allocation failure. Keep this temporary buffer until
+        # raylib provides a checked generator that can replace the extra copy.
+        # SAFETY: The initialized RGBA buffer stays live through ImageCopy. Its
+        # byte count fits C int. The returned allocation belongs to raylib.
+        unsafe {
+            source ImageCopy = native
+            if native IsImageValid then
+                native Image std::Option::Some
+            else
+                native UnloadImage
+                std::Option::None
+            fi
+        }
+    }
+
+    fn drop self:mut$Image {
+        # SAFETY: The private handle belongs to this owner and is released once.
+        unsafe { self.native.clone UnloadImage }
+    }
+}
+
+impl Texture {
+    pub fn new image:Image context:$Context -> std::Option[Texture] {
+        # SAFETY: The image is valid and the borrowed context keeps the GPU live.
+        # Upload copies the pixels. Consuming the image releases its CPU storage.
+        unsafe {
+            image.native.clone LoadTextureFromImage = native
+            if native IsTextureValid then
+                Texture { context: context native: native } std::Option::Some
+            else
+                native UnloadTexture
+                std::Option::None
+            fi
+        }
+    }
+
+    fn drop self:mut$Texture {
+        # SAFETY: This unique owner retains its context borrow through cleanup.
+        unsafe { self.native.clone UnloadTexture }
+    }
+}
+
+impl Drawing {
+    pub fn begin self:mut$Drawing texture:$Texture -> Frame {
+        # SAFETY: The exclusive capability permits one frame at a time and keeps
+        # the window live. Frame cleanup pairs this call with EndDrawing.
+        unsafe { BeginDrawing }
+        true = self.active
+        Frame { drawing: self texture: texture }
+    }
+}
+
+impl Frame {
+    pub fn clear self:mut$Frame color:Color {
+        # SAFETY: This guard represents the active drawing frame.
+        unsafe { color ClearBackground }
+    }
+
+    pub fn draw_texture self:mut$Frame position:Vector2 tint:Color {
+        self
+            .texture
+            .native
+            .clone = native
+        # SAFETY: The frame is active and the texture retains the only window's
+        # context. All aggregate declarations match raylib's C layout.
+        unsafe { tint position native DrawTextureV }
+    }
+
+    fn drop self:mut$Frame {
+        # SAFETY: This guard exclusively owns the active frame until this call.
+        unsafe { EndDrawing }
+        false = self.drawing.active
+    }
+}

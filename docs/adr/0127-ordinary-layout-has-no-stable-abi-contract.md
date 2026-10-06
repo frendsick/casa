@@ -15,3 +15,8 @@ This exception does not stabilize ordinary aggregate layout.
 - Foreign declarations accept extern structs through borrowed pointers and by value.
 - Serialization writes fields through an explicit format rather than copying aggregate representation bytes.
 - Casa adds no stable-layout marker for ordinary structs, packed layout, or user-selected alignment.
+
+Raylib's `Color`, `Vector2`, `Image`, and `Texture2D` provide the concrete foreign
+aggregate use case for this contract. The [raylib example](../../examples/raylib.casa)
+and its [resource wrappers](../../lib/raylib.casa) use those layouts without a C
+adapter or an ABI contract for ordinary Casa structs.
