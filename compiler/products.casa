@@ -178,8 +178,8 @@ impl AssemblySource {
 }
 
 pub enum AssemblyResult {
-    Produced (Report AssemblySource)
-    Rejected (Report)
+    Produced(Report AssemblySource)
+    Rejected(Report)
 }
 
 impl AssemblyResult {
@@ -190,6 +190,7 @@ impl AssemblyResult {
         end
     }
 }
+
 # Syntax never loads imports or runs the checker.
 pub fn syntax source:SourceUnit -> std::Result[SyntaxResult CompilerFailure] {
     source.file.as_str lexer::normalize_path = file
@@ -199,6 +200,7 @@ pub fn syntax source:SourceUnit -> std::Result[SyntaxResult CompilerFailure] {
     sources diagnostics Report = report
     facts tokens report SyntaxResult std::Result::Ok
 }
+
 # Project source facts, then release all compiler bodies and declarations.
 pub fn analyze input:CompilationInput -> std::Result[AnalysisSnapshot CompilerFailure] {
     if input.validate std::Option::Some(failure) is then
@@ -208,15 +210,25 @@ pub fn analyze input:CompilationInput -> std::Result[AnalysisSnapshot CompilerFa
         .root
         .file
         .as_str input.resolve_path = root_file
-    input check.into_parts = checked = sources = diagnostics
+    { drop } input check.into_parts = checked = sources = diagnostics
     root_file.clone diagnostics sources checked document::project_index
     = diagnostics = sources = index
     root_file index sources diagnostics Report AnalysisSnapshot std::Result::Ok
 }
+
 # Source errors cannot reach emission. Native assembly, linking and launch are caller work.
 pub fn assembly
     input:CompilationInput
     target:Target
+-> std::Result[AssemblyResult CompilerFailure] {
+    { drop } target input assembly_with_progress
+}
+
+# Report phase starts synchronously. The callback and its captures remain caller-owned.
+pub fn assembly_with_progress
+    input:CompilationInput
+    target:Target
+    progress:$fn[str]
 -> std::Result[AssemblyResult CompilerFailure] {
     if input.validate std::Option::Some(failure) is then
         failure std::Result::Error return
@@ -225,13 +237,14 @@ pub fn assembly
         .root
         .file
         .as_str input.resolve_path = root_file
-    input check.into_parts = checked = sources = diagnostics
+    progress input check.into_parts = checked = sources = diagnostics
     root_file.as_str sources.retain_used
     sources diagnostics Report = report
     if report.diagnostics.has_errors then
         report AssemblyResult::Rejected std::Result::Ok return
     fi
     if checked std::Option::Some(program_input) is then
+        "Preparing checked program" progress exec
         program_input.into_checked_program match
             std::Result::Ok(program) => program
             std::Result::Error(message) => {
@@ -239,6 +252,7 @@ pub fn assembly
                 CompilerFailure std::Result::Error return
             }
         end = program
+        "Planning and emitting assembly" progress exec
         program backend::compile_checked match
             std::Result::Ok(text) => {
                 text target AssemblySource = source
@@ -278,7 +292,7 @@ impl CheckingResult {
     }
 }
 
-fn check input:CompilationInput -> CheckingResult {
+fn check input:CompilationInput progress:$fn[str] -> CheckingResult {
     input
         .root
         .file
@@ -305,13 +319,16 @@ fn check input:CompilationInput -> CheckingResult {
         }
     end = root_source
 
+    "Lexing root source" progress exec
     root_file.as_str root_source.as_str lexer::lex_source = lex_result
     lex_result.into_parts = diagnostics = tokens
+    "Parsing and resolving imports" progress exec
     sources diagnostics resolved_library_paths tokens parser::parse_and_resolve = parse_result
     parse_result.into_parts = diagnostics = parsed_source
     parsed_source match
         std::Option::Some(source) => {
-            diagnostics source typechecker::type_check.with_source_diagnostics = typecheck_result
+            diagnostics progress source typechecker::type_check_with_progress.with_source_diagnostics
+            = typecheck_result
             typecheck_result.get_diagnostics.clone = diagnostics
             typecheck_result std::Option::Some
         }

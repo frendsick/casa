@@ -10,6 +10,11 @@ requests syntax:
 | `analyze` | `CompilationInput` | An independent analysis snapshot with a report and editor index |
 | `assembly` | `CompilationInput` and `Target` | `Produced(report, source)` or `Rejected(report)` |
 
+`assembly_with_progress` accepts the same input and target plus a borrowed
+`fn[str]` callback. It calls the callback synchronously when each compiler phase
+starts. The caller owns progress output and timing. `assembly` and `analyze`
+produce no progress output.
+
 Each operation returns `std::Result` with `CompilerFailure` as its error type. Source errors
 return ordinary products. Rejected syntax has no structural facts, and rejected
 assembly has no assembly text. `CompilerFailure` retains the accumulated report,

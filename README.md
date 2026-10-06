@@ -52,8 +52,12 @@ Common compiler options:
 | `-l`, `--link-library` | Link a native library |
 | `-o`, `--output` | Set the output binary name |
 | `-r`, `--run` | Run the program after compilation |
-| `-v`, `--verbose` | Print compiler progress |
+| `-v`, `--verbose` | Print compiler stages and elapsed time to stderr |
 | `--version` | Print the compiler version |
+
+Verbose output reports source reading, lexing, parsing and import resolution,
+type and ownership checks, specialization, assembly generation, and native
+assembly and linking. Each timestamp is elapsed time since compilation started.
 
 ## Learn Casa
 
