@@ -1,0 +1,360 @@
+import "std" as std
+import "../../lib/test.casa" as test
+import "fixtures/extern_struct_types.casa" as fixture
+import "fixtures/inline_struct_types.casa" as imported
+
+struct Fixed {
+    tag:    u8
+    values: array[u16 3]
+    tail:   u32
+}
+
+struct Inner {
+    value: u16
+    flag:  bool
+}
+
+struct Nested {
+    tag:   u8
+    inner: Inner
+    tail:  u32
+}
+
+struct ExternalNested {
+    tag:   u8
+    inner: fixture::Tiny
+    tail:  u32
+}
+
+struct Scalar {
+    tag:  u8
+    wide: u64
+    tail: u16
+}
+
+struct Deep {
+    tag:    u8
+    nested: Nested
+    tail:   u8
+}
+
+struct ArrayNested {
+    tag:    u8
+    values: array[Inner 2]
+    tail:   u32
+}
+
+struct Generic[T] {
+    tag:   u8
+    inner: Inner
+    value: T
+}
+
+struct GenericHolder {
+    tag:   u8
+    value: Generic[u8]
+    tail:  u8
+}
+
+struct Empty {
+}
+
+struct EmptyHolder {
+    tag:   u8
+    value: Empty
+    tail:  u8
+}
+
+struct Borrowed {
+    value: $u16
+}
+
+struct BorrowedHolder {
+    tag:   u8
+    value: Borrowed
+    tail:  u8
+}
+
+struct ZeroArray {
+    tag:    u8
+    values: array[u16 0]
+    tail:   u8
+}
+
+struct ZeroArrayHolder {
+    tag:   u8
+    value: ZeroArray
+    tail:  u8
+}
+
+struct Recursive {
+    value: u8
+    next:  std::Option[Recursive]
+}
+
+struct RecursiveHolder {
+    tag:   u8
+    value: Recursive
+    tail:  u8
+}
+
+struct MutualFirst {
+    next: MutualSecond
+}
+
+struct MutualSecond {
+    next: std::Option[MutualFirst]
+}
+
+struct Resource {
+    count: ptr
+}
+
+impl Resource {
+    fn drop self:mut$Resource {
+        unsafe { self.count load64 1 + self.count store64 }
+    }
+}
+
+struct ResourceHolder {
+    tag:   u8
+    value: Resource
+    tail:  u8
+}
+
+struct Owned {
+    value: std::String
+}
+
+struct OwnedHolder {
+    tag:   u8
+    value: Owned
+    tail:  u8
+}
+
+struct ArrayCleanupElement {
+    count: ptr
+}
+
+impl array[ArrayCleanupElement 1] {
+    fn drop self:mut$array[ArrayCleanupElement 1] {
+        0 self.nth.count = count
+        unsafe { count load64 1 + count store64 }
+    }
+}
+
+struct ArrayCleanup {
+    values: array[ArrayCleanupElement 1]
+}
+
+struct ArrayCleanupHolder {
+    tag:   u8
+    value: ArrayCleanup
+    tail:  u8
+}
+
+fn move_through_raw [T] value:T -> T {
+    unsafe {
+        size_of[T] alloc = storage
+        value storage ptr::write[T]
+        storage ptr::read[T] = moved
+        storage free
+        moved
+    }
+}
+
+fn read_borrowed_pattern owner:$Nested -> u16 {
+    owner match
+        Nested { inner: inner } => inner.value
+    end
+}
+
+fn borrow_pattern_inner owner:$Nested -> $Inner {
+    owner match
+        Nested { inner: inner } => inner
+    end
+}
+
+fn mutate_borrowed_pattern owner:mut$Nested {
+    owner match
+        Nested { inner: inner } => {
+            12 = inner.value
+            false = inner.flag
+        }
+    end
+}
+
+fn test_c_layouts {
+    "C-compatible field layouts" test::test_start
+    "fixed size" 12 size_of[Fixed] test::assert_eq
+    "inner size" 4 size_of[Inner] test::assert_eq
+    "nested size" 12 size_of[Nested] test::assert_eq
+    "external nested size" 12 size_of[ExternalNested] test::assert_eq
+    "scalar size" 24 size_of[Scalar] test::assert_eq
+    "deep size and alignment" 20 size_of[Deep] test::assert_eq
+    "array of nested structs" 16 size_of[ArrayNested] test::assert_eq
+
+    9 [2, 3, 4] 1 Fixed = fixed
+    true 7 Inner = inner
+    9 inner 1 Nested = nested
+    9 true 7 fixture::Tiny 1 ExternalNested = external
+    3 2 1 Scalar = scalar
+    2 nested 1 Deep = deep
+    unsafe {
+        fixed ptr::from_ref = base
+        "fixed tag offset" 1 base load8 test::assert_eq
+        "fixed array offset" 2 base 2 + load16 test::assert_eq
+        "fixed array stride" 4 base 6 + load16 test::assert_eq
+        "fixed tail offset" 9 base 8 + load32 test::assert_eq
+        external ptr::from_ref = base
+        "external inner offset" base 2 + external.inner ptr::from_ref == test::assert_true
+        "external value offset" 7 base 2 + load16 test::assert_eq
+        "external flag offset" 1 base 4 + load8 test::assert_eq
+        "external tail offset" 9 base 8 + load32 test::assert_eq
+        scalar ptr::from_ref = base
+        "scalar tag offset" 1 base load8 test::assert_eq
+        "scalar wide offset" 2 base 8 + load64 test::assert_eq
+        "scalar tail offset" 3 base 16 + load16 test::assert_eq
+        deep ptr::from_ref = base
+        "deep nested offset and alignment" base 4 + deep.nested ptr::from_ref == test::assert_true
+        "deep inner offset" base 6 + deep.nested.inner ptr::from_ref == test::assert_true
+        "deep inner flag offset" 1 base 8 + load8 test::assert_eq
+        "deep nested tail offset" 9 base 12 + load32 test::assert_eq
+        "deep tail offset" 2 base 16 + load8 test::assert_eq
+    }
+}
+
+fn test_inline_lifecycle {
+    "inline field lifecycle" test::test_start
+    Nested { tag: 1 inner: Inner { value: 7 flag: true } tail: 9 } move_through_raw = owner
+    "borrowed pattern" 7 owner read_borrowed_pattern test::assert_eq
+    "borrowed pattern keeps inline address" owner.inner ptr::from_ref
+    owner borrow_pattern_inner ptr::from_ref == test::assert_true
+    unsafe {
+        owner ptr::from_ref = base
+        "ordinary tag offset" 1 base load8 test::assert_eq
+        "ordinary inner offset" base 2 + owner.inner ptr::from_ref == test::assert_true
+        "ordinary inner value" 7 base 2 + load16 test::assert_eq
+        "ordinary flag offset" 1 base 4 + load8 test::assert_eq
+        "ordinary tail offset" 9 base 8 + load32 test::assert_eq
+    }
+    8 = owner.inner.value
+    false = owner.inner.flag
+    10 = owner.tail
+    "mutated value" 8 owner.inner.value test::assert_eq
+    "mutated flag" owner.inner.flag test::assert_false
+    "mutated tail" 10 owner.tail test::assert_eq
+    owner mutate_borrowed_pattern
+    "exclusive pattern mutates original field" 12 owner.inner.value test::assert_eq
+    "exclusive pattern mutates original flag" owner.inner.flag test::assert_false
+    true 11 Inner = owner.inner
+    "replacement value" 11 owner.inner.value test::assert_eq
+    "replacement flag" owner.inner.flag test::assert_true
+    owner match
+        Nested { inner: moved } => {
+            moved move_through_raw = restored
+            "moved field" 11 restored.value test::assert_eq
+            "moved field flag" restored.flag test::assert_true
+        }
+    end
+    9 [Inner { value: 2 flag: true }, Inner { value: 3 flag: false }] 1 ArrayNested move_through_raw = array_owner
+    "nested array read" 3 1 array_owner
+        .values
+        .nth
+        .value test::assert_eq
+    [Inner { value: 5 flag: false }, Inner { value: 6 flag: true }] = array_owner.values
+    "nested array replacement" 6 1 array_owner
+        .values
+        .nth
+        .value test::assert_eq
+    array_owner drop
+
+    9 true 7 fixture::Tiny 1 ExternalNested = external
+    false 8 fixture::Tiny = external.inner
+    "external replacement" 8 external.inner.value test::assert_eq
+    "external replacement flag" external.inner.flag test::assert_false
+    external drop
+    9 true 7 Inner 1 Nested = raw_owner
+    unsafe { raw_owner ptr::into_raw ptr::from_raw[Nested] } = restored
+    "raw owner transfer" 7 restored.inner.value test::assert_eq
+}
+
+fn test_imported_ordinary_fields {
+    "imported ordinary inline fields" test::test_start
+    "imported nested size" 12 size_of[imported::Nested] test::assert_eq
+    9 true 7 imported::Inner 1 imported::Nested move_through_raw = owner
+    "imported field read" 7 owner.inner.value test::assert_eq
+    8 = owner.inner.value
+    false 11 imported::Inner = owner.inner
+    "imported replacement" 11 owner.inner.value test::assert_eq
+    unsafe {
+        "imported field address" owner ptr::from_ref 2 + owner.inner ptr::from_ref == test::assert_true
+    }
+    owner match
+        imported::Nested { inner: moved } => {
+            "imported field move" 11 moved.value test::assert_eq
+            "imported field flag" moved.flag test::assert_false
+        }
+    end
+}
+
+fn test_excluded_layouts {
+    "excluded field layouts" test::test_start
+    "generic declaration layout" 24 size_of[Generic[u8]] test::assert_eq
+    "generic concrete struct layout" 24 size_of[Generic[Inner]] test::assert_eq
+    "generic struct stays indirect" 24 size_of[GenericHolder] test::assert_eq
+    "empty size" 1 size_of[Empty] test::assert_eq
+    "empty struct stays indirect" 24 size_of[EmptyHolder] test::assert_eq
+    "borrow stays one pointer" 8 size_of[Borrowed] test::assert_eq
+    "borrowed struct stays indirect" 24 size_of[BorrowedHolder] test::assert_eq
+    "zero length array stays direct" 3 size_of[ZeroArray] test::assert_eq
+    "zero length array struct stays indirect" 24 size_of[ZeroArrayHolder] test::assert_eq
+    "recursive edge stays indirect" 16 size_of[Recursive] test::assert_eq
+    "recursive struct stays indirect" 24 size_of[RecursiveHolder] test::assert_eq
+    "mutually recursive edge stays indirect" 8 size_of[MutualFirst] test::assert_eq
+    "resource struct stays indirect" 24 size_of[ResourceHolder] test::assert_eq
+    "owned field struct stays indirect" 24 size_of[OwnedHolder] test::assert_eq
+    "array cleanup struct stays indirect" 24 size_of[ArrayCleanupHolder] test::assert_eq
+
+    3 = generic_value: u8
+    generic_value true 2 Inner 1 Generic = generic
+    "generic nested value" 2 generic.inner.value test::assert_eq
+    false 4 Inner = generic.inner
+    "generic nested replacement" 4 generic.inner.value test::assert_eq
+    3 generic 1 GenericHolder move_through_raw = wrapper
+    "generic wrapper" 4 wrapper
+        .value
+        .inner
+        .value test::assert_eq
+    unsafe {
+        wrapper.value ptr::from_ref = base
+        "generic field keeps its pointer" base 8 + ptr::read[ptr] wrapper.value.inner ptr::from_ref ==
+        test::assert_true
+    }
+    3 Empty 1 EmptyHolder move_through_raw drop
+    2 = value: u16
+    3 value Borrowed 1 BorrowedHolder = borrowed
+    "borrowed owner" 2 borrowed.value.value test::assert_eq
+    3 "owned".to_str Owned 1 OwnedHolder move_through_raw = owned
+    "owned value" "owned" owned
+        .value
+        .value
+        .as_str test::assert_str_eq
+    8 std::RawBuffer::new = count
+    unsafe { 0 count.data store64 }
+    3 count.data Resource 1 ResourceHolder move_through_raw = resource
+    count.data Resource = resource.value
+    unsafe { "custom replacement cleanup once" 1 count.data load64 test::assert_eq }
+    resource drop
+    unsafe { "custom final cleanup once" 2 count.data load64 test::assert_eq }
+    3 [ArrayCleanupElement { count: count.data }] ArrayCleanup 1 ArrayCleanupHolder = array_owner
+    [ArrayCleanupElement { count: count.data }] = array_owner.value.values
+    unsafe { "array replacement cleanup once" 3 count.data load64 test::assert_eq }
+    array_owner drop
+    unsafe { "array final cleanup once" 4 count.data load64 test::assert_eq }
+}
+test_c_layouts
+test_inline_lifecycle
+test_imported_ordinary_fields
+test_excluded_layouts
+test::test_summary

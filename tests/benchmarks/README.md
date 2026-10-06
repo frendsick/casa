@@ -63,3 +63,16 @@ For elapsed time and peak RSS, use the system tool directly:
 ```
 
 Fixed-point correctness remains covered by `tests/test_bootstrap.sh`.
+
+## Nested struct storage
+
+`inline-struct-fields.casa` constructs, borrows, mutates, and destroys one nested
+owner per iteration. It checks a checksum of 18 times the iteration count.
+Compile the same source with the baseline and changed compilers, then compare
+the median of three runs of each binary. The default is 5,000,000 iterations.
+
+For allocation measurements, use a temporary copy with 100 iterations. Count
+`heap_alloc_native` entries only within the loop and sample live storage after
+construction and destruction. Borrowed reads, mutation, and destruction should
+add no allocations. Record allocator rounding and reusable storage separately
+from the struct body size. Keep generated measurement files outside the repo.

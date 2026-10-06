@@ -3718,6 +3718,52 @@ pub fn type_is_extern_struct_field typ:$Type store:$SymbolStore -> bool {
     visiting store typ check_extern_struct_field
 }
 
+# A compatible field graph has no cleanup beyond reclaiming standalone heap
+# shells. Keep this separate from extern validation, which also requires every
+# nested struct to declare the C ABI contract.
+fn check_trivial_c_field typ:$Type store:$SymbolStore visiting:mut$std::Set[std::String] -> bool {
+    if typ type_is_extern_scalar then
+        true return
+    fi
+    if typ Type::Generic(generic) is then
+        if store typ find_drop_function_name.is_some then
+            false return
+        fi
+        if typ get_concrete_array_length std::Option::Some(length) is then
+            if 0 length == then
+                false return
+            fi
+            visiting store 0 generic.params.get check_trivial_c_field return
+        fi
+        if generic.params.is_empty ! then
+            false return
+        fi
+        if generic.base store.structs.get std::Option::Some(casa_struct) is then
+            if casa_struct.type_vars.is_empty ! casa_struct.members.is_empty || then
+                false return
+            fi
+            if generic.base visiting.has then
+                false return
+            fi
+            generic.base.clone visiting.add
+            for member in casa_struct.members.iter do
+                if visiting store member.typ check_trivial_c_field ! then
+                    generic.base visiting.remove
+                    false return
+                fi
+            done
+            generic.base visiting.remove
+            true return
+        fi
+    fi
+    false
+}
+
+pub fn type_has_trivial_c_field_layout typ:$Type store:$SymbolStore -> bool {
+    std::Set[std::String]::new = visiting
+    visiting store typ check_trivial_c_field
+}
+
 fn plan_struct_field_storage
     typ:$Type
     offset:u64
@@ -3725,7 +3771,12 @@ fn plan_struct_field_storage
     store:$SymbolStore
     visiting:mut$std::Set[std::String]
 -> std::Option[FieldStoragePlan] {
-    if casa_struct.is_extern then
+    # Generic declarations retain their original placement even after their
+    # accessors specialize. Revisit this only with specialized aggregate layouts.
+    if
+        casa_struct.is_extern
+        casa_struct.type_vars.is_empty store typ type_has_trivial_c_field_layout && ||
+    then
         if visiting store typ type_layout std::Option::Some(layout) is then
             true offset layout make_field_storage_plan
         else

@@ -56,7 +56,7 @@ test_category() {
         test/test_derived_conformances|test/test_display|test/test_trait_default_recipes|test/test_traits)
             echo types_traits
             ;;
-        test/test_array_length|test/test_array_methods|test/test_size_of|\
+        test/test_array_length|test/test_array_methods|test/test_inline_struct_fields|test/test_size_of|\
         test/test_typed_raw|test/test_unsafe)
             echo language_memory
             ;;
