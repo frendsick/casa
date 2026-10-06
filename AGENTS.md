@@ -51,7 +51,6 @@ Always load the relevant doc when the matching workflow comes up:
 - **Examples**: `docs/agents/testing.md#when-examples-change`
 - **Functions**: load `function-design` once per task before adding, changing, or
   reviewing non-trivial functions. Reuse that analysis during review.
-- **Issue tracker**: `docs/agents/issue-tracker.md`
 - **Memory efficiency**: `docs/agents/memory.md`
 - **Releases**: `docs/agents/testing.md#ci-bootstrap-compiler`
 - **Review**: `docs/agents/review.md`
