@@ -202,6 +202,11 @@ Use these operations for numeric conversion. Convert characters with
 `char::from_codepoint_unchecked` primitive. Representation casts to or from
 `char` are compile-time errors.
 
+Both `f32` and `f64` provide `abs`, `is_finite`, `is_infinite`, and `is_nan`
+methods, plus `infinity` and `nan` constructors through `std`. The built-in
+`to_bits` and `from_bits` operations preserve the raw floating-point
+representation. They use `u32` for `f32` and `u64` for `f64`.
+
 Casa has no general `(Type)` cast. Use a typed binding when a literal or generic
 construction needs context. Use the named raw pointer and typed-memory
 operations for representation boundaries.

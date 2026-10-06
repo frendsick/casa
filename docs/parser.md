@@ -9,6 +9,10 @@ import "parser"
 `Cursor` [borrows](ownership.md#borrow-for-a-call) the source string and contains a mutable `u64` position. `ParseError`
 contains a message and the `u64` position at which parsing failed.
 
+Positions and offsets count bytes. `peek`, `peek_at`, and `advance` convert one
+byte to a `char`. They do not decode multibyte UTF-8 characters. Use this cursor
+for ASCII syntax unless the caller handles UTF-8 decoding separately.
+
 Reference tables abbreviate library type names and list inputs in consumption
 order. Source examples use qualified names. See [reference notation](notation.md)
 for signatures, fragments, and commands for running complete examples.
@@ -153,7 +157,7 @@ cursor parser::parse_int.unwrap print # 42
 |---|---|
 | `parse_char_literal cursor:mut$Cursor -> Result[char ParseError]` | Single-quoted character |
 | `parse_escape cursor:mut$Cursor -> Result[char ParseError]` | Character after a backslash |
-| `parse_identifier cursor:mut$Cursor -> Result[String ParseError]` | Casa-style identifier |
+| `parse_identifier cursor:mut$Cursor -> Result[String ParseError]` | ASCII letter or underscore, followed by ASCII letters, digits, or underscores |
 | `parse_int cursor:mut$Cursor -> Result[i64 ParseError]` | Signed decimal integer |
 | `parse_quoted_string cursor:mut$Cursor -> Result[String ParseError]` | Double-quoted text |
 | `skip_whitespace cursor:mut$Cursor` | Skip ASCII whitespace |
@@ -163,5 +167,13 @@ custom parsers.
 
 Use `save` and `restore` when alternatives need backtracking. The ready-made
 integer and quoted-literal parsers restore their starting position on failure.
+
+`parse_escape` accepts `\n`, `\t`, `\r`, `\0`, `\\`, `\"`, `\'`, `\{`, and
+`\}`. It does not implement the compiler's `\xNN` and `\u{...}` escapes.
+
+`str_to_int` assumes decimal digits with an optional leading minus sign. It
+does not validate syntax or range and uses wrapping arithmetic. `parse_int`
+checks for digits, but its accumulation still wraps. Negating the resulting
+minimum `i64` value can terminate on overflow rather than return `ParseError`.
 
 See [examples/parser.casa](../examples/parser.casa) for a runnable parser.

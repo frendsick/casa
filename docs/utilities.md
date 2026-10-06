@@ -5,9 +5,10 @@ Compile module-style imports with a library path such as `casac -L lib`.
 | Module | Purpose | Runnable example |
 |---|---|---|
 | `argparse` | Command-line definitions and help | [examples/argparse.casa](../examples/argparse.casa) |
+| `io` | Buffered standard input and output | [Standard input](os.md#standard-input) |
 | `json` | JSON values, parsing, and serialization | See [JSON](#json) |
 | `log` | Leveled messages to standard error | [examples/log.casa](../examples/log.casa) |
-| `os` | Files, directories, environment, paths, and processes | [OS reference](os.md) |
+| `os` | Files, directories, environment, and paths | [OS reference](os.md) |
 | `parser` | Cursor-based text parsers | [examples/parser.casa](../examples/parser.casa) |
 | `timer` | Monotonic elapsed time | [examples/timer.casa](../examples/timer.casa) |
 
@@ -157,7 +158,19 @@ cursor json::json_parse.unwrap = value
 The [returned borrow](ownership.md#return-a-borrow) keeps that value loaned until its last use.
 `json_get_str` and `json_get_array` return independent cloned values.
 
-JSON numbers are integers. Unicode `\uXXXX` escapes currently decode as `?`.
+The current parser handles a limited JSON subset:
+
+- Non-ASCII string bytes are converted to separate characters rather than
+  decoded as UTF-8. Non-ASCII text can change during parsing.
+- Numbers are integers and use the [parser library's wrapping accumulation](parser.md#ready-made-parsers).
+- Parsing consumes one value without requiring end of input. Callers must check
+  the cursor for trailing content.
+- Unicode `\uXXXX` escapes skip four bytes and produce `?`, without validating
+  the hexadecimal digits. `\b` and `\f` produce NUL.
+
+Serialization escapes quotes, backslashes, newline, tab, and carriage return.
+Other control characters are emitted unchanged, so the result can be invalid
+JSON when a string contains them.
 
 ## Logging
 
