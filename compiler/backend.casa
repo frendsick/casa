@@ -210,6 +210,23 @@ impl FunctionPlanner {
         fi
     }
 
+    # Consume a field address. Inline C-compatible bodies have no resources to
+    # destroy and their storage belongs to the containing allocation.
+    fn compile_field_destruction
+        compiler:mut$FunctionPlanner
+        typ:$common::Type
+        plan:$common::FieldStoragePlan
+        op:$common::Op
+        bytecode:mut$std::List[InstValue]
+    {
+        if plan.stores_inline compiler.state.store typ common::type_has_trivial_c_field_layout && then
+            InstValue::Drop bytecode.push
+            return
+        fi
+        bytecode plan typ compiler.emit_field_load
+        bytecode op typ compiler.compile_destruction
+    }
+
     fn get_struct_field_plan
         compiler:mut$FunctionPlanner
         casa_struct:$common::CasaStruct
@@ -540,8 +557,7 @@ impl FunctionPlanner {
                 plan.offset i64::try_from.unwrap InstValue::Push bytecode.push
                 InstValue::Add bytecode.push
             fi
-            bytecode plan member.typ compiler.emit_field_load
-            bytecode op member_type compiler.compile_destruction
+            bytecode op plan member_type compiler.compile_field_destruction
         done
         InstValue::HeapFree bytecode.push
     }
@@ -1112,6 +1128,7 @@ impl FunctionPlanner {
         compiler:mut$FunctionPlanner
         store:$common::SymbolStore
         struct_pattern:common::StructPattern
+        subject_type:$common::Type
         bytecode:mut$std::List[InstValue]
     {
         struct_pattern common::StructPattern::struct_name store.structs.get = casa_struct_opt
@@ -1133,7 +1150,11 @@ impl FunctionPlanner {
                     plan.offset i64::try_from.unwrap InstValue::Push bytecode.push
                     InstValue::Add bytecode.push
                 fi
-                bytecode plan member.typ compiler.emit_field_load
+                if subject_type.is_borrow then
+                    bytecode plan member.typ compiler.emit_field_projection
+                else
+                    bytecode plan member.typ compiler.emit_field_load
+                fi
                 bytecode var_name.as_str compiler.emit_variable_set
             fi
             1 += index
@@ -2410,6 +2431,8 @@ impl FunctionPlanner {
                         bytecode.push
                         InstValue::Add bytecode.push
                     fi
+                    InstValue::Dup bytecode.push
+                    bytecode op field.storage field.typ self.compile_field_destruction
                     bytecode field.storage field.typ self.emit_field_store
                 else
                     f"Cannot determine member {member.member_index} storage of struct `{member.struct_name}`"
@@ -2816,7 +2839,7 @@ impl FunctionPlanner {
                 next_label std::Option::Some = next_arm
             fi
             operation common::pattern_value_of match
-                common::PatternValue::Struct(pattern) => bytecode pattern self.state.store self.emit_struct_arm
+                common::PatternValue::Struct(pattern) => bytecode arm.subject_type pattern self.state.store self.emit_struct_arm
                 common::PatternValue::Literal(pattern) => bytecode next_arm is_last pattern self.emit_literal_arm
                 common::PatternValue::EnumVariant(variant) => {
                     operation pattern::pattern_is_wildcard = wildcard

@@ -100,7 +100,22 @@ methods. Their allowed field types and native pointer use are documented under
 [Extern functions](./functions-and-lambdas.md#extern-functions).
 
 Ordinary `struct` declarations keep a compiler-owned layout that can change
-between compiler versions.
+between compiler versions. In a nongeneric ordinary struct, eligible nested
+ordinary and extern structs use inline field storage. Their field graph must
+be nonempty, nongeneric, and nonrecursive. It can contain supported C scalars,
+nonempty fixed arrays, and other eligible structs. A compiler-called cleanup
+method, borrowed field, or resource that requires destruction prevents inlining.
+
+Generic declarations retain their declaration-time layout, including after
+specialization. Empty structs and structs containing zero-length arrays remain
+indirect as nested fields. Fixed-array fields still use direct storage, and a
+zero-length array still occupies one byte. Borrowed fields remain one pointer.
+
+An inline field belongs to its containing allocation. Borrowed access and
+patterns refer to that field directly. Moving it out can allocate a standalone
+owner. Top-level ordinary struct values remain heap-indirect and non-`Copy`.
+Physical compatibility with C does not make them eligible for native calls or
+give them a stable ABI. See [the struct example](../examples/struct.casa).
 
 ## Receiver access and stored borrows
 

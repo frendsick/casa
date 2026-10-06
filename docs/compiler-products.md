@@ -198,9 +198,7 @@ A damaged construct cannot contribute an invented operation fact. Lexical token
 categories remain available after syntax rejection.
 
 Type references are incomplete while signature and field type occurrences are
-not represented. Rename must reject these answers. The
-[editor lifetime workload](../tests/benchmarks/editor-lifetime.casa) checks
-storage reclamation after repeated replacements.
+not represented. Rename must reject these answers.
 
 `workspace.casa` aggregates owned answers across fresh snapshots, retains exact
 source revisions, and validates proposed rename bindings through reanalysis.
@@ -212,7 +210,3 @@ document versions before applying results to newer text.
 `tests/compiler/test_products.casa` checks independent overrides, release order,
 source rejection, syntax products, retained failure context, and native output
 from requested assembly. The private-field fixture checks the product boundary.
-
-The [native build lifetime workload](../tests/benchmarks/native-build-lifetime.casa)
-checks storage reclamation across missing-tool, nonzero-tool, and successful-build
-paths. See the [measurement instructions](../tests/benchmarks/README.md).
