@@ -32,10 +32,37 @@ fi
 if matches_filter verbose "$@"; then
     matched=true
     for flag in -v --verbose; do
-        output=$("$COMPILER" "$flag" examples/hello_world.casa -o "$CLI_TMP/hello_world" 2>&1)
-        printf '%s\n' "$output" | grep -q 'Analyzing examples/hello_world.casa'
+        "$COMPILER" "$flag" examples/hello_world.casa -o "$CLI_TMP/hello_world" \
+            >"$CLI_TMP/stdout" 2>"$CLI_TMP/progress"
+        [ ! -s "$CLI_TMP/stdout" ]
+        stages=$(sed 's/^\[INFO\] [0-9][0-9.]*s //' "$CLI_TMP/progress")
+        [ "$stages" = "Reading examples/hello_world.casa
+Lexing root source
+Parsing and resolving imports
+Checking extern declarations
+Checking root types and ownership
+Checking function types and ownership
+Validating declarations
+Specializing reachable functions
+Preparing checked program
+Planning and emitting assembly
+Assembling and linking $CLI_TMP/hello_world
+Finished $CLI_TMP/hello_world" ]
         [ "$("$CLI_TMP/hello_world")" = 'Hello world!' ]
     done
+    output=$("$COMPILER" examples/hello_world.casa -o "$CLI_TMP/quiet" 2>&1)
+    [ -z "$output" ]
+    printf '"bad" 1 *\n' >"$CLI_TMP/invalid.casa"
+    if "$COMPILER" --verbose "$CLI_TMP/invalid.casa" -o "$CLI_TMP/invalid" \
+        >"$CLI_TMP/stdout" 2>"$CLI_TMP/rejected"; then
+        echo "verbose compilation accepted invalid source" >&2
+        exit 1
+    fi
+    grep -q 'Checking root types and ownership' "$CLI_TMP/rejected"
+    if grep -Eq 'Specializing|Preparing checked program|Planning and emitting|Assembling and linking|Finished' "$CLI_TMP/rejected"; then
+        echo "verbose compilation reported stages after source rejection" >&2
+        exit 1
+    fi
 fi
 
 if matches_filter missing_import "$@"; then
