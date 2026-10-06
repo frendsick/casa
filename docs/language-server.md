@@ -70,9 +70,10 @@ Clients can send this initialization option:
 }
 ```
 
-Each entry acts like one `casac -L` path for module-style imports. Relative
-paths depend on the editor's server working directory, so absolute paths are
-safer.
+Each entry acts like one `casac -L` path for module-style imports. Document
+analysis resolves relative paths against the server's working directory.
+Workspace analysis uses `/` as its request base. Use absolute paths so both
+request types find the same libraries.
 
 ## Features
 
@@ -80,7 +81,7 @@ safer.
 |---|---|
 | Completion | Names, keywords, intrinsics, dot methods, and qualified names |
 | Definition | Functions, bindings, structs, enum variants, and qualified methods |
-| Diagnostics | Compile on open, full-document change, and save |
+| Diagnostics | Analyze on open, full-document change, save, and local editor queries |
 | Hover | Types and stack effects for symbols, literals, operators, and intrinsics |
 | References | Verified uses across discovered workspace roots and imports |
 | Rename | Validated workspace edits for functions and bindings |
@@ -99,6 +100,9 @@ Definitions and references can resolve imported declarations. Unsaved content
 from other open Casa documents is included in analysis. Queries use a source
 index built during analysis. Replacing a document releases its old snapshot.
 Query results own their presentation text and source ranges.
+
+Hover, definition, completion, and semantic-token requests refresh the document
+analysis and publish diagnostics before returning their result.
 
 Source errors can leave independent hover, definition, completion, reference,
 and token facts available. Partial completion lists set `isIncomplete`.

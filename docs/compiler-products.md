@@ -20,14 +20,17 @@ return ordinary products. Rejected syntax has no structural facts, and rejected
 assembly has no assembly text. Assembly requests return parser and import errors
 before typechecking. Analysis still checks available source to retain partial editor facts.
 `CompilerFailure` retains the accumulated report,
-phase, message, and optional location. Current failures cover backend errors
-and invalid request bases. Process termination and allocation failure are excluded.
+phase, message, and optional location. Current failures cover invalid request
+bases, conflicting normalized override keys, and internal checking and backend
+failures. Process termination and allocation failure are excluded.
 
 `CompilationInput` owns root text, its file identity, an absolute base directory,
 ordered library paths, and source overrides. Relative file identities, library
 paths, and override keys resolve against that base without changing the process
 directory. Root text takes precedence over overrides for the root file. Import overrides take
-precedence over disk text. Casa's path-style and module-style search rules apply.
+precedence over disk text. Override keys for the same normalized non-root file
+must have identical text. Root overrides are ignored. Casa's path-style and
+module-style search rules apply.
 
 Reports expose shared borrows through `get_diagnostics` and `get_sources`, with
 diagnostics in front-end order and exact root and loaded import text, including
@@ -161,8 +164,9 @@ body, and backend lowering reads the actions directly. Pending moves from stack 
 until it attaches them to their source operations. There is no ownership table
 in `SymbolStore`.
 
-`AnalysisSnapshot::get_index` borrows the source index. Its five `find_*` queries
-use a retained absolute file identity and byte offset. Hover and definition
+`AnalysisSnapshot::get_index` borrows the source index. Point queries use a
+retained absolute file identity and byte offset. `find_semantic_tokens` takes
+only the file identity and returns tokens for the whole file. Hover and definition
 return `PointAnswer`: `Known`, `Absent`, or `Unavailable`. Completion and semantic
 tokens return `ListAnswer`: `Complete`, `Incomplete`, or `Unavailable`.
 References use the same availability variants in
@@ -170,6 +174,9 @@ References use the same availability variants in
 text, and the identifier replacement range. Reference results retain ranges,
 the declaration identity, covered files, and whether rename requires workspace
 coverage.
+
+`find_candidates` also takes a trigger string for completion scopes.
+`find_symbol_identity` returns the declaration identity at a file and byte offset.
 
 An empty reference list can be complete. Invalid files and offsets are
 unavailable. Returned values own their text and locations and survive snapshot
