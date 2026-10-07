@@ -22,7 +22,7 @@ for signatures, fragments, and commands for running complete examples.
   literal or use `String.as_str` without allocation.
 - Use `String` when text must grow, be retained independently of an input
   borrow, move into an owning value, or be returned as newly constructed text.
-- Return `str` only for static storage or a view tied to an input lifetime.
+- Return `str` for static storage and `$str` for a view tied to an input lifetime.
   Return `String` for allocated or assembled text.
 - Convert explicitly at ownership boundaries. Do not allocate a `String` only
   to pass read-only text to a function.
@@ -153,6 +153,9 @@ fn replace old:$str new_str:$str s:$str -> String
 
 Replaces all matches.
 
+Current limitation: the implementation does not exit its loop when no match
+remains. `str::replace` does not terminate, including when the input has no matches.
+
 ### str::reverse
 
 ```text
@@ -170,6 +173,9 @@ fn split delimiter:$str s:$str -> List[String]
 Copies the parts separated by `delimiter` into a list of owned strings.
 
 Call: `"a,b,c" "," str::split`.
+
+The delimiter must be nonempty. An empty delimiter does not advance the scan,
+so the current implementation does not terminate.
 
 ### str::starts_with
 
@@ -403,6 +409,9 @@ fn to_int self:$str -> Option[i64]
 ```
 
 Parses a signed decimal integer.
+
+Digit accumulation and negation use wrapping arithmetic. An out-of-range
+integer can return a wrapped value rather than `Option::None`.
 
 ### Parsing example
 

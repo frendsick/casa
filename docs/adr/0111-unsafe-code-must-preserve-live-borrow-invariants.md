@@ -3,12 +3,15 @@
 Unsafe raw-memory operations must preserve the lifetime, validity, and aliasing invariants of every live Casa borrow. Mutating borrowed storage through a raw pointer while a shared borrow is live is undefined behavior:
 
 ```casa
-value = view
+value.field = view
 unsafe {
-    42 address store64 # undefined behavior if address points into value
+    42 address store64 # undefined behavior if address points into value.field
 }
 view.inspect
 ```
+
+Here `field` is non-Copy, so field observation produces a shared borrow rather
+than an independent value.
 
 An `unsafe` block permits operations whose proof the compiler cannot perform. It does not suspend the invariants on which safe code and optimization rely.
 

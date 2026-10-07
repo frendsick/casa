@@ -22,7 +22,8 @@ cd casa
 ./install.sh
 ```
 
-You can also run the installer directly:
+To download only `casac` and `casafmt` into the current directory, run the
+installer directly. This does not download the standard library or examples:
 
 ```sh
 curl -sSL https://raw.githubusercontent.com/frendsick/casa/main/install.sh | sh

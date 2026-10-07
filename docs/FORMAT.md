@@ -225,7 +225,8 @@ std::Option::Some (x)
 Type::Generic (generic)
 ```
 
-This applies to pattern matching (`is` checks), constructors, and `match` arms.
+This applies to variant declarations and payload patterns in `is` checks and
+`match` arms. Construction uses stack arguments, such as `42 std::Option::Some`.
 
 ---
 
@@ -374,7 +375,9 @@ An `unsafe` function prefixes the declaration with `unsafe`. The same rule
 applies to the wrapped form, whose first line is `unsafe fn name`:
 
 ```casa
+# SAFETY: the caller provides an address with eight readable bytes.
 unsafe fn read_word address:ptr -> u64 {
+    # SAFETY: the caller guarantees that all eight bytes are readable.
     unsafe { address load64 }
 }
 ```
@@ -541,7 +544,8 @@ Use `String` for incremental or loop-based string construction:
 ```casa
 std::String::new = text
 while items.is_empty ! do
-    items.pop.as_str text.append
+    items.pop = item
+    item.as_str text.append
 done
 text
 ```

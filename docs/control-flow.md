@@ -181,8 +181,8 @@ Every `match` must handle every possible input:
 - An integer, character, or string match must use `_`.
 - One matching struct pattern is exhaustive. `_` is also valid.
 
-Duplicate unguarded arms are compile-time errors. All arms must leave the same
-stack effect, just like branches of an `if`.
+Duplicate unguarded arms are compile-time errors. All continuing arms must leave
+the same stack effect, just like branches of an `if`.
 
 Ownership also joins across arms. An arm that returns does not affect the join.
 An owner consumed by any arm that reaches `end` is unavailable after `end`.

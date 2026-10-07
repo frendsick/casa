@@ -4,7 +4,9 @@ status: amended by [ADR-0158](0158-copy-requires-a-raw-value-representation.md) 
 Casa structs and enums request complete derived trait implementations with an inline `derives` clause after the type name and any type parameters.
 
 ```casa
-struct Point derives Eq Ord Hashable Copy {
+import "std"
+
+extern struct Point derives std::Eq std::Ord std::Hashable std::Copy {
     x: i64
     y: i64
 }

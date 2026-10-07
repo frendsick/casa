@@ -1,6 +1,6 @@
 # Character conversion uses code-point APIs
 
-Casa exposes the safe lossless operation `character.codepoint` with effect `$char -> u32` and the unsafe primitive `char::from_codepoint_unchecked` with effect `u32 -> char`. The standard library builds `char::from_codepoint` with effect `u32 -> Option[char]` by validating the integer before calling the unsafe primitive.
+Casa exposes the safe lossless operation `character.codepoint` with effect `char -> u32` and the unsafe primitive `char::from_codepoint_unchecked` with effect `u32 -> char`. The standard library builds `char::from_codepoint` with effect `u32 -> Option[char]` by validating the integer before calling the unsafe primitive.
 
 ## Consequences
 

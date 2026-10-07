@@ -18,5 +18,5 @@ An owned parameter still receives its value by move, so mutating that local owne
 - An owned field may be mutated through its available owner. Active whole-value or overlapping field borrows prevent the mutation.
 - Closure mutation of a captured binding requires the inferred exclusive capture already defined by the ownership model.
 - A moved binding is unavailable until control flow proves it has been reinitialized. General mutability does not permit use after move.
-- Constants remain immutable. Global mutation and its visibility follow the separate module/global rules rather than this local-binding decision.
+- Constants remain immutable. Runtime state belongs to the root body and follows the same ownership rules as function locals under [ADR-0165](0165-runtime-state-is-owned-by-the-root-body.md).
 - The compiler tracks no additional per-binding mutability flag, so this decision adds no compile-time analysis beyond ownership and borrowing.

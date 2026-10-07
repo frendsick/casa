@@ -52,14 +52,16 @@ stale before the next file operation:
 import "std"
 import "os"
 
-"notes.txt".as_cstr.unwrap os::file::read_all match
+"notes.txt".as_cstr.unwrap file::read_all match
     std::Result::Ok(bytes) => bytes.to_str.unwrap print
     std::Result::Error(error) => f"read failed: {error}" std::eprintln_string
 end
 ```
 
 `FileStat` has `size`, `mode`, `mtime`, `atime`, and `ctime` fields. It also
-provides these checks:
+provides these checks. `file::stat` follows symbolic links, so its result describes
+the target rather than the link. Permission helpers inspect owner mode bits.
+They do not check effective access for the current process:
 
 | Method | Signature | Description |
 |---|---|---|
@@ -154,12 +156,12 @@ Environment variable names and text path utilities remain `$str`.
 import "std"
 import "os"
 
-"HOME" os::env::get
+"HOME" env::get
     .unwrap
     .to_str
     .unwrap print
-"tmp" "report.txt" os::path::join print # tmp/report.txt
-"src/main.casa" os::path::extension print # casa
+"tmp" "report.txt" path::join print # tmp/report.txt
+"src/main.casa" path::extension print # casa
 ```
 
 See the [OS example](../examples/os_interaction.casa) for files, directories,
@@ -168,7 +170,7 @@ environment variables, paths, and a child process.
 ## Arguments and processes
 
 `process::args -> List[Bytes]` copies all process arguments. `argc` is the
-argument count and `get_arg index:u64 -> Bytes` copies one argument. Index `0`
+argument count and `std::get_arg index:u64 -> Bytes` copies one argument. Index `0`
 is the program name. An invalid index terminates the program.
 
 `process::exit status:u8` terminates immediately with the supplied status. It
@@ -180,7 +182,7 @@ import "std"
 2 process::exit
 ```
 
-`run_command arguments:List[Bytes] -> i64` starts a process and waits for it. The
+`std::run_command arguments:List[Bytes] -> i64` starts a process and waits for it. The
 first list element is the executable path:
 
 ```casa
@@ -192,9 +194,39 @@ std::List[std::Bytes]::new = command
 command std::run_command = exit_code
 ```
 
+The executable path is passed directly to `execve`. There is no `PATH` search.
+An argument with an interior NUL returns `-22` before launch. The return value
+extracts bits 8–15 of the wait status. It does not distinguish signal termination
+or report launch and wait errors through `Result`. A fork failure terminates the
+calling process, and an exec failure exits the child with status `1`.
+
 See the [argument parser example](../examples/argparse.casa) for a command-line
 interface and the [OS example](../examples/os_interaction.casa) for
 `run_command`.
+
+## Standard input
+
+Import `io` for a buffered standard-input reader:
+
+```casa
+import "std"
+import "io"
+
+io::StdinReader::new = reader
+reader io::stdin_read_line = line
+line.to_str.unwrap print
+```
+
+| Function | Result |
+|---|---|
+| `io::stdin_read_byte reader:mut$StdinReader -> i64` | Byte value, or `-1` at end of input |
+| `io::stdin_read_exact reader:mut$StdinReader count:u64 -> Bytes` | Up to `count` bytes |
+| `io::stdin_read_line reader:mut$StdinReader -> Bytes` | Bytes before a newline or end of input |
+
+Read errors are treated as end of input. `stdin_read_exact` can return fewer
+bytes than requested. Check the returned length when the protocol requires an
+exact count. `stdin_read_line` consumes the newline without including it in the
+result.
 
 ## Advanced file descriptors
 
@@ -202,12 +234,12 @@ The module also exposes direct Linux file-descriptor operations:
 
 | Function | Result |
 |---|---|
-| `errno_to_io_error result:i64 -> IoError` | Convert a negative result |
+| `os::errno_to_io_error result:i64 -> IoError` | Convert a negative result |
 | `file::close fd:i64 -> i64` | Zero or negative error |
 | `file::open path:$cstr flags:i64 mode:i64 -> i64` | File descriptor or negative error |
 | `file::read fd:i64 buffer:ptr size:u64 -> i64` | Bytes read or negative error |
 | `file::write fd:i64 data:$Bytes -> i64` | Bytes written or negative error |
 
-Open flags are `O_RDONLY`, `O_WRONLY`, `O_CREAT`, and `O_TRUNC`. Combine flags
+Open flags are `os::O_RDONLY`, `os::O_WRONLY`, `os::O_CREAT`, and `os::O_TRUNC`. Combine flags
 with `|`. Prefer the high-level `Result` functions unless direct descriptors
 are required.

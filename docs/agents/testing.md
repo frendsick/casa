@@ -70,7 +70,7 @@ After the implementation and review are stable:
 
 ## Selective test running
 
-The compiler, example, and formatter scripts accept substring filters as
+The CLI, compiler, example, and formatter scripts accept substring filters as
 arguments. Only tests whose name contains at least one filter run. No filters =
 full suite.
 
@@ -79,6 +79,7 @@ tests/test_compiler.sh lexer              # only test_lexer + any error fixture 
 tests/test_compiler.sh lexer typechecker  # tests matching "lexer" OR "typechecker"
 tests/test_examples.sh fibonacci          # only fibonacci example
 tests/test_formatter.sh indent            # only golden file tests matching "indent"
+tests/test_cli.sh verbose                 # only CLI tests matching "verbose"
 ```
 
 Set `CASA_TEST_CATEGORY` to a compiler-test category to run it directly:
@@ -101,7 +102,7 @@ tests/test_all.sh formatter
 When `test_formatter.sh` has filters, idempotency and safety tests
 are skipped (they only run in the full suite).
 
-A filtered compiler, example, or formatter run that selects no tests prints the
+A filtered CLI, compiler, example, or formatter run that selects no tests prints the
 supplied filters in an explicit notice and exits successfully.
 
 `test_bootstrap.sh` has no filters — it always runs both self-compilation and
@@ -112,7 +113,7 @@ fixed-point tests.
 | Script | What it tests |
 |---|---|
 | `test_compiler.sh` | Unit tests (`tests/compiler/test_*.casa`) and error fixtures (`tests/compiler/errors/*.casa`) |
-| `test_cli.sh` | Compiler version and progress flags |
+| `test_cli.sh` | CLI flags, native build failures, process behavior, target selection, and LSP requests |
 | `test_examples.sh` | Example programs (`examples/*.casa`) against expected output |
 | `test_formatter.sh` | Golden file formatting, idempotency sweep, safety checks |
 | `test_bootstrap.sh` | Self-compilation (3-stage) and fixed-point verification |
