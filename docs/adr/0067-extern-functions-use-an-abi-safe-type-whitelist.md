@@ -12,6 +12,6 @@ native stack arguments, and `MEMORY` returns use caller-owned hidden storage. A
 by-value parameter must implement `Copy`. A return becomes an owned Casa value.
 
 Raylib's `Color`, `Vector2`, `Image`, and `Texture2D` provide the concrete foreign
-aggregate use case for this contract. The [raylib example](../../examples/raylib.casa)
+aggregate use case for this contract. The [raylib example](../../examples/game_of_life.casa)
 and its [resource wrappers](../../lib/raylib.casa) use those layouts without a C
 adapter or an ABI contract for ordinary Casa structs.

@@ -34,12 +34,9 @@ The examples are ordered from introductory programs to low-level system code.
 | 22 | [unicode.casa](unicode.casa) | Direct Unicode, Unicode escapes, and code-point conversion |
 | 23 | [owned_string.casa](owned_string.casa) | Owned string growth, borrowing, and cloning |
 | 24 | [bytes.casa](bytes.casa) | Compact binary storage, iteration, and validated text conversion |
-| 25 | [game_of_life.casa](game_of_life.casa) | An interactive terminal program with raw Linux calls |
+| 25 | [game_of_life.casa](game_of_life.casa) | Resizable raylib graphics and toroidal Conway simulation |
 | 26 | [root_owned_state.casa](root_owned_state.casa) | Root-owned runtime state, explicit parameters, and cleanup |
 | 27 | [foreign_function.casa](foreign_function.casa) | C ABI scalars, an aggregate return, and native library linking |
-| 28 | [raylib.casa](raylib.casa) | Optional graphical window, mouse input, and resource cleanup |
-
-`game_of_life.casa` needs an interactive terminal. Stop it with Ctrl+C.
 
 The foreign-function example links libc:
 
@@ -49,8 +46,18 @@ The foreign-function example links libc:
 
 ## Raylib example
 
-[raylib.casa](raylib.casa) draws a generated texture at the mouse position.
-Close the window or press Escape to exit. The example uses the reusable
+[game_of_life.casa](game_of_life.casa) runs Conway's Game of Life in a resizable
+800 by 600 window. Cells wrap across both edges. The simulation runs at five
+frames per second with eight-pixel cells.
+
+Hold the left mouse button to create live cells. Hold the right button to erase
+them. The right button wins when both are held. Close the window or press Escape
+to exit. Resizing preserves the top-left overlap and randomizes new cells.
+Minimizing the window or making it smaller than one cell pauses the simulation
+and keeps the last valid grid and graphics resources. Unused edge pixels remain
+dark gray.
+
+The example uses the reusable
 [raylib module](../lib/raylib.casa), which owns the native resources and releases
 them on normal scope exit and early return.
 
@@ -66,12 +73,15 @@ Build the compiler from this checkout, then link raylib and its Linux dependenci
 ./casac -L lib casa.casa -o /tmp/casac-raylib
 /tmp/casac-raylib -L lib \
     -l raylib -l GL -l m -l pthread -l dl -l rt -l X11 -l c \
-    examples/raylib.casa -r
+    examples/game_of_life.casa -r
 ```
 
 Casa does not vendor raylib. Default CI compiles the example against a small C
 fixture that checks argument values, drawing order, failure handling, and cleanup.
-It does not require raylib, a display server, GPU drivers, or network access.
+It compares uploaded pixels with a deterministic reference simulation through
+resizes and mouse edits. The previous mouse-following texture program remains a
+[test fixture](../tests/compiler/fixtures/raylib_mouse.casa). Default CI does not
+require raylib, a display server, GPU drivers, or network access.
 
 ### Resource ownership
 
@@ -83,21 +93,39 @@ structs with public fields.
 |---|---|
 | `Window::new` | Returns `Option[Window]`. Rejects nonpositive dimensions, an existing window, or failed initialization. An empty title becomes `Casa`. |
 | `Window.split` | Lends a shared `Context` and an exclusive `Drawing` capability. Both keep the window loaned. |
-| `Context.mouse_position`, `.should_close`, `.set_target_fps` | Read input, check the close condition, or set the frame limit while the window is open. |
+| `Context.is_minimized`, `.mouse_button_down`, `.mouse_position`, `.should_close` | Read mouse input, minimization state, or the close condition while the window is open. |
+| `Context.random_byte` | Returns a random byte for cell initialization. |
+| `Context.screen_width`, `.screen_height`, `.set_resizable`, `.set_target_fps` | Read current dimensions, enable resizing, or set the frame limit. |
 | `Image::new` | Returns `Option[Image]` for a solid-color image. Rejects nonpositive dimensions and RGBA byte counts above the signed C integer range. |
-| `Texture::new` | Consumes an image and borrows a context. Releases the image after upload and returns `Option[Texture]`. |
+| `Image.clear`, `.set_pixel` | Clear the image or edit a pixel. `set_pixel` returns `false` for out-of-bounds coordinates. |
+| `Texture::new` | Takes an owned image and a shared context. Returns the image, then `Option[Texture]`, with the upload result on top of the stack. The caller retains the image for editing or drops it. |
+| `Texture.update_from` | Borrows the texture exclusively and the image shared. Returns `false` without uploading if dimensions or formats differ. |
 | `Drawing.begin` | Borrows the drawing capability exclusively and retains a shared texture borrow in a `Frame`. |
-| `Frame.clear`, `.draw_texture` | Clear the background and draw the retained texture at a position with a tint. |
+| `Frame.clear`, `.draw_texture`, `.draw_texture_scaled` | Clear the background and draw the retained texture at a position with a tint and optional scale. |
 
 `Image::new` fills a temporary Casa buffer and calls raylib's `ImageCopy`, which
 checks its native allocation. Raylib 6.0's `GenImageColor` does not check allocation
 failure before writing pixels. The temporary buffer is released after the copy.
+
+`Texture::new` returns the CPU image on success and failure. This replaces the
+previous consuming constructor contract:
+
+```casa
+context image raylib::Texture::new = upload = image
+upload ? = texture
+```
+
+Returning ownership avoids an opaque shared image loan lasting as long as the
+texture. Callers can edit the image and upload it again. End the previous frame
+before updating or replacing a texture.
 
 Constructors return `None` for invalid native results. A frame ends drawing when
 it is destroyed. A texture cannot be released until its frame ends, and the
 window cannot close while either capability or a texture is live. Image, texture,
 and window owners release their native resources exactly once. As with other Casa
 owners, process termination through `panic` or `process::exit` does not run cleanup.
+The example returns from `run -> bool` before calling `process::exit`, so graphics
+cleanup completes on both success and resource failure.
 
 A frame retains one texture. Extend that contract if a later example needs several
 textures in one frame. The module does not wrap audio, fonts, models, or callbacks.

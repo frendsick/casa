@@ -4,6 +4,9 @@ import "std"
 
 const MAX_RGBA_PIXELS 536870911
 const PIXELFORMAT_UNCOMPRESSED_R8G8B8A8 7
+const FLAG_WINDOW_RESIZABLE 4
+pub const MOUSE_BUTTON_LEFT 0
+pub const MOUSE_BUTTON_RIGHT 1
 
 pub extern struct Color derives std::Copy {
     pub r: u8
@@ -58,6 +61,26 @@ extern fn UnloadImage image:NativeImage
 extern fn UnloadTexture texture:NativeTexture
 
 extern fn DrawTextureV texture:NativeTexture position:Vector2 tint:Color
+
+extern fn SetWindowState flags:u32
+
+extern fn IsWindowMinimized -> bool
+
+extern fn GetScreenWidth -> i32
+
+extern fn GetScreenHeight -> i32
+
+extern fn IsMouseButtonDown button:i32 -> bool
+
+extern fn GetRandomValue minimum:i32 maximum:i32 -> i32
+
+extern fn ImageClearBackground image:ptr color:Color
+
+extern fn ImageDrawPixel image:ptr x:i32 y:i32 color:Color
+
+extern fn UpdateTexture texture:NativeTexture pixels:ptr
+
+extern fn DrawTextureEx texture:NativeTexture position:Vector2 rotation:f32 scale:f32 tint:Color
 
 extern fn IsWindowReady -> bool
 
@@ -129,6 +152,36 @@ impl Window {
 }
 
 impl Context {
+    pub fn set_resizable self:$Context {
+        # SAFETY: The context keeps the window open.
+        unsafe { FLAG_WINDOW_RESIZABLE SetWindowState }
+    }
+
+    pub fn is_minimized self:$Context -> bool {
+        # SAFETY: The context keeps the window open.
+        unsafe { IsWindowMinimized }
+    }
+
+    pub fn screen_width self:$Context -> i32 {
+        # SAFETY: The context keeps the window open.
+        unsafe { GetScreenWidth }
+    }
+
+    pub fn screen_height self:$Context -> i32 {
+        # SAFETY: The context keeps the window open.
+        unsafe { GetScreenHeight }
+    }
+
+    pub fn mouse_button_down self:$Context button:i32 -> bool {
+        # SAFETY: Raylib bounds-checks button indices. The context keeps input live.
+        unsafe { button IsMouseButtonDown }
+    }
+
+    pub fn random_byte self:$Context -> u8 {
+        # SAFETY: These inclusive bounds fit raylib's signed integer arithmetic.
+        unsafe { 255 0 GetRandomValue } u8::try_from.unwrap
+    }
+
     pub fn should_close self:$Context -> bool {
         # SAFETY: Only a live Window can lend this context.
         unsafe { WindowShouldClose }
@@ -192,6 +245,20 @@ impl Image {
         }
     }
 
+    pub fn clear self:mut$Image color:Color {
+        # SAFETY: This exclusive owner contains a valid RGBA image.
+        unsafe { color self.native ptr::from_ref ImageClearBackground }
+    }
+
+    pub fn set_pixel self:mut$Image x:i32 y:i32 color:Color -> bool {
+        if 0 x < 0 y < || self.native.width x >= || self.native.height y >= || then
+            false return
+        fi
+        # SAFETY: Coordinates are in bounds and the image is exclusively borrowed.
+        unsafe { color y x self.native ptr::from_ref ImageDrawPixel }
+        true
+    }
+
     fn drop self:mut$Image {
         # SAFETY: The private handle belongs to this owner and is released once.
         unsafe { self.native.clone UnloadImage }
@@ -199,11 +266,14 @@ impl Image {
 }
 
 impl Texture {
-    pub fn new image:Image context:$Context -> std::Option[Texture] {
-        # SAFETY: The image is valid and the borrowed context keeps the GPU live.
-        # Upload copies the pixels. Consuming the image releases its CPU storage.
+    # Return the image with the upload result so callers can edit it again.
+    # Taking ownership avoids tying the texture to an opaque shared image loan.
+    pub fn new image:Image context:$Context -> Image std::Option[Texture] {
+        # SAFETY: Upload copies the pixels from a valid image into GPU storage.
+        unsafe { image.native.clone LoadTextureFromImage = native }
+        image
+        # SAFETY: The returned handle belongs to this call. Context stays live.
         unsafe {
-            image.native.clone LoadTextureFromImage = native
             if native IsTextureValid then
                 Texture { context: context native: native } std::Option::Some
             else
@@ -211,6 +281,20 @@ impl Texture {
                 std::Option::None
             fi
         }
+    }
+
+    pub fn update_from self:mut$Texture image:$Image -> bool {
+        if
+            self.native.width image.native.width !=
+            self.native.height image.native.height != ||
+            self.native.format image.native.format != ||
+        then
+            false return
+        fi
+        # SAFETY: Both resources are valid with matching dimensions and format.
+        # The exclusive texture borrow prevents updates while a Frame retains it.
+        unsafe { image.native.data self.native.clone UpdateTexture }
+        true
     }
 
     fn drop self:mut$Texture {
@@ -243,6 +327,15 @@ impl Frame {
         # SAFETY: The frame is active and the texture retains the only window's
         # context. All aggregate declarations match raylib's C layout.
         unsafe { tint position native DrawTextureV }
+    }
+
+    pub fn draw_texture_scaled self:mut$Frame position:Vector2 scale:f32 tint:Color {
+        self
+            .texture
+            .native
+            .clone = native
+        # SAFETY: The active frame retains its texture until EndDrawing.
+        unsafe { tint scale 0.0 position native DrawTextureEx }
     }
 
     fn drop self:mut$Frame {
