@@ -13544,17 +13544,68 @@ impl SemanticSpecializer {
     }
 }
 
+# Classify source subgraphs once, independently of generic bindings and call paths.
+struct RecipeCycleGraph {
+    active: std::Set[std::String]
+    cyclic: std::Map[std::String bool]
+}
+
+impl RecipeCycleGraph {
+    fn new -> RecipeCycleGraph {
+        std::Map[std::String bool]::new std::Set[std::String]::new RecipeCycleGraph
+    }
+
+    fn has_cycle self:mut$RecipeCycleGraph name:$str checks:$SemanticChecks -> bool {
+        if name self.active.has_str then
+            true return
+        fi
+        if name self.cyclic.get_str std::Option::Some(cached) is then
+            cached copy return
+        fi
+        std::Set[std::String]::new = callees
+        if name checks.functions.get_str std::Option::Some(work) is then
+            if work FunctionWork::Completed(completed) is then
+                {
+                    = call: $semantic_body::Callable
+                    = origin: $common::Location
+                    origin drop
+                    call.name.clone callees.add
+                } = visitor
+                visitor completed.body.visit_calls
+            fi
+        fi
+        name.to_str self.active.add
+        false = cyclic
+        for callee in callees.iter do
+            if checks callee.as_str self.has_cycle then
+                true = cyclic
+            fi
+        done
+        name self.active.remove_str
+        cyclic name.to_str self.cyclic.set
+        cyclic
+    }
+}
+
 fn validate_recipe_cycle
     body:$semantic_body::Body
     substitutions:mut$std::Map[std::String common::Type]
     active:mut$std::Map[std::String std::String]
     path:mut$std::List[std::String]
+    graph:$RecipeCycleGraph
     checks:$SemanticChecks
     diagnostics:mut$error::Diagnostics
 {
     {
         = call: $semantic_body::Callable
         = origin: $common::Location
+        # A source subgraph without cycles cannot revisit any active ancestor,
+        # regardless of bindings. Cyclic subgraphs retain path-specific traversal.
+        if call.name graph.cyclic.get std::Option::Some(cyclic) is then
+            if cyclic copy ! then
+                return
+            fi
+        fi
         std::Map[std::String common::Type]::new = composed
         for pair in call.substitutions.iter do
             substitutions pair.second.substitute_t pair.first.clone composed.set
@@ -13573,7 +13624,7 @@ fn validate_recipe_cycle
                 if work FunctionWork::Completed(completed) is then
                     key call.name.clone active.set
                     call.name.clone path.push
-                    diagnostics checks path active composed completed.body validate_recipe_cycle
+                    diagnostics checks graph path active composed completed.body validate_recipe_cycle
                     call.name.as_str active.delete_str
                     path.pop drop
                 fi
@@ -13589,6 +13640,7 @@ impl SemanticSession {
         diagnostics:mut$error::Diagnostics
     {
         self.checks diagnostics self.store check_trait_impls
+        RecipeCycleGraph::new = graph
         for
             name in self
                 .store
@@ -13610,6 +13662,9 @@ impl SemanticSession {
             then
                 continue
             fi
+            if self.checks name.as_str graph.has_cycle ! then
+                continue
+            fi
             if
                 name.as_str self
                     .checks
@@ -13622,7 +13677,7 @@ impl SemanticSession {
                     std::List[std::String]::new = path
                     name.clone path.push
                     bindings generic_binding_key name.clone active.set
-                    diagnostics self.checks path active bindings completed.body validate_recipe_cycle
+                    diagnostics self.checks graph path active bindings completed.body validate_recipe_cycle
                 fi
             fi
         done
