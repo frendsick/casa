@@ -5,12 +5,11 @@
 import "std" as std
 import "parser" as parser
 
-# JsonInt limits numbers to i64. Extend the value representation before adding
-# floating-point or full-range u64 conversions.
 pub enum JsonValue {
     JsonNull
     JsonBool(bool)
     JsonInt(i64)
+    JsonNumber(JsonNumber)
     JsonString(std::String)
     JsonArray(std::List[JsonValue])
     JsonObject(std::Map[std::String JsonValue])
@@ -22,6 +21,7 @@ impl JsonValue: std::Clone {
             JsonValue::JsonNull => JsonValue::JsonNull
             JsonValue::JsonBool(value) => value JsonValue::JsonBool
             JsonValue::JsonInt(value) => value JsonValue::JsonInt
+            JsonValue::JsonNumber(value) => value.clone JsonValue::JsonNumber
             JsonValue::JsonString(value) => value.clone JsonValue::JsonString
             JsonValue::JsonArray(value) => value.clone JsonValue::JsonArray
             JsonValue::JsonObject(value) => value.clone JsonValue::JsonObject
@@ -52,6 +52,7 @@ const SUPPLEMENTARY_PLANE_START: u32 65536
 const SURROGATE_RADIX: u32 1024
 const POSITIVE_INTEGER_LIMIT: u64 9223372036854775807
 const NEGATIVE_INTEGER_LIMIT: u64 9223372036854775808
+const UNSIGNED_INTEGER_LIMIT: u64 18446744073709551615
 
 fn parse_hex_quad cursor:mut$parser::Cursor -> std::Result[u32 parser::ParseError] {
     0 = value: u32
@@ -148,51 +149,150 @@ pub fn json_parse_string cursor:mut$parser::Cursor -> std::Result[std::String pa
     result
 }
 
-fn parse_integer cursor:mut$parser::Cursor -> std::Result[i64 parser::ParseError] {
-    "-" cursor.starts_with = negative
-    if negative then
-        cursor.advance drop
-    fi
-    cursor.pos = digits_start
-    0 = magnitude: u64
-    if negative then NEGATIVE_INTEGER_LIMIT else POSITIVE_INTEGER_LIMIT fi = limit
-    while cursor.is_eof ! do
-        cursor.peek.unwrap = character
-        if character.is_digit ! then
-            break
+# The private field guarantees a valid JSON number token. Keeping its text avoids
+# rounding before the caller selects a numeric type and preserves larger numbers.
+pub struct JsonNumber derives std::Clone {
+    text: std::String
+}
+
+impl JsonNumber {
+    pub fn new text:$str -> std::Result[JsonNumber parser::ParseError] {
+        text parser::Cursor::new = cursor
+        cursor JsonNumber::parse ? = number
+        if cursor.is_eof ! then
+            cursor.pos "trailing content after JSON number" parser::ParseError std::Result::Error
+        else
+            number std::Result::Ok
         fi
-        if digits_start cursor.pos > 0 magnitude == && then
-            cursor.pos "leading zero in JSON number" parser::ParseError std::Result::Error return
+    }
+
+    pub fn as_str self:$JsonNumber -> $str { self.text.as_str }
+
+    fn consume_digits cursor:mut$parser::Cursor -> std::Result[u64 parser::ParseError] {
+        cursor.pos = start
+        &char::is_digit cursor.skip_while
+        if start cursor.pos == then
+            cursor.pos "expected digit in JSON number" parser::ParseError std::Result::Error
+        else
+            cursor.pos start - std::Result::Ok
         fi
-        character.codepoint u64::from '0'.codepoint u64::from - = digit
-        if limit digit - 10 / magnitude > then
-            cursor.pos "JSON integer outside i64 range" parser::ParseError std::Result::Error return
+    }
+
+    fn read cursor:mut$parser::Cursor -> std::Result[JsonNumber parser::ParseError] {
+        cursor.pos = start
+        if "-" cursor.starts_with then
+            cursor.advance drop
         fi
-        magnitude 10 * digit + = magnitude
-        cursor.advance drop
-    done
-    if digits_start cursor.pos == then
-        cursor.pos "expected integer" parser::ParseError std::Result::Error return
+        if "0" cursor.starts_with then
+            cursor.advance drop
+            if cursor.peek std::Option::Some(character) is then
+                if character.is_digit then
+                    cursor.pos "leading zero in JSON number" parser::ParseError std::Result::Error return
+                fi
+            fi
+        else
+            cursor JsonNumber::consume_digits ? drop
+        fi
+        if "." cursor.starts_with then
+            cursor.advance drop
+            cursor JsonNumber::consume_digits ? drop
+        fi
+        if "e" cursor.starts_with "E" cursor.starts_with || then
+            cursor.advance drop
+            if "+" cursor.starts_with "-" cursor.starts_with || then
+                cursor.advance drop
+            fi
+            cursor JsonNumber::consume_digits ? drop
+        fi
+        cursor.source start cursor.pos start - str::substring JsonNumber std::Result::Ok
+    }
+
+    fn parse cursor:mut$parser::Cursor -> std::Result[JsonNumber parser::ParseError] {
+        cursor.save = start
+        cursor JsonNumber::read = result
+        if result.is_error then
+            start cursor.restore
+        fi
+        result
+    }
+
+    fn is_integer self:$JsonNumber -> bool {
+        for character in self.text.iter do
+            if '.' character == 'e' character == || 'E' character == || then
+                false return
+            fi
+        done
+        true
+    }
+
+    fn parse_magnitude self:$JsonNumber limit:u64 -> std::Option[u64] {
+        0 = magnitude: u64
+        for character in self.text.iter do
+            if '-' character == then
+                continue
+            fi
+            character.codepoint u64::from '0'.codepoint u64::from - = digit
+            if limit digit - 10 / magnitude > then
+                std::Option[u64]::None return
+            fi
+            magnitude 10 * digit + = magnitude
+        done
+        magnitude std::Option::Some
+    }
+
+    fn to_i64 self:$JsonNumber -> std::Result[i64 Error] {
+        if self.is_integer ! then
+            "integer" Error::TypeMismatch std::Result::Error return
+        fi
+        0 self.text.at '-' == = negative
+        if negative then NEGATIVE_INTEGER_LIMIT else POSITIVE_INTEGER_LIMIT fi = limit
+        if limit self.parse_magnitude std::Option::Some(magnitude) is then
+            if magnitude NEGATIVE_INTEGER_LIMIT == then
+                -9223372036854775808
+            elif negative then
+                0 magnitude i64::try_from.unwrap -
+            else
+                magnitude i64::try_from.unwrap
+            fi std::Result::Ok
+        else
+            "i64" Error::OutOfRange std::Result::Error
+        fi
+    }
+
+    fn to_u64 self:$JsonNumber -> std::Result[u64 Error] {
+        if self.is_integer ! then
+            "integer" Error::TypeMismatch std::Result::Error return
+        fi
+        if UNSIGNED_INTEGER_LIMIT self.parse_magnitude std::Option::Some(magnitude) is then
+            0 self.text.at '-' == = negative
+            if negative ! 0 magnitude == || then
+                magnitude std::Result::Ok return
+            fi
+        fi
+        "u64" Error::OutOfRange std::Result::Error
+    }
+}
+
+fn parse_numeric_value cursor:mut$parser::Cursor -> std::Result[JsonValue parser::ParseError] {
+    cursor JsonNumber::parse ? = number
+    # Keep negative zero as text so floating-point conversions preserve its sign.
+    if "-0" number.as_str != then
+        if number.to_i64 std::Result::Ok(integer) is then
+            integer JsonValue::JsonInt std::Result::Ok return
+        fi
     fi
-    if "." cursor.starts_with "e" cursor.starts_with || "E" cursor.starts_with || then
-        cursor.pos "fractional JSON numbers are not supported" parser::ParseError std::Result::Error return
-    fi
-    if magnitude NEGATIVE_INTEGER_LIMIT == then
-        -9223372036854775808
-    elif negative then
-        0 magnitude i64::try_from.unwrap -
-    else
-        magnitude i64::try_from.unwrap
-    fi std::Result::Ok
+    number JsonValue::JsonNumber std::Result::Ok
 }
 
 pub fn json_parse_number cursor:mut$parser::Cursor -> std::Result[i64 parser::ParseError] {
     cursor.save = start
-    cursor parse_integer = result
-    if result.is_error then
+    cursor JsonNumber::parse ? = number
+    if number.to_i64 std::Result::Ok(integer) is then
+        integer std::Result::Ok
+    else
         start cursor.restore
+        start "expected JSON integer within i64 range" parser::ParseError std::Result::Error
     fi
-    result
 }
 
 pub fn json_parse_bool cursor:mut$parser::Cursor -> std::Result[bool parser::ParseError] {
@@ -359,7 +459,7 @@ pub fn json_parse cursor:mut$parser::Cursor -> std::Result[JsonValue parser::Par
     elif character 'n' == then
         cursor json_parse_null
     elif character.is_digit character '-' == || then
-        { JsonValue::JsonInt } cursor json_parse_number.map
+        cursor parse_numeric_value
     else
         cursor.pos "unexpected character in JSON" parser::ParseError std::Result::Error
     fi
@@ -399,6 +499,7 @@ pub fn json_serialize value:$JsonValue -> std::String {
             if bool_value then "true".to_str else "false".to_str fi
         }
         JsonValue::JsonInt(int_value) => int_value.to_str
+        JsonValue::JsonNumber(number) => number.as_str.to_str
         JsonValue::JsonString(str_value) => {
             f"\"{str_value.as_str json_escape_string}\""
         }
@@ -444,7 +545,7 @@ pub fn json_get_str value:$JsonValue key:$str -> std::Option[std::String] {
 
 pub fn json_get_int value:$JsonValue key:$str -> std::Option[i64] {
     if key value json_get_value std::Option::Some(entry) is then
-        if entry JsonValue::JsonInt(int_value) is then
+        if entry i64::from_json std::Result::Ok(int_value) is then
             int_value std::Option::Some
             return
         fi
@@ -581,11 +682,11 @@ impl i64: Serialize + Deserialize {
         self copy JsonValue::JsonInt std::Result::Ok
     }
     pub fn from_json value:$JsonValue -> std::Result[i64 Error] {
-        if value JsonValue::JsonInt(inner) is then
-            inner copy std::Result::Ok
-        else
-            "integer" Error::TypeMismatch std::Result::Error
-        fi
+        value match
+            JsonValue::JsonInt(inner) => inner copy std::Result::Ok
+            JsonValue::JsonNumber(number) => number.to_i64
+            _ => "integer" Error::TypeMismatch std::Result::Error
+        end
     }
 }
 
@@ -676,17 +777,81 @@ impl u32: Serialize + Deserialize {
 impl u64: Serialize + Deserialize {
     pub fn to_json self:$u64 -> std::Result[JsonValue Error] {
         if self copy i64::try_from std::Option::Some(integer) is then
-            integer JsonValue::JsonInt std::Result::Ok
+            integer JsonValue::JsonInt
         else
-            "i64" Error::OutOfRange std::Result::Error
-        fi
+            self.to_str JsonNumber JsonValue::JsonNumber
+        fi std::Result::Ok
     }
     pub fn from_json value:$JsonValue -> std::Result[u64 Error] {
-        value i64::from_json ? = decoded
-        if decoded u64::try_from std::Option::Some(integer) is then
-            integer std::Result::Ok
+        value match
+            JsonValue::JsonInt(integer) => {
+                if integer copy u64::try_from std::Option::Some(number) is then
+                    number std::Result::Ok
+                else
+                    "u64" Error::OutOfRange std::Result::Error
+                fi
+            }
+            JsonValue::JsonNumber(number) => number.to_u64
+            _ => "integer" Error::TypeMismatch std::Result::Error
+        end
+    }
+}
+
+impl JsonNumber: Serialize + Deserialize {
+    pub fn to_json self:$JsonNumber -> std::Result[JsonValue Error] {
+        self.clone JsonValue::JsonNumber std::Result::Ok
+    }
+    pub fn from_json value:$JsonValue -> std::Result[JsonNumber Error] {
+        value match
+            JsonValue::JsonInt(integer) => integer.to_str JsonNumber std::Result::Ok
+            JsonValue::JsonNumber(number) => number.clone std::Result::Ok
+            _ => "number" Error::TypeMismatch std::Result::Error
+        end
+    }
+}
+
+impl f32: Serialize + Deserialize {
+    pub fn to_json self:$f32 -> std::Result[JsonValue Error] {
+        if self.is_finite ! then
+            "JSON numbers must be finite" Error::InvalidValue std::Result::Error return
+        fi
+        self.to_str JsonNumber JsonValue::JsonNumber std::Result::Ok
+    }
+    pub fn from_json value:$JsonValue -> std::Result[f32 Error] {
+        value match
+            JsonValue::JsonInt(integer) => integer.to_str.to_f32
+            JsonValue::JsonNumber(number) => number.as_str.to_f32
+            _ => {
+                "number" Error::TypeMismatch std::Result::Error return
+            }
+        end = parsed
+        if parsed std::Option::Some(number) is then
+            number std::Result::Ok
         else
-            "u64" Error::OutOfRange std::Result::Error
+            "f32" Error::OutOfRange std::Result::Error
+        fi
+    }
+}
+
+impl f64: Serialize + Deserialize {
+    pub fn to_json self:$f64 -> std::Result[JsonValue Error] {
+        if self.is_finite ! then
+            "JSON numbers must be finite" Error::InvalidValue std::Result::Error return
+        fi
+        self.to_str JsonNumber JsonValue::JsonNumber std::Result::Ok
+    }
+    pub fn from_json value:$JsonValue -> std::Result[f64 Error] {
+        value match
+            JsonValue::JsonInt(integer) => integer.to_str.to_f64
+            JsonValue::JsonNumber(number) => number.as_str.to_f64
+            _ => {
+                "number" Error::TypeMismatch std::Result::Error return
+            }
+        end = parsed
+        if parsed std::Option::Some(number) is then
+            number std::Result::Ok
+        else
+            "f64" Error::OutOfRange std::Result::Error
         fi
     }
 }

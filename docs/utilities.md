@@ -139,7 +139,9 @@ parsed.unwrap = value
 "name" value json::json_get_str.unwrap print
 ```
 
-Strings support UTF-8 and JSON Unicode escapes. Numbers are limited to `i64`.
+Strings support UTF-8 and JSON Unicode escapes. Numeric conversions support
+all integer widths and finite `f32` and `f64` values. The tree also preserves
+number tokens outside the built-in numeric ranges.
 See the [conversion contracts and limits](json.md#conversion-contracts) and the
 [runnable example](../examples/json.casa).
 

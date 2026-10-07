@@ -66,7 +66,7 @@ fn read_scores value:$json::JsonValue -> std::Result[std::List[i64] json::Error]
 
 Custom implementations decide whether fields are required, whether unknown
 fields are accepted, and how enums store their tags and payloads. The example
-requires both fields and ignores additional fields. Missing fields do not
+requires all fields and ignores additional fields. Missing fields do not
 implicitly become `Option::None`.
 
 ## Supported types
@@ -75,7 +75,9 @@ implicitly become `Option::None`.
 |---|---|
 | `bool` | Boolean. |
 | `char` | String containing exactly one Unicode scalar. |
-| `i8`, `i16`, `i32`, `i64`, `u8`, `u16`, `u32`, `u64` | Integer within both the Casa type's range and the JSON library's `i64` range. |
+| `f32`, `f64` | Finite JSON number, using the shortest decimal text that preserves the value. |
+| `i8`, `i16`, `i32`, `i64`, `u8`, `u16`, `u32`, `u64` | Integer across the type's full range. |
+| `JsonNumber` | Validated decimal text without a fixed numeric range. |
 | `JsonValue` | Independent copy of the JSON tree. |
 | `List[T]` | Array, when `T` implements the corresponding trait. |
 | `Map[String T]` | Object, when `T` implements the corresponding trait. |
@@ -89,10 +91,42 @@ is `null`. Use a custom tagged representation when that distinction matters.
 Object member order follows map iteration and is not a stable output contract.
 Duplicate input keys use the last value.
 
-Numbers remain limited to `i64`. Fractional and exponent forms, integer overflow,
-and `u64` serialization above `9223372036854775807` return errors. There are no
-conversions for `f32` or `f64`. Revisit the numeric representation in `JsonValue`
-when adding floating-point or full-range unsigned JSON numbers.
+## Numbers
+
+JSON numbers accept an optional minus sign, an integer part, an optional
+fraction, and an optional exponent. Exponents accept `e` or `E` and an optional
+sign. Leading zeros, a leading plus sign, missing digits, NaN, and infinities
+are rejected.
+
+Integer conversions require integer notation and check the destination range.
+For example, `18446744073709551615` converts to `u64`, but exceeds `i64`.
+`1.0` and `1e0` do not convert to integer types.
+
+Floating-point conversions accept integer, fractional, and exponent notation.
+They parse the decimal text directly at the requested precision using the
+standard library's rounding rules. Values that exceed the finite range return
+`OutOfRange`. Underflow rounds to a subnormal value or signed zero. Serialization
+rejects NaN and infinities with `InvalidValue`. Both float types preserve the
+bits of finite values through a round trip, including negative zero.
+
+`JsonValue::JsonNumber` stores a `JsonNumber` for fractional or exponent forms,
+integers outside `i64`, and `-0`. Other parsed integers use `JsonInt`.
+`JsonNumber` keeps the exact number token, including trailing fractional zeros
+and exponent spelling. Its private storage prevents invalid number text from
+entering the tree through safe code. This lets `json_serialize` remain infallible.
+
+Use `JsonNumber::new` to validate a complete number token without whitespace.
+Its result is `Result[JsonNumber parser::ParseError]`. `JsonNumber.as_str` returns
+a borrowed `$str` view of the token. A valid token can exceed every built-in
+numeric range and still round-trip through the tree:
+
+```casa
+import "std"
+import "json"
+
+"1.2300e+400" json::JsonNumber::new.unwrap = number
+number json::serialize.unwrap print
+```
 
 ## Errors
 
@@ -102,8 +136,8 @@ Both typed entry points return `Result` with `json::Error`:
 |---|---|
 | `InvalidValue(str)` | The value has invalid content, such as an unknown enum tag or a multi-character string for `char`. |
 | `MissingField(String)` | A required object member is absent. The payload names the field. |
-| `OutOfRange(str)` | An integer does not fit the destination range. The payload names the target type. |
-| `Parse(parser::ParseError)` | Invalid JSON text, unsupported number, or trailing content. The payload contains a message and a byte offset. |
+| `OutOfRange(str)` | A number exceeds a checked numeric range. The payload names the type whose range check failed. |
+| `Parse(parser::ParseError)` | Invalid JSON text or trailing content. The payload contains a message and a byte offset. |
 | `TypeMismatch(str)` | The JSON value has the wrong kind. The payload names the expected kind. |
 
 Errors from nested conversions propagate unchanged. They do not include the
@@ -117,7 +151,7 @@ U+0020. Leading and trailing JSON whitespace is accepted.
 ## Working with a JSON tree
 
 `JsonValue` has the variants `JsonNull`, `JsonBool(bool)`, `JsonInt(i64)`,
-`JsonString(String)`, `JsonArray(List[JsonValue])`, and
+`JsonNumber(JsonNumber)`, `JsonString(String)`, `JsonArray(List[JsonValue])`, and
 `JsonObject(Map[String JsonValue])`.
 
 ```casa
@@ -143,10 +177,12 @@ The existing tree API remains available:
 | `json_get_value value:$JsonValue key:$str -> Option[$JsonValue]` | Borrow any object member. |
 | `json_object -> Map[String JsonValue]` | Construct an empty object map. |
 | `json_parse cursor:mut$parser::Cursor -> Result[JsonValue parser::ParseError]` | Parse one value at the current cursor position. |
+| `json_parse_number cursor:mut$parser::Cursor -> Result[i64 parser::ParseError]` | Parse an integer within the `i64` range. |
 | `json_serialize value:$JsonValue -> String` | Serialize a tree. |
 | `json_set value:JsonValue key:String map:Map[String JsonValue] -> Map[String JsonValue]` | Add or replace a member and return the map. |
 
 The `json_get_*` helpers return `None` for a missing member or the wrong value
 kind. Borrowed results keep the input tree loaned until their last use.
 `json_parse` leaves trailing content for the caller. Use `deserialize` when
-reading a complete JSON document.
+reading a complete JSON document. `json_parse_number` retains its integer-only
+contract. Use `json_parse` to read any JSON number from a cursor.
