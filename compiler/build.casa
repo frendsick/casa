@@ -13,12 +13,49 @@ const SIGNAL_MASK 127
 const EXIT_STATUS_SHIFT 8
 const EXIT_STATUS_MASK 255
 
+# mkdir reserves a private namespace atomically, including when a candidate is
+# an existing file or symlink. PID plus retries also separates repeated calls.
+fn create_assembly_directory assembly_path:$str -> std::Result[std::String os::IoError] {
+    if assembly_path.as_cstr.is_none then
+        os::EINVAL os::IoError::Other std::Result::Error return
+    fi
+    # SAFETY: getpid has no pointer arguments.
+    unsafe { 39 syscall0 = pid }
+    assembly_path path::dirname = parent
+    0 = attempt: u64
+    while true do
+        f"{parent}/.casa-assembly.{pid}.{attempt}" = directory
+        448 directory
+            .as_str
+            .as_cstr
+            .unwrap dir::create match
+            std::Result::Ok(_) => directory std::Result::Ok return
+            std::Result::Error(error) => {
+                if error os::IoError::AlreadyExists is then
+                    1 += attempt
+                else
+                    error std::Result::Error return
+                fi
+            }
+        end
+    done
+    "assembly directory reservation loop returned" panic
+}
+
+fn remove_assembly_directory directory:$str {
+    f"{directory}/source.s"
+        .as_str
+        .as_cstr
+        .unwrap file::remove drop
+    directory.as_cstr.unwrap dir::remove drop
+}
+
 pub enum BuildFailure {
-    Write (std::String os::IoError)
-    Launch (os::IoError)
-    Wait (os::IoError)
-    Exit (i64)
-    Signal (i64)
+    Write(std::String os::IoError)
+    Launch(os::IoError)
+    Wait(os::IoError)
+    Exit(i64)
+    Signal(i64)
 }
 
 impl BuildFailure: std::Display {
@@ -136,7 +173,8 @@ impl NativeDriver {
     }
 
     # Write complete target assembly, assemble and link once, then clean up even
-    # on native failures. --keep-asm keeps the complete source on success or failure.
+    # on native failures. Ordinary builds own a private assembly directory.
+    # --keep-asm explicitly writes <output>.s on success or failure.
     pub fn compile_binary
         self:$NativeDriver
         source:$products::AssemblySource
@@ -149,9 +187,24 @@ impl NativeDriver {
             }
         end
         f"{output}.s" = assembly_path
+        std::Option[std::String]::None = temporary_directory
+        if keep_asm ! then
+            assembly_path.as_str create_assembly_directory match
+                std::Result::Ok(directory) => {
+                    f"{directory}/source.s" = assembly_path
+                    directory std::Option::Some = temporary_directory
+                }
+                std::Result::Error(error) => {
+                    error assembly_path BuildFailure::Write std::Result::Error return
+                }
+            end
+        fi
         if assembly_path.as_str.as_cstr std::Option::Some(path) is then
             source.get_text.as_str std::Bytes::from_str path file::write_all = written
             if written std::Result::Error(error) is then
+                if temporary_directory std::Option::Some(directory) is then
+                    directory.as_str remove_assembly_directory
+                fi
                 error assembly_path BuildFailure::Write std::Result::Error return
             fi
         else
@@ -171,11 +224,8 @@ impl NativeDriver {
             library.as_str arguments.push_str
         done
         arguments NativeDriver::run = result
-        if keep_asm ! then
-            assembly_path
-                .as_str
-                .as_cstr
-                .unwrap file::remove drop
+        if temporary_directory std::Option::Some(directory) is then
+            directory.as_str remove_assembly_directory
         fi
         result
     }

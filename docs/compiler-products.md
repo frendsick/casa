@@ -54,8 +54,12 @@ caller. Only the forked child exits after an unsuccessful `execve`.
 The fixed Linux runtime code and data are embedded from `compiler/runtime.casa`.
 Program-specific pools and bodies remain generated. Installed compilers need no
 runtime asset from the checkout. `keep_asm` retains the complete `<output>.s` on
-success and native failure. Otherwise the adapter removes it after the driver
-returns. The compiler creates no intermediate object file.
+success and native failure, replacing an existing file at that explicit output
+path. Ordinary builds leave `<output>.s` unchanged. Each ordinary build atomically
+creates a private directory beside the output, writes its assembly there, and
+removes the assembly and directory on write or native failure and on success.
+Concurrent ordinary builds use separate assembly files, even with the same binary
+output path. The compiler creates no intermediate object file.
 
 The CLI passes the assembly product to the native driver and retains its report
 until diagnostics have been presented. It does not coordinate compiler phases.

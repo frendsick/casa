@@ -154,7 +154,7 @@ if matches_filter installed_native "$@"; then
         chmod a-w readonly.s
         # Root can write read-only files. Run this check only when access is denied.
         if [ ! -w readonly.s ]; then
-            if ./casac program.casa -o readonly -l m >readonly.out 2>&1; then
+            if ./casac program.casa -o readonly -l m --keep-asm >readonly.out 2>&1; then
                 echo "native build accepted a read-only assembly file" >&2
                 exit 1
             fi
@@ -171,6 +171,11 @@ if matches_filter installed_native "$@"; then
         [ ! -e failed.s ]
         [ ! -e failed.o ]
     )
+fi
+
+if matches_filter native_assembly "$@"; then
+    matched=true
+    python3 tests/test_native_assembly.py "$COMPILER"
 fi
 
 if matches_filter lsp_workspace "$@"; then
