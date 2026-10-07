@@ -127,50 +127,23 @@ Parses process arguments without changing the parser definitions. `-h` and `--he
 
 ## JSON
 
+The [JSON library](json.md) serializes and deserializes custom structs and enums
+through explicit conversion traits. It also provides a `JsonValue` tree API.
+
 ```casa
 import "std"
 import "json"
-import "parser"
 
-"{\"name\":\"Ada\"}" parser::Cursor::new = cursor
-cursor json::json_parse.unwrap = value
+"{\"name\":\"Ada\"}" &json::deserialize[json::JsonValue] exec = parsed
+parsed.unwrap = value
 "name" value json::json_get_str.unwrap print
 ```
 
-`JsonValue` variants are `JsonNull`, `JsonBool`, `JsonInt`, `JsonString`,
-`JsonArray`, and `JsonObject`.
-
-| Function | Result |
-|---|---|
-| `json_escape_string text:$str -> String` | Escape string contents |
-| `json_get_array value:$JsonValue key:$str -> Option[List[JsonValue]]` | Array member |
-| `json_get_bool value:$JsonValue key:$str -> Option[bool]` | Boolean member |
-| `json_get_int value:$JsonValue key:$str -> Option[i64]` | Integer member |
-| `json_get_object value:$JsonValue key:$str -> Option[$JsonValue]` | Object member |
-| `json_get_str value:$JsonValue key:$str -> Option[String]` | Cloned string member |
-| `json_get_value value:$JsonValue key:$str -> Option[$JsonValue]` | Object member |
-| `json_object -> Map[String JsonValue]` | Empty object map |
-| `json_parse cursor:mut$Cursor -> Result[JsonValue ParseError]` | Parse one value |
-| `json_serialize value:$JsonValue -> String` | Serialize a value |
-| `json_set value:JsonValue key:String map:Map[String JsonValue] -> Map[String JsonValue]` | Add an object member |
-
-`json_get_value` and `json_get_object` borrow from the input value.
-The [returned borrow](ownership.md#return-a-borrow) keeps that value loaned until its last use.
-`json_get_str` and `json_get_array` return independent cloned values.
-
-The current parser handles a limited JSON subset:
-
-- Non-ASCII string bytes are converted to separate characters rather than
-  decoded as UTF-8. Non-ASCII text can change during parsing.
-- Numbers are integers and use the [parser library's wrapping accumulation](parser.md#ready-made-parsers).
-- Parsing consumes one value without requiring end of input. Callers must check
-  the cursor for trailing content.
-- Unicode `\uXXXX` escapes skip four bytes and produce `?`, without validating
-  the hexadecimal digits. `\b` and `\f` produce NUL.
-
-Serialization escapes quotes, backslashes, newline, tab, and carriage return.
-Other control characters are emitted unchanged, so the result can be invalid
-JSON when a string contains them.
+Strings support UTF-8 and JSON Unicode escapes. Numeric conversions support
+all integer widths and finite `f32` and `f64` values. The tree also preserves
+number tokens outside the built-in numeric ranges.
+See the [conversion contracts and limits](json.md#conversion-contracts) and the
+[runnable example](../examples/json.casa).
 
 ## Logging
 

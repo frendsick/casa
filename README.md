@@ -83,6 +83,7 @@ introductory to advanced.
 ### Libraries
 
 - [Collections and iterators](docs/collections.md)
+- [JSON](docs/json.md)
 - [List](docs/lists.md)
 - [Operating-system APIs](docs/os.md)
 - [Optional values and errors](docs/optional-values-and-errors.md)
