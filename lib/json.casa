@@ -1,17 +1,19 @@
 # JSON parser and serializer
 #
-# Provides parsing of JSON text into a JsonValue tree and serialization
-# back to JSON text. Used by the language server for JSON-RPC communication.
+# Converts JSON text and application types through an owned JsonValue tree.
+# Used by the language server for JSON-RPC communication.
 import "std" as std
 import "parser" as parser
 
+# JsonInt limits numbers to i64. Extend the value representation before adding
+# floating-point or full-range u64 conversions.
 pub enum JsonValue {
     JsonNull
-    JsonBool (bool)
-    JsonInt (i64)
-    JsonString (std::String)
-    JsonArray (std::List[JsonValue])
-    JsonObject (std::Map[std::String JsonValue])
+    JsonBool(bool)
+    JsonInt(i64)
+    JsonString(std::String)
+    JsonArray(std::List[JsonValue])
+    JsonObject(std::Map[std::String JsonValue])
 }
 
 impl JsonValue: std::Clone {
@@ -42,65 +44,155 @@ pub fn json_skip_whitespace cursor:mut$parser::Cursor {
         cursor.advance drop
     done
 }
+const HIGH_SURROGATE_MIN: u32 55296
+const HIGH_SURROGATE_MAX: u32 56319
+const LOW_SURROGATE_MIN: u32 56320
+const LOW_SURROGATE_MAX: u32 57343
+const SUPPLEMENTARY_PLANE_START: u32 65536
+const SURROGATE_RADIX: u32 1024
+const POSITIVE_INTEGER_LIMIT: u64 9223372036854775807
+const NEGATIVE_INTEGER_LIMIT: u64 9223372036854775808
+
+fn parse_hex_quad cursor:mut$parser::Cursor -> std::Result[u32 parser::ParseError] {
+    0 = value: u32
+    0 = index: u64
+    while 4 index < do
+        if cursor.advance std::Option::Some(character) is then
+            character.codepoint = digit
+            if '0' character >= '9' character <= && then
+                '0'.codepoint -= digit
+            elif 'a' character >= 'f' character <= && then
+                digit 'a'.codepoint - 10 + = digit
+            elif 'A' character >= 'F' character <= && then
+                digit 'A'.codepoint - 10 + = digit
+            else
+                cursor.pos 1 - "invalid Unicode escape" parser::ParseError std::Result::Error return
+            fi
+            value 16 * digit + = value
+        else
+            cursor.pos "incomplete Unicode escape" parser::ParseError std::Result::Error return
+        fi
+        1 += index
+    done
+    value std::Result::Ok
+}
+
+fn parse_unicode_escape cursor:mut$parser::Cursor -> std::Result[char parser::ParseError] {
+    cursor parse_hex_quad ? = codepoint
+    if HIGH_SURROGATE_MIN codepoint >= HIGH_SURROGATE_MAX codepoint <= && then
+        '\\' cursor.expect_char ? drop
+        'u' cursor.expect_char ? drop
+        cursor parse_hex_quad ? = low
+        if LOW_SURROGATE_MIN low < LOW_SURROGATE_MAX low > || then
+            cursor.pos "expected low surrogate" parser::ParseError std::Result::Error return
+        fi
+        codepoint HIGH_SURROGATE_MIN - SURROGATE_RADIX *
+        low LOW_SURROGATE_MIN - + SUPPLEMENTARY_PLANE_START + = codepoint
+    fi
+    if codepoint char::from_codepoint std::Option::Some(character) is then
+        character std::Result::Ok
+    else
+        cursor.pos "invalid Unicode scalar" parser::ParseError std::Result::Error
+    fi
+}
+
+fn parse_string_escape cursor:mut$parser::Cursor -> std::Result[char parser::ParseError] {
+    if cursor.advance std::Option::Some(character) is then
+        character match
+            '"' => '"' std::Result::Ok
+            '\\' => '\\' std::Result::Ok
+            '/' => '/' std::Result::Ok
+            'b' => '\u{8}' std::Result::Ok
+            'f' => '\u{c}' std::Result::Ok
+            'n' => '\n' std::Result::Ok
+            'r' => '\r' std::Result::Ok
+            't' => '\t' std::Result::Ok
+            'u' => cursor parse_unicode_escape
+            _ => cursor.pos 1 - "invalid string escape" parser::ParseError std::Result::Error
+        end
+    else
+        cursor.pos "incomplete string escape" parser::ParseError std::Result::Error
+    fi
+}
+
+fn parse_string_contents cursor:mut$parser::Cursor -> std::Result[std::String parser::ParseError] {
+    '"' cursor.expect_char ? drop
+    std::String::new = text
+    cursor.pos = segment_start
+    while cursor.is_eof ! do
+        cursor.peek.unwrap = character
+        if '"' character == '\\' character == || then
+            # Cursor positions count bytes. Copy complete UTF-8 segments between escapes.
+            cursor.source segment_start cursor.pos segment_start - str::substring.as_str text.append
+            cursor.advance drop
+            if '"' character == then
+                text std::Result::Ok return
+            fi
+            cursor parse_string_escape ? text.push
+            cursor.pos = segment_start
+        elif ' ' character < then
+            cursor.pos "unescaped control character" parser::ParseError std::Result::Error return
+        else
+            cursor.advance drop
+        fi
+    done
+    cursor.pos "unterminated JSON string" parser::ParseError std::Result::Error
+}
 
 pub fn json_parse_string cursor:mut$parser::Cursor -> std::Result[std::String parser::ParseError] {
     cursor.save = start
-    '"' cursor.expect_char = open_result
-    if open_result.is_error then
+    cursor parse_string_contents = result
+    if result.is_error then
         start cursor.restore
-        open_result.unwrap_error std::Result::Error
-        return
     fi
-    open_result drop
-    std::List[char]::new = chars
+    result
+}
+
+fn parse_integer cursor:mut$parser::Cursor -> std::Result[i64 parser::ParseError] {
+    "-" cursor.starts_with = negative
+    if negative then
+        cursor.advance drop
+    fi
+    cursor.pos = digits_start
+    0 = magnitude: u64
+    if negative then NEGATIVE_INTEGER_LIMIT else POSITIVE_INTEGER_LIMIT fi = limit
     while cursor.is_eof ! do
         cursor.peek.unwrap = character
-        if character '"' == then
-            cursor.advance drop
-            chars std::convert_chars_to_string std::Result::Ok
-            return
-        elif character '\\' == then
-            cursor.advance drop
-            if cursor.is_eof then
-                start cursor.restore
-                start "unexpected EOF in string escape" parser::ParseError std::Result::Error
-                return
-            fi
-            cursor.peek.unwrap = escape
-            cursor.advance drop
-            escape match
-                '"' => '"' chars.push
-                '\\' => '\\' chars.push
-                '/' => '/' chars.push
-                'n' => '\n' chars.push
-                't' => '\t' chars.push
-                'r' => '\r' chars.push
-                'b' => '\0' chars.push
-                'f' => '\0' chars.push
-                'u' => {
-                    # \uXXXX: skip 4 hex digits, store as '?'
-                    0 = unicode_index: u64
-                    while unicode_index 4 > do
-                        if cursor.is_eof ! then
-                            cursor.advance drop
-                        fi
-                        1 += unicode_index
-                    done
-                    '?' chars.push
-                }
-                _ => escape chars.push
-            end
-        else
-            cursor.advance drop
-            character chars.push
+        if character.is_digit ! then
+            break
         fi
+        if digits_start cursor.pos > 0 magnitude == && then
+            cursor.pos "leading zero in JSON number" parser::ParseError std::Result::Error return
+        fi
+        character.codepoint u64::from '0'.codepoint u64::from - = digit
+        if limit digit - 10 / magnitude > then
+            cursor.pos "JSON integer outside i64 range" parser::ParseError std::Result::Error return
+        fi
+        magnitude 10 * digit + = magnitude
+        cursor.advance drop
     done
-    start cursor.restore
-    start "unterminated JSON string" parser::ParseError std::Result::Error
+    if digits_start cursor.pos == then
+        cursor.pos "expected integer" parser::ParseError std::Result::Error return
+    fi
+    if "." cursor.starts_with "e" cursor.starts_with || "E" cursor.starts_with || then
+        cursor.pos "fractional JSON numbers are not supported" parser::ParseError std::Result::Error return
+    fi
+    if magnitude NEGATIVE_INTEGER_LIMIT == then
+        -9223372036854775808
+    elif negative then
+        0 magnitude i64::try_from.unwrap -
+    else
+        magnitude i64::try_from.unwrap
+    fi std::Result::Ok
 }
 
 pub fn json_parse_number cursor:mut$parser::Cursor -> std::Result[i64 parser::ParseError] {
-    cursor parser::parse_int
+    cursor.save = start
+    cursor parse_integer = result
+    if result.is_error then
+        start cursor.restore
+    fi
+    result
 }
 
 pub fn json_parse_bool cursor:mut$parser::Cursor -> std::Result[bool parser::ParseError] {
@@ -280,10 +372,21 @@ pub fn json_escape_string text:$str -> std::String {
         character match
             '"' => "\\\"" builder.append
             '\\' => "\\\\" builder.append
+            '\u{8}' => "\\b" builder.append
+            '\u{c}' => "\\f" builder.append
             '\n' => "\\n" builder.append
             '\t' => "\\t" builder.append
             '\r' => "\\r" builder.append
-            _ => character builder.push
+            _ => {
+                if ' ' character < then
+                    "\\u00" builder.append
+                    character.codepoint u64::from = codepoint
+                    codepoint 16 / "0123456789abcdef".at builder.push
+                    codepoint 16 % "0123456789abcdef".at builder.push
+                else
+                    character builder.push
+                fi
+            }
         end
     done
     builder
@@ -398,4 +501,297 @@ pub fn json_set
 -> std::Map[std::String JsonValue] {
     value key map.set
     map
+}
+
+# Typed conversion. Values returned by from_json own their data.
+pub enum Error {
+    Parse(parser::ParseError)
+    TypeMismatch(str)
+    MissingField(std::String)
+    OutOfRange(str)
+    InvalidValue(str)
+}
+
+pub trait Serialize {
+    fn to_json self:$self -> std::Result[JsonValue Error]
+}
+
+pub trait Deserialize {
+    fn from_json value:$JsonValue -> std::Result[self Error]
+}
+
+pub fn serialize [T:Serialize] value:$T -> std::Result[std::String Error] {
+    value.to_json ? json_serialize std::Result::Ok
+}
+
+pub fn deserialize [T:Deserialize] text:$str -> std::Result[T Error] {
+    text parser::Cursor::new = cursor
+    cursor json_parse match
+        std::Result::Ok(value) => {
+            cursor json_skip_whitespace
+            if cursor.is_eof ! then
+                cursor.pos "trailing content after JSON value" parser::ParseError Error::Parse
+                std::Result::Error return
+            fi
+            # Function references retain T for associated methods without a self argument.
+            # Direct T::from_json dispatch currently selects the input type instead.
+            # Use direct calls here and in containers once that compiler path is corrected.
+            value &T::from_json exec
+        }
+        std::Result::Error(error) => error Error::Parse std::Result::Error
+    end
+}
+
+impl JsonValue {
+    pub fn require_field self:$JsonValue key:$str -> std::Result[$JsonValue Error] {
+        if self JsonValue::JsonObject(entries) is then
+            if key entries.get_str std::Option::Some(value) is then
+                value std::Result::Ok
+            else
+                key.to_str Error::MissingField std::Result::Error
+            fi
+        else
+            "object" Error::TypeMismatch std::Result::Error
+        fi
+    }
+}
+
+impl JsonValue: Serialize + Deserialize {
+    pub fn to_json self:$JsonValue -> std::Result[JsonValue Error] { self.clone std::Result::Ok }
+    pub fn from_json value:$JsonValue -> std::Result[JsonValue Error] {
+        value.clone std::Result::Ok
+    }
+}
+
+impl bool: Serialize + Deserialize {
+    pub fn to_json self:$bool -> std::Result[JsonValue Error] {
+        self copy JsonValue::JsonBool std::Result::Ok
+    }
+    pub fn from_json value:$JsonValue -> std::Result[bool Error] {
+        if value JsonValue::JsonBool(inner) is then
+            inner copy std::Result::Ok
+        else
+            "boolean" Error::TypeMismatch std::Result::Error
+        fi
+    }
+}
+
+impl i64: Serialize + Deserialize {
+    pub fn to_json self:$i64 -> std::Result[JsonValue Error] {
+        self copy JsonValue::JsonInt std::Result::Ok
+    }
+    pub fn from_json value:$JsonValue -> std::Result[i64 Error] {
+        if value JsonValue::JsonInt(inner) is then
+            inner copy std::Result::Ok
+        else
+            "integer" Error::TypeMismatch std::Result::Error
+        fi
+    }
+}
+
+impl i8: Serialize + Deserialize {
+    pub fn to_json self:$i8 -> std::Result[JsonValue Error] {
+        self copy i64::from JsonValue::JsonInt std::Result::Ok
+    }
+    pub fn from_json value:$JsonValue -> std::Result[i8 Error] {
+        value i64::from_json ? = decoded
+        if decoded i8::try_from std::Option::Some(integer) is then
+            integer std::Result::Ok
+        else
+            "i8" Error::OutOfRange std::Result::Error
+        fi
+    }
+}
+
+impl i16: Serialize + Deserialize {
+    pub fn to_json self:$i16 -> std::Result[JsonValue Error] {
+        self copy i64::from JsonValue::JsonInt std::Result::Ok
+    }
+    pub fn from_json value:$JsonValue -> std::Result[i16 Error] {
+        value i64::from_json ? = decoded
+        if decoded i16::try_from std::Option::Some(integer) is then
+            integer std::Result::Ok
+        else
+            "i16" Error::OutOfRange std::Result::Error
+        fi
+    }
+}
+
+impl i32: Serialize + Deserialize {
+    pub fn to_json self:$i32 -> std::Result[JsonValue Error] {
+        self copy i64::from JsonValue::JsonInt std::Result::Ok
+    }
+    pub fn from_json value:$JsonValue -> std::Result[i32 Error] {
+        value i64::from_json ? = decoded
+        if decoded i32::try_from std::Option::Some(integer) is then
+            integer std::Result::Ok
+        else
+            "i32" Error::OutOfRange std::Result::Error
+        fi
+    }
+}
+
+impl u8: Serialize + Deserialize {
+    pub fn to_json self:$u8 -> std::Result[JsonValue Error] {
+        self copy i64::from JsonValue::JsonInt std::Result::Ok
+    }
+    pub fn from_json value:$JsonValue -> std::Result[u8 Error] {
+        value i64::from_json ? = decoded
+        if decoded u8::try_from std::Option::Some(integer) is then
+            integer std::Result::Ok
+        else
+            "u8" Error::OutOfRange std::Result::Error
+        fi
+    }
+}
+
+impl u16: Serialize + Deserialize {
+    pub fn to_json self:$u16 -> std::Result[JsonValue Error] {
+        self copy i64::from JsonValue::JsonInt std::Result::Ok
+    }
+    pub fn from_json value:$JsonValue -> std::Result[u16 Error] {
+        value i64::from_json ? = decoded
+        if decoded u16::try_from std::Option::Some(integer) is then
+            integer std::Result::Ok
+        else
+            "u16" Error::OutOfRange std::Result::Error
+        fi
+    }
+}
+
+impl u32: Serialize + Deserialize {
+    pub fn to_json self:$u32 -> std::Result[JsonValue Error] {
+        self copy i64::from JsonValue::JsonInt std::Result::Ok
+    }
+    pub fn from_json value:$JsonValue -> std::Result[u32 Error] {
+        value i64::from_json ? = decoded
+        if decoded u32::try_from std::Option::Some(integer) is then
+            integer std::Result::Ok
+        else
+            "u32" Error::OutOfRange std::Result::Error
+        fi
+    }
+}
+
+impl u64: Serialize + Deserialize {
+    pub fn to_json self:$u64 -> std::Result[JsonValue Error] {
+        if self copy i64::try_from std::Option::Some(integer) is then
+            integer JsonValue::JsonInt std::Result::Ok
+        else
+            "i64" Error::OutOfRange std::Result::Error
+        fi
+    }
+    pub fn from_json value:$JsonValue -> std::Result[u64 Error] {
+        value i64::from_json ? = decoded
+        if decoded u64::try_from std::Option::Some(integer) is then
+            integer std::Result::Ok
+        else
+            "u64" Error::OutOfRange std::Result::Error
+        fi
+    }
+}
+
+impl str: Serialize {
+    pub fn to_json self:$str -> std::Result[JsonValue Error] {
+        self.to_str JsonValue::JsonString std::Result::Ok
+    }
+}
+
+impl std::String: Serialize + Deserialize {
+    pub fn to_json self:$std::String -> std::Result[JsonValue Error] {
+        self.clone JsonValue::JsonString std::Result::Ok
+    }
+    pub fn from_json value:$JsonValue -> std::Result[std::String Error] {
+        if value JsonValue::JsonString(inner) is then
+            inner.clone std::Result::Ok
+        else
+            "string" Error::TypeMismatch std::Result::Error
+        fi
+    }
+}
+
+impl char: Serialize + Deserialize {
+    pub fn to_json self:$char -> std::Result[JsonValue Error] {
+        self.to_str JsonValue::JsonString std::Result::Ok
+    }
+    pub fn from_json value:$JsonValue -> std::Result[char Error] {
+        if value JsonValue::JsonString(text) is then
+            text.iter = characters
+            if characters.next std::Option::Some(character) is then
+                if characters.next.is_none then
+                    character std::Result::Ok return
+                fi
+            fi
+            "expected one Unicode scalar" Error::InvalidValue std::Result::Error
+        else
+            "string" Error::TypeMismatch std::Result::Error
+        fi
+    }
+}
+
+impl[T: Serialize] std::List[T]: Serialize {
+    pub fn to_json self:$std::List[T] -> std::Result[JsonValue Error] {
+        std::List[JsonValue]::new = values
+        for item in self.iter do
+            item.to_json ? values.push
+        done
+        values JsonValue::JsonArray std::Result::Ok
+    }
+}
+
+impl[T: Deserialize] std::List[T]: Deserialize {
+    pub fn from_json value:$JsonValue -> std::Result[std::List[T] Error] {
+        if value JsonValue::JsonArray(items) is then
+            std::List[T]::new = values
+            for item in items.iter do
+                item &T::from_json exec ? values.push
+            done
+            values std::Result::Ok
+        else
+            "array" Error::TypeMismatch std::Result::Error
+        fi
+    }
+}
+
+impl[T: Serialize] std::Option[T]: Serialize {
+    pub fn to_json self:$std::Option[T] -> std::Result[JsonValue Error] {
+        self match
+            std::Option::None => JsonValue::JsonNull std::Result::Ok
+            std::Option::Some(value) => value.to_json
+        end
+    }
+}
+
+impl[T: Deserialize] std::Option[T]: Deserialize {
+    pub fn from_json value:$JsonValue -> std::Result[std::Option[T] Error] {
+        if value JsonValue::JsonNull is then
+            std::Option[T]::None std::Result::Ok
+        else
+            value &T::from_json exec ? std::Option::Some std::Result::Ok
+        fi
+    }
+}
+
+impl[T: Serialize] std::Map[std::String T]: Serialize {
+    pub fn to_json self:$std::Map[std::String T] -> std::Result[JsonValue Error] {
+        json_object = entries
+        for entry in self.iter do
+            entry.second.to_json ? entry.first.clone entries.set
+        done
+        entries JsonValue::JsonObject std::Result::Ok
+    }
+}
+
+impl[T: Deserialize] std::Map[std::String T]: Deserialize {
+    pub fn from_json value:$JsonValue -> std::Result[std::Map[std::String T] Error] {
+        if value JsonValue::JsonObject(entries) is then
+            std::Map[std::String T]::new = values
+            for entry in entries.iter do
+                entry.second &T::from_json exec ? entry.first.clone values.set
+            done
+            values std::Result::Ok
+        else
+            "object" Error::TypeMismatch std::Result::Error
+        fi
+    }
 }

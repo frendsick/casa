@@ -25,18 +25,19 @@ The examples are ordered from introductory programs to low-level system code.
 | 13 | [propagate_result.casa](propagate_result.casa) | Structural `?` propagation for `Result` and a custom enum |
 | 14 | [argparse.casa](argparse.casa) | A command-line interface with options and help |
 | 15 | [parser.casa](parser.casa) | A complete parser built from `Cursor` operations |
-| 16 | [os_interaction.casa](os_interaction.casa) | Files, directories, paths, environment, and processes |
-| 17 | [log.casa](log.casa) | Logging with explicit root-owned level state |
-| 18 | [timer.casa](timer.casa) | A root-owned monotonic timer |
-| 19 | [freestanding_primitives.casa](freestanding_primitives.casa) | Primitive operations without the standard library |
-| 20 | [sized_memory.casa](sized_memory.casa) | [unsafe](../docs/functions-and-lambdas.md#unsafe-boundaries) allocation and sized memory access |
-| 21 | [unicode.casa](unicode.casa) | Direct Unicode, Unicode escapes, and code-point conversion |
-| 22 | [owned_string.casa](owned_string.casa) | Owned string growth, borrowing, and cloning |
-| 23 | [bytes.casa](bytes.casa) | Compact binary storage, iteration, and validated text conversion |
-| 24 | [game_of_life.casa](game_of_life.casa) | An interactive terminal program with raw Linux calls |
-| 25 | [root_owned_state.casa](root_owned_state.casa) | Root-owned runtime state, explicit parameters, and cleanup |
-| 26 | [foreign_function.casa](foreign_function.casa) | C ABI scalars, an aggregate return, and native library linking |
-| 27 | [raylib.casa](raylib.casa) | Optional graphical window, mouse input, and resource cleanup |
+| 16 | [json.casa](json.casa) | JSON conversion traits for a struct and an enum |
+| 17 | [os_interaction.casa](os_interaction.casa) | Files, directories, paths, environment, and processes |
+| 18 | [log.casa](log.casa) | Logging with explicit root-owned level state |
+| 19 | [timer.casa](timer.casa) | A root-owned monotonic timer |
+| 20 | [freestanding_primitives.casa](freestanding_primitives.casa) | Primitive operations without the standard library |
+| 21 | [sized_memory.casa](sized_memory.casa) | [unsafe](../docs/functions-and-lambdas.md#unsafe-boundaries) allocation and sized memory access |
+| 22 | [unicode.casa](unicode.casa) | Direct Unicode, Unicode escapes, and code-point conversion |
+| 23 | [owned_string.casa](owned_string.casa) | Owned string growth, borrowing, and cloning |
+| 24 | [bytes.casa](bytes.casa) | Compact binary storage, iteration, and validated text conversion |
+| 25 | [game_of_life.casa](game_of_life.casa) | An interactive terminal program with raw Linux calls |
+| 26 | [root_owned_state.casa](root_owned_state.casa) | Root-owned runtime state, explicit parameters, and cleanup |
+| 27 | [foreign_function.casa](foreign_function.casa) | C ABI scalars, an aggregate return, and native library linking |
+| 28 | [raylib.casa](raylib.casa) | Optional graphical window, mouse input, and resource cleanup |
 
 `game_of_life.casa` needs an interactive terminal. Stop it with Ctrl+C.
 

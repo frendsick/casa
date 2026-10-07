@@ -1,0 +1,278 @@
+import "std" as std
+import "../../lib/json.casa" as json
+import "../../lib/parser.casa" as parser
+import "../../lib/test.casa" as test
+
+enum State {
+    Ready
+    Failed(std::String)
+}
+
+impl State: json::Serialize + json::Deserialize {
+    fn to_json self:$State -> std::Result[json::JsonValue json::Error] {
+        self match
+            State::Ready => "ready".to_json
+            State::Failed(message) => {
+                json::json_object = fields
+                message.to_json ? "failed" fields.set_str
+                fields json::JsonValue::JsonObject std::Result::Ok
+            }
+        end
+    }
+    fn from_json value:$json::JsonValue -> std::Result[State json::Error] {
+        if value json::JsonValue::JsonString(name) is then
+            if "ready" name.as_str == then
+                State::Ready std::Result::Ok return
+            fi
+            "unknown state" json::Error::InvalidValue std::Result::Error return
+        fi
+        "failed" value.require_field ? std::String::from_json ? State::Failed std::Result::Ok
+    }
+}
+
+struct Record {
+    enabled: bool
+    name:    std::String
+    scores:  std::List[i64]
+    state:   State
+    note:    std::Option[std::String]
+}
+
+impl Record: json::Serialize + json::Deserialize {
+    fn to_json self:$Record -> std::Result[json::JsonValue json::Error] {
+        json::json_object = fields
+        self.enabled.to_json ? "enabled" fields.set_str
+        self.name.to_json ? "name" fields.set_str
+        self.scores.to_json ? "scores" fields.set_str
+        self.state.to_json ? "state" fields.set_str
+        self.note.to_json ? "note" fields.set_str
+        fields json::JsonValue::JsonObject std::Result::Ok
+    }
+    fn from_json value:$json::JsonValue -> std::Result[Record json::Error] {
+        "enabled" value.require_field ? bool::from_json ? = enabled
+        "name" value.require_field ? std::String::from_json ? = name
+        "scores" value.require_field ? &std::List[i64]::from_json exec ? = scores
+        "state" value.require_field ? &State::from_json exec ? = state
+        "note" value.require_field ? &std::Option[std::String]::from_json exec ? = note
+        Record { enabled: enabled name: name scores: scores state: state note: note } std::Result::Ok
+    }
+}
+
+fn assert_round_trip [T:json::Serialize + json::Deserialize] value:T {
+    value json::serialize.unwrap = encoded
+    encoded.as_str &json::deserialize[T] exec = result
+    result.unwrap json::serialize.unwrap = reencoded
+    "typed round trip" encoded reencoded test::assert_str_eq
+}
+
+fn read_owned_record -> Record {
+    "{\"enabled\":true,\"name\":\"Ada\",\"scores\":[5,-6],\"state\":{\"failed\":\"reason\"},\"note\":null}".to_str = text
+    text.as_str &json::deserialize[Record] exec = result
+    result.unwrap
+}
+
+fn test_records {
+    read_owned_record = owned
+    "owned name survives input cleanup" "Ada" owned.name test::assert_str_eq
+    "typed boolean" owned.enabled test::assert_true
+    "typed integer list" -6 1 owned.scores.get copy test::assert_eq
+    "typed null" owned.note.is_none test::assert_true
+    if owned.state State::Failed(message) is then
+        "enum payload" "reason" message test::assert_str_eq
+    else
+        "failed variant expected" false test::assert_true
+    fi
+    Record {
+        enabled: true
+        name: "Mäkelä 😀".to_str
+        scores: [1, -2, 3] std::List::from_array
+        state: "line\n\"error\"".to_str State::Failed
+        note: "optional".to_str std::Option::Some
+    } assert_round_trip
+    State::Ready assert_round_trip
+    std::Option[std::String]::None assert_round_trip
+    std::List[std::String]::new assert_round_trip
+    std::List[std::String]::new = strings
+    "one".to_str strings.push
+    "two".to_str strings.push
+    strings assert_round_trip
+    std::List[std::Option[i64]]::new = options
+    std::Option[i64]::None options.push
+    7 std::Option::Some options.push
+    options assert_round_trip
+    std::List[std::List[i64]]::new = lists
+    [1, 2] std::List::from_array lists.push
+    [3] std::List::from_array lists.push
+    lists assert_round_trip
+    std::Map[std::String Record]::new = records
+    Record {
+        enabled: false name: "nested".to_str scores: std::List[i64]::new
+        state: State::Ready note: std::Option[std::String]::None
+    } "key\n😀" records.set_str
+    records json::serialize.unwrap = encoded
+    encoded.as_str &json::deserialize[std::Map[std::String Record]] exec = result
+    result.unwrap = decoded
+    "map length" 1 decoded.length test::assert_eq
+    "map key" "nested" "key\n😀" decoded
+        .get_str
+        .unwrap
+        .name test::assert_str_eq
+    "source remains usable" 1 records.length test::assert_eq
+}
+
+fn test_scalars {
+    false assert_round_trip
+    true assert_round_trip
+    '\u{0}' assert_round_trip
+    '😀' assert_round_trip
+    "".to_str assert_round_trip
+    -9223372036854775808 assert_round_trip
+    9223372036854775807 assert_round_trip
+    -128 = signed_byte: i8
+    signed_byte assert_round_trip
+    -32768 = signed_short: i16
+    signed_short assert_round_trip
+    -2147483648 = signed_word: i32
+    signed_word assert_round_trip
+    255 = byte: u8
+    byte assert_round_trip
+    65535 = short: u16
+    short assert_round_trip
+    4294967295 = word: u32
+    word assert_round_trip
+    9223372036854775807 = wide: u64
+    wide assert_round_trip
+    "text view" "\"hello\"" "hello" json::serialize.unwrap test::assert_str_eq
+    " \n42\t\r" &json::deserialize[i64] exec = integer
+    "surrounding whitespace" 42 integer.unwrap test::assert_eq
+    "-0" &json::deserialize[i64] exec = zero
+    "negative zero" 0 zero.unwrap test::assert_eq
+}
+
+fn test_strings {
+    "\"Mäkelä 😀\\u00e4\\uD83d\\uDE00\\b\\f\\n\\r\\t\\/\\\\\\\"\""
+    &json::deserialize[std::String] exec = result
+    "Unicode and escapes" "Mäkelä 😀ä😀\u{8}\u{c}\n\r\t/\\\"" result.unwrap test::assert_str_eq
+    std::String::new = controls
+    0 = codepoint: u32
+    while 32 codepoint < do
+        codepoint char::from_codepoint.unwrap controls.push
+        1 += codepoint
+    done
+    controls json::serialize.unwrap = encoded
+    "NUL is escaped" encoded.as_str "\\u0000" str::contains test::assert_true
+    "backspace is escaped" encoded.as_str "\\b" str::contains test::assert_true
+    "form feed is escaped" encoded.as_str "\\f" str::contains test::assert_true
+    for character in encoded.iter do
+        "no raw controls" 32 character.codepoint >= test::assert_true
+    done
+    controls assert_round_trip
+    "\"\\u0000\\uD7FF\\uE000\\uFFFF\\uDBFF\\uDFFF\""
+    &json::deserialize[std::String] exec = boundaries
+    "Unicode boundaries" "\0\u{d7ff}\u{e000}\u{ffff}\u{10ffff}" boundaries.unwrap test::assert_str_eq
+    "\"é\"" parser::Cursor::new = cursor
+    "cursor string parser" "é" cursor json::json_parse_string.unwrap test::assert_str_eq
+    "cursor counts bytes" 4 cursor.pos test::assert_eq
+}
+
+fn test_invalid_json {
+    [
+        "",
+        " ",
+        "-",
+        "+1",
+        "01",
+        "-01",
+        "1.5",
+        "1e2",
+        "NaN",
+        "9223372036854775808",
+        "-9223372036854775809",
+        "18446744073709551616",
+        "true false",
+        "nullx",
+        "1 2",
+        "[]x",
+        "[1,]",
+        "[1 2]",
+        "[",
+        "{",
+        "{\"x\":}",
+        "{\"x\":1,}",
+        "{\"x\" 1}",
+        "{\"x\":1 \"y\":2}",
+        "\"unterminated",
+        "\"raw\nline\"",
+        "\"\\q\"",
+        "\"\\u123\"",
+        "\"\\uGGGG\"",
+        "\"\\uDC00\"",
+        "\"\\uD800\"",
+        "\"\\uD800\\u0041\"",
+        "\"\\uD800\\uD800\"",
+        "\"\\uD800x\"",
+        "\"\\",
+    ] = invalid
+    for text in invalid.iter do
+        text &json::deserialize[json::JsonValue] exec = result
+        text result.is_error test::assert_true
+        text result.unwrap_error json::Error::Parse is test::assert_true
+    done
+    "\"\\q\"" parser::Cursor::new = cursor
+    "bad string" cursor json::json_parse_string.is_error test::assert_true
+    "string parser restores cursor" 0 cursor.pos test::assert_eq
+    "9223372036854775808" parser::Cursor::new = number_cursor
+    "overflow rejected" number_cursor json::json_parse_number.is_error test::assert_true
+    "number parser restores cursor" 0 number_cursor.pos test::assert_eq
+    "42 trailing" &json::deserialize[i64] exec = trailing
+    if trailing.unwrap_error json::Error::Parse(error) is then
+        "trailing position" 3 error.pos test::assert_eq
+    else
+        "parse error expected" false test::assert_true
+    fi
+}
+
+fn test_conversion_errors {
+    "true" &json::deserialize[i64] exec = wrong_type
+    "type error" wrong_type.unwrap_error json::Error::TypeMismatch is test::assert_true
+    "{}" &json::deserialize[std::List[i64]] exec = wrong_list
+    "list shape" wrong_list.unwrap_error json::Error::TypeMismatch is test::assert_true
+    "[]" &json::deserialize[std::Map[std::String i64]] exec = wrong_map
+    "map shape" wrong_map.unwrap_error json::Error::TypeMismatch is test::assert_true
+    "\"\"" &json::deserialize[char] exec = empty_character
+    "empty char" empty_character.unwrap_error json::Error::InvalidValue is test::assert_true
+    "128" &json::deserialize[i8] exec = overflow
+    "narrowing overflow" overflow.unwrap_error json::Error::OutOfRange is test::assert_true
+    "-1" &json::deserialize[u64] exec = negative
+    "negative unsigned" negative.unwrap_error json::Error::OutOfRange is test::assert_true
+    18446744073709551615 = too_large: u64
+    "serialization range" too_large json::serialize.unwrap_error json::Error::OutOfRange is test::assert_true
+    "[1,true]" &json::deserialize[std::List[i64]] exec = bad_list
+    "list element error" bad_list.unwrap_error json::Error::TypeMismatch is test::assert_true
+    "{\"x\":true}" &json::deserialize[std::Map[std::String i64]] exec = bad_map
+    "map value error" bad_map.unwrap_error json::Error::TypeMismatch is test::assert_true
+    "false" &json::deserialize[std::Option[std::String]] exec = bad_optional
+    "optional value error" bad_optional.unwrap_error json::Error::TypeMismatch is test::assert_true
+    "{}" &json::deserialize[Record] exec = missing
+    if missing.unwrap_error json::Error::MissingField(key) is then
+        "missing field name" "enabled" key test::assert_str_eq
+    else
+        "missing field expected" false test::assert_true
+    fi
+    "[]" &json::deserialize[Record] exec = wrong_record
+    "record shape" wrong_record.unwrap_error json::Error::TypeMismatch is test::assert_true
+    "\"unknown\"" &json::deserialize[State] exec = unknown_state
+    "enum tag error" unknown_state.unwrap_error json::Error::InvalidValue is test::assert_true
+    "\"ab\"" &json::deserialize[char] exec = bad_character
+    "char length error" bad_character.unwrap_error json::Error::InvalidValue is test::assert_true
+    std::List[u64]::new = too_large_list
+    too_large too_large_list.push
+    too_large_list json::serialize = bad_serialization
+    "nested serialization error" bad_serialization.unwrap_error json::Error::OutOfRange is test::assert_true
+}
+test_records
+test_scalars
+test_strings
+test_invalid_json
+test_conversion_errors
+test::test_summary
