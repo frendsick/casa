@@ -17,6 +17,6 @@ This exception does not stabilize ordinary aggregate layout.
 - Casa adds no stable-layout marker for ordinary structs, packed layout, or user-selected alignment.
 
 Raylib's `Color`, `Vector2`, `Image`, and `Texture2D` provide the concrete foreign
-aggregate use case for this contract. The [raylib example](../../examples/raylib.casa)
+aggregate use case for this contract. The [raylib example](../../examples/game_of_life.casa)
 and its [resource wrappers](../../lib/raylib.casa) use those layouts without a C
 adapter or an ABI contract for ordinary Casa structs.

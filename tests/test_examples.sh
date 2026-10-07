@@ -58,7 +58,7 @@ for f in "$EXAMPLES_DIR"/*.casa; do
     # Compile
     if [ "$base" = foreign_function ]; then
         "$COMPILER" -L "$ROOT_DIR/lib" -l c "$f" -o "$binary"
-    elif [ "$base" = raylib ]; then
+    elif [ "$base" = game_of_life ]; then
         raylib_object="$EXAMPLES_TEST_TMP/raylib.o"
         raylib_library_name="casa_raylib_fixture"
         raylib_library="$EXAMPLES_TEST_TMP/lib$raylib_library_name.a"
@@ -73,7 +73,7 @@ for f in "$EXAMPLES_DIR"/*.casa; do
     fi
 
     # The raylib fixture must finish successfully, including its cleanup assertions.
-    if [ "$base" = raylib ]; then
+    if [ "$base" = game_of_life ]; then
         if output=$(timeout 5 "$binary"); then
             :
         else
@@ -81,18 +81,19 @@ for f in "$EXAMPLES_DIR"/*.casa; do
             fail=$((fail+1))
             continue
         fi
-        for stage in window image texture; do
+        for stage in window image texture resize_image resize_texture; do
             case "$stage" in
                 window) expected="Could not open the window." ;;
-                *) expected="Could not create the image or texture.
+                *) expected="Could not create or update the grid graphics.
 raylib stub ok" ;;
             esac
-            if failure_output=$(CASA_RAYLIB_FAILURE="$stage" timeout 5 "$binary") \
-                && [ "$failure_output" = "$expected" ]; then
+            status=0
+            failure_output=$(CASA_RAYLIB_FAILURE="$stage" timeout 5 "$binary") || status=$?
+            if [ "$status" -eq 1 ] && [ "$failure_output" = "$expected" ]; then
                 pass=$((pass+1))
-                echo "${GREEN}[OK]${RESET} Passed: raylib ($stage failure cleanup)"
+                echo "${GREEN}[OK]${RESET} Passed: game_of_life ($stage failure cleanup)"
             else
-                echo "${RED}[X]${RESET}  Failed: raylib ($stage failure cleanup)"
+                echo "${RED}[X]${RESET}  Failed: game_of_life ($stage failure cleanup)"
                 fail=$((fail+1))
             fi
         done
