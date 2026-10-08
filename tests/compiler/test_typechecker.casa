@@ -184,6 +184,104 @@ pub fn test_unreachable_generic_reference_preserves_cycle_error {
     "unreachable reference cannot change recursive type arguments" common::ErrorKind::TypeMismatch result.get_diagnostics helpers::diagnostics_has_error_kind test::assert_true
 }
 
+pub fn test_recipe_cycle_shared_subgraphs {
+    "recipe_cycle_shared_subgraphs" test::test_start
+    error::Diagnostics::new = diagnostics
+    diagnostics
+    "fn leaf[T] value:T { value drop } fn shared[T] value:T { value leaf } fn left { 1 shared \"text\" shared } fn right { left left } fn diamond { left right } fn unused[T] value:T { value drop diamond diamond &shared[i64] drop &shared[str] drop } fn recurse[T] value:T { value recurse } fn mutual_left[T] value:T { value mutual_right } fn mutual_right[T] value:T { value mutual_left } fn fixed[const N:u64] { &fixed[N] drop }"
+    typecheck_source = result
+    result.get_diagnostics "shared subgraphs and same-binding cycles check" helpers::assert_no_errors
+    "unused declarations produce a checked program" result.into_checked_program.is_ok test::assert_true
+}
+
+pub fn test_recipe_cycle_preserves_mutual_binding_changes {
+    "recipe_cycle_preserves_mutual_binding_changes" test::test_start
+    error::Diagnostics::new = diagnostics
+    diagnostics
+    "fn first[T U] { &second[T U] drop &second[U T] drop } fn second[T U] { &first[T U] drop }"
+    typecheck_source = result
+    "changed bindings in a later branch are rejected" common::ErrorKind::TypeMismatch result.get_diagnostics helpers::diagnostics_has_error_kind test::assert_true
+    result.get_diagnostics "mutual recursion reports the changed cycle"
+    "cycle: first -> second -> first" helpers::assert_error_contains
+}
+
+pub fn test_recipe_cycle_components_preserve_independent_bindings {
+    "recipe_cycle_components_preserve_independent_bindings" test::test_start
+    error::Diagnostics::new = diagnostics
+    diagnostics
+    "fn leaf[T] { &leaf[T] drop } fn left[A B] { &leaf[A] drop &leaf[B] drop } fn right[X Y] { &left[X Y] drop &left[Y X] drop } fn unused[T U] { &right[T U] drop &right[U T] drop }"
+    typecheck_source = result
+    result.get_diagnostics "independent entries into a recursive component remain valid" helpers::assert_no_errors
+    result.into_checked_program.unwrap = program
+    "unused recursive declarations emit no bodies" 0 program.get_function_names.length test::assert_eq
+}
+
+pub fn test_recipe_cycle_checks_bindings_after_shared_paths {
+    "recipe_cycle_checks_bindings_after_shared_paths" test::test_start
+    error::Diagnostics::new = diagnostics
+    diagnostics
+    "fn first[A B] { &second[A B] drop &second[B A] drop } fn second[X Y] { &third[X Y] drop &third[X Y] drop } fn third[M N] { &first[M N] drop }"
+    typecheck_source = result
+    "a completed body cannot hide a later binding change" common::ErrorKind::TypeMismatch result.get_diagnostics helpers::diagnostics_has_error_kind test::assert_true
+    result.get_diagnostics "composed bindings retain the source cycle"
+    "cycle: first -> second -> third -> first" helpers::assert_error_contains
+}
+
+pub fn test_recipe_cycle_reports_independent_errors {
+    "recipe_cycle_reports_independent_errors" test::test_start
+    error::Diagnostics::new = diagnostics
+    diagnostics
+    "fn first[T] { &first[i64] drop &first[i64] drop } fn second[const N:u64] { &second[1] drop &second[1] drop }"
+    typecheck_source = result
+    "each independent invalid declaration reports one error" 2 result.get_diagnostics.error_count test::assert_eq
+    result.get_diagnostics "type cycle remains diagnosed" "cycle: first -> first" helpers::assert_error_contains
+    result.get_diagnostics "constant cycle remains diagnosed" "cycle: second -> second" helpers::assert_error_contains
+}
+
+pub fn test_recipe_cycle_reuses_alternating_bindings {
+    "recipe_cycle_reuses_alternating_bindings" test::test_start
+    error::Diagnostics::new = diagnostics
+    diagnostics
+    "fn root[A] { &first[A i64 str bool] drop } fn first[X Y Z W] { &second[X W Z Y] drop &second[X Z Y W] drop } fn second[X Y Z W] { &third[X W Z Y] drop &third[X Z Y W] drop } fn third[X Y Z W] { &root[X] drop }"
+    typecheck_source = result
+    "preserving root bindings cannot hide changes in other cycle members" common::ErrorKind::TypeMismatch result.get_diagnostics helpers::diagnostics_has_error_kind test::assert_true
+    result.get_diagnostics "the changed participant is diagnosed"
+    "cycle: first -> second -> third -> root -> first" helpers::assert_error_contains
+}
+
+pub fn test_recipe_cycle_preserves_source_diagnostics {
+    "recipe_cycle_preserves_source_diagnostics" test::test_start
+    for
+        source in [
+            "fn cycle[T] value:T { value drop bridge bridge } fn bridge { 1 cycle }",
+            "fn cycle[const N:u64] { bridge bridge } fn bridge { &cycle[1] drop }",
+        ].iter
+    do
+        error::Diagnostics::new = diagnostics
+        diagnostics source typecheck_source = result
+        "repeated invalid paths report one source diagnostic" 1 result.get_diagnostics.error_count test::assert_eq
+        source "cycle }" str::find = call_offset
+        if 0 call_offset < then
+            source "&cycle[1]" str::find = call_offset
+        fi
+        for
+            entry in result
+                .get_diagnostics
+                .entries
+                .iter
+        do
+            if entry error::Diagnostic::Error(failure) is then
+                "cycle diagnostic kind" common::ErrorKind::TypeMismatch failure.kind test::assert_eq
+                "cycle diagnostic retains source names" failure.message.as_str "cycle: cycle -> bridge -> cycle" str::contains test::assert_true
+                "cycle diagnostic points at the recursive reference" call_offset u64::try_from.unwrap failure
+                    .location
+                    .span
+                    .offset test::assert_eq
+            fi
+        done
+    done
+}
+
 pub fn test_recursive_checked_body_preserves_call {
     "monomorphization_restores_recursive_body" test::test_start
     error::Diagnostics::new = diagnostics
@@ -257,6 +355,13 @@ test_non_returning_structural_inputs
 test_non_returning_structures_reach_backend
 test_unreachable_source_preserves_type_errors
 test_unreachable_generic_reference_preserves_cycle_error
+test_recipe_cycle_shared_subgraphs
+test_recipe_cycle_preserves_mutual_binding_changes
+test_recipe_cycle_components_preserve_independent_bindings
+test_recipe_cycle_checks_bindings_after_shared_paths
+test_recipe_cycle_reports_independent_errors
+test_recipe_cycle_reuses_alternating_bindings
+test_recipe_cycle_preserves_source_diagnostics
 test_recursive_checked_body_preserves_call
 test_typecheck_collects_independent_errors
 test_typecheck_missing_sentinel_suppresses_cascade

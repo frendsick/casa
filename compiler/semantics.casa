@@ -13544,43 +13544,137 @@ impl SemanticSpecializer {
     }
 }
 
-fn validate_recipe_cycle
-    body:$semantic_body::Body
-    substitutions:mut$std::Map[std::String common::Type]
-    active:mut$std::Map[std::String std::String]
-    path:mut$std::List[std::String]
-    checks:$SemanticChecks
-    diagnostics:mut$error::Diagnostics
-{
-    {
-        = call: $semantic_body::Callable
-        = origin: $common::Location
-        std::Map[std::String common::Type]::new = composed
-        for pair in call.substitutions.iter do
-            substitutions pair.second.substitute_t pair.first.clone composed.set
-        done
-        composed generic_binding_key = key
-        if call.name active.get std::Option::Some(previous) is then
-            if previous.as_str key.as_str != then
-                path.clone = cycle
-                call.name.clone cycle.push
-                " -> " cycle.join_strings = cycle_text
-                origin f"Polymorphic recursion changes the type arguments of `{call.name}`: `{previous}` becomes `{key}` (cycle: {cycle_text})"
-                common::ErrorKind::TypeMismatch diagnostics.record_error_string
-            fi
-        else
-            if call.name.as_str checks.functions.get_str std::Option::Some(work) is then
-                if work FunctionWork::Completed(completed) is then
-                    key call.name.clone active.set
-                    call.name.clone path.push
-                    diagnostics checks path active composed completed.body validate_recipe_cycle
-                    call.name.as_str active.delete_str
-                    path.pop drop
-                fi
+# Tarjan's traversal assigns each recipe to its strongly connected component.
+# Edges between components cannot participate in recursive binding changes.
+struct RecipeCycleGraph {
+    indices:    std::Map[std::String u64]
+    lowlinks:   std::Map[std::String u64]
+    components: std::Map[std::String u64]
+    stack:      std::List[std::String]
+}
+
+impl RecipeCycleGraph {
+    fn new -> RecipeCycleGraph {
+        std::List[std::String]::new std::Map[std::String u64]::new
+        std::Map[std::String u64]::new
+        std::Map[std::String u64]::new RecipeCycleGraph
+    }
+
+    fn visit self:mut$RecipeCycleGraph name:$str checks:$SemanticChecks -> u64 {
+        if name self.indices.get_str std::Option::Some(index) is then
+            index copy return
+        fi
+        self.indices.length = index
+        index name.to_str self.indices.set
+        index name.to_str self.lowlinks.set
+        name.to_str self.stack.push
+        if name checks.functions.get_str std::Option::Some(work) is then
+            if work FunctionWork::Completed(completed) is then
+                {
+                    = call: $semantic_body::Callable
+                    = origin: $common::Location
+                    origin drop
+                    if call.name self.components.has then
+                        return
+                    fi
+                    checks call.name.as_str self.visit = child
+                    if
+                        name self
+                            .lowlinks
+                            .get_str
+                            .unwrap copy child <
+                    then
+                        child name.to_str self.lowlinks.set
+                    fi
+                } = visitor
+                visitor completed.body.visit_calls
             fi
         fi
-    } = visitor
-    visitor body.visit_calls
+        name self
+            .lowlinks
+            .get_str
+            .unwrap copy = lowest
+        if lowest index == then
+            while true do
+                self.stack.pop = member
+                member.as_str name == = last
+                index member self.components.set
+                if last then
+                    break
+                fi
+            done
+        fi
+        lowest
+    }
+}
+
+struct RecipeCycleValidator {
+    active:    std::Map[std::String std::String]
+    completed: std::Set[std::String]
+    path:      std::List[std::String]
+    component: u64
+    valid:     bool
+}
+
+impl RecipeCycleValidator {
+    fn validate
+        self:mut$RecipeCycleValidator
+        name:$str
+        bindings:$std::Map[std::String common::Type]
+        origin:$common::Location
+        graph:$RecipeCycleGraph
+        checks:$SemanticChecks
+        diagnostics:mut$error::Diagnostics
+    {
+        bindings generic_binding_key = key
+        if name self.active.get_str std::Option::Some(previous) is then
+            if previous.as_str key.as_str != then
+                self.path.clone = cycle
+                name.to_str cycle.push
+                " -> " cycle.join_strings = cycle_text
+                origin f"Polymorphic recursion changes the type arguments of `{name}`: `{previous}` becomes `{key}` (cycle: {cycle_text})"
+                common::ErrorKind::TypeMismatch diagnostics.record_error_string
+                false = self.valid
+            fi
+            return
+        fi
+        # Several bindings can reach the same recipe before a changing cycle is found.
+        # Retain every completed instance for this root, not only the latest binding.
+        f"{name.length}:{name}{key}" = instance
+        if instance self.completed.has then
+            return
+        fi
+        if name checks.functions.get_str std::Option::Some(work) is then
+            if work FunctionWork::Completed(completed) is then
+                key name.to_str self.active.set
+                name.to_str self.path.push
+                {
+                    = call: $semantic_body::Callable
+                    = call_origin: $common::Location
+                    if self.valid ! then
+                        return
+                    fi
+                    if
+                        self.component call.name graph
+                            .components
+                            .get
+                            .unwrap copy !=
+                    then
+                        return
+                    fi
+                    std::Map[std::String common::Type]::new = composed
+                    for pair in call.substitutions.iter do
+                        bindings pair.second.substitute_t pair.first.clone composed.set
+                    done
+                    diagnostics checks graph call_origin composed call.name.as_str self.validate
+                } = visitor
+                visitor completed.body.visit_calls
+                name self.active.delete_str
+                self.path.pop drop
+            fi
+        fi
+        instance self.completed.add
+    }
 }
 
 impl SemanticSession {
@@ -13589,12 +13683,9 @@ impl SemanticSession {
         diagnostics:mut$error::Diagnostics
     {
         self.checks diagnostics self.store check_trait_impls
-        for
-            name in self
-                .store
-                .get_function_names
-                .iter
-        do
+        RecipeCycleGraph::new = graph
+        self.store.get_function_names = names
+        for name in names.iter do
             name.as_str self
                 .store
                 .get_function
@@ -13610,21 +13701,19 @@ impl SemanticSession {
             then
                 continue
             fi
-            if
-                name.as_str self
-                    .checks
-                    .functions
-                    .get_str std::Option::Some(work) is
-            then
-                if work FunctionWork::Completed(completed) is then
-                    declaration.stack_effect identity_generic_bindings = bindings
-                    std::Map[std::String std::String]::new = active
-                    std::List[std::String]::new = path
-                    name.clone path.push
-                    bindings generic_binding_key name.clone active.set
-                    diagnostics self.checks path active bindings completed.body validate_recipe_cycle
-                fi
-            fi
+            self.checks name.as_str graph.visit drop
+            declaration.stack_effect identity_generic_bindings = bindings
+            RecipeCycleValidator {
+                active: std::Map[std::String std::String]::new
+                completed: std::Set[std::String]::new
+                path: std::List[std::String]::new
+                component: name graph
+                    .components
+                    .get
+                    .unwrap copy
+                valid: true
+            } = validator
+            diagnostics self.checks graph declaration.location bindings name.as_str validator.validate
         done
     }
 }
