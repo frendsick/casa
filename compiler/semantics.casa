@@ -13608,72 +13608,301 @@ impl RecipeCycleGraph {
     }
 }
 
+struct RecipeCycleStep derives std::Clone {
+    source: std::String
+    call:   semantic_body::Callable
+    origin: common::Location
+}
+
+fn get_recipe_symbol_name typ:$common::Type -> std::Option[std::String] {
+    if typ common::Type::TypeVar(name) is then
+        name.clone std::Option::Some return
+    fi
+    if typ common::Type::Const(value) is then
+        if value.is_symbolic then
+            value.name.clone std::Option::Some return
+        fi
+    fi
+    std::Option::None
+}
+
+# Successful paths contain only distinct symbols from the component root.
+# A cycle cannot undo a constructed type, a fixed argument, or a repeated symbol.
+fn are_recipe_bindings_injective
+    bindings:$std::Map[std::String common::Type]
+    symbols:$std::Map[std::String common::Type]
+-> bool {
+    std::Set[std::String]::new = used
+    for pair in bindings.iter do
+        pair.second get_recipe_symbol_name = symbol_opt
+        if symbol_opt.is_none then
+            false return
+        fi
+        symbol_opt.unwrap = symbol
+        if symbol used.has then
+            false return
+        fi
+        if symbol symbols.get std::Option::Some(expected) is then
+            if expected pair.second.eq ! then
+                false return
+            fi
+        else
+            false return
+        fi
+        symbol used.add
+    done
+    true
+}
+
+fn do_recipe_bindings_match
+    left:$std::Map[std::String common::Type]
+    right:$std::Map[std::String common::Type]
+-> bool {
+    if right.length left.length != then
+        false return
+    fi
+    for pair in left.iter do
+        if pair.first right.get std::Option::Some(value) is then
+            if value pair.second.eq ! then
+                false return
+            fi
+        else
+            false return
+        fi
+    done
+    true
+}
+
+fn compose_recipe_bindings
+    call:$semantic_body::Callable
+    bindings:$std::Map[std::String common::Type]
+-> std::Map[std::String common::Type] {
+    std::Map[std::String common::Type]::new = composed
+    for pair in call.substitutions.iter do
+        bindings pair.second.substitute_t pair.first.clone composed.set
+    done
+    composed
+}
+
+impl RecipeCycleGraph {
+    fn find_path
+        self:$RecipeCycleGraph
+        name:$str
+        target:$str
+        checks:$SemanticChecks
+        visited:mut$std::Set[std::String]
+        path:mut$std::List[RecipeCycleStep]
+    -> bool {
+        if target name == then
+            true return
+        fi
+        if name.to_str visited.has then
+            false return
+        fi
+        name.to_str visited.add
+        path.length = initial_length
+        name self
+            .components
+            .get_str
+            .unwrap copy = component
+        name checks
+            .functions
+            .get_str
+            .unwrap
+            .get_body
+            .unwrap = body
+        {
+            = call: $semantic_body::Callable
+            = origin: $common::Location
+            if initial_length path.length > then
+                return
+            fi
+            if
+                component call.name self
+                    .components
+                    .get
+                    .unwrap copy !=
+            then
+                return
+            fi
+            origin.clone call.clone name.to_str RecipeCycleStep path.push
+            if path visited checks target call.name.as_str self.find_path ! then
+                path.pop drop
+            fi
+        } = visitor
+        visitor body.visit_calls
+        initial_length path.length >
+    }
+}
+
+fn report_recipe_cycle
+    path:$std::List[RecipeCycleStep]
+    closing:u64
+    change:$str
+    diagnostics:mut$error::Diagnostics
+{
+    std::List[std::String]::new = names
+    0 = offset: u64
+    while offset path.length > do
+        closing 1 + offset + path.length % path
+            .get
+            .source
+            .clone names.push
+        1 += offset
+    done
+    closing path.get = step
+    step
+        .call
+        .name
+        .clone names.push
+    " -> " names.join_strings = cycle
+    step.origin f"Polymorphic recursion changes the type arguments of `{step.call.name}`: {change} (cycle: {cycle})"
+    common::ErrorKind::TypeMismatch diagnostics.record_error_string
+}
+
+# Replay at most two closed walks on failure. Stop at the first non-renaming
+# edge so diagnostics never expand a recursively constructed type or function type.
+fn report_recipe_cycle_path
+    path:$std::List[RecipeCycleStep]
+    checks:$SemanticChecks
+    diagnostics:mut$error::Diagnostics
+-> bool {
+    0 path
+        .get
+        .source
+        .as_str checks
+        .functions
+        .get_str
+        .unwrap
+        .get_signature
+        .unwrap
+        .stack_effect
+    identity_generic_bindings = symbols
+    symbols.clone = bindings
+    0 = index: u64
+    for step in path.iter do
+        bindings step.call compose_recipe_bindings = composed
+        if symbols composed are_recipe_bindings_injective ! then
+            step.call.substitutions generic_binding_key = key
+            f"recursive binding `{key}` does not forward distinct symbolic parameters" = change
+            diagnostics change.as_str index path report_recipe_cycle
+            true return
+        fi
+        composed = bindings
+        1 += index
+    done
+    if symbols bindings do_recipe_bindings_match ! then
+        symbols generic_binding_key = previous
+        bindings generic_binding_key = key
+        f"`{previous}` becomes `{key}`" = change
+        diagnostics change.as_str path.length 1 - path report_recipe_cycle
+        true return
+    fi
+    false
+}
+
+# Each recipe gets one injective map into the root's independent symbols.
+# Agreement on every edge then proves identity around every participant's cycles.
+# Predecessors retain diagnostic paths without copying a full path per recipe.
 struct RecipeCycleValidator {
-    active:    std::Map[std::String std::String]
-    completed: std::Set[std::String]
-    path:      std::List[std::String]
+    bindings:  std::Map[std::String std::Map[std::String common::Type]]
+    parents:   std::Map[std::String RecipeCycleStep]
+    symbols:   std::Map[std::String common::Type]
+    root:      std::String
     component: u64
     valid:     bool
 }
 
 impl RecipeCycleValidator {
-    fn validate
+    fn path_to self:$RecipeCycleValidator name:$str -> std::List[RecipeCycleStep] {
+        std::List[RecipeCycleStep]::new = path
+        name.to_str = current
+        while self.root current != do
+            current self
+                .parents
+                .get
+                .unwrap = step
+            step.clone path.push
+            step.source.clone = current
+        done
+        path.reverse
+        path
+    }
+
+    fn report_conflict
         self:mut$RecipeCycleValidator
-        name:$str
-        bindings:$std::Map[std::String common::Type]
+        source:$str
+        call:$semantic_body::Callable
         origin:$common::Location
         graph:$RecipeCycleGraph
         checks:$SemanticChecks
         diagnostics:mut$error::Diagnostics
     {
-        bindings generic_binding_key = key
-        if name self.active.get_str std::Option::Some(previous) is then
-            if previous.as_str key.as_str != then
-                self.path.clone = cycle
-                name.to_str cycle.push
-                " -> " cycle.join_strings = cycle_text
-                origin f"Polymorphic recursion changes the type arguments of `{name}`: `{previous}` becomes `{key}` (cycle: {cycle_text})"
-                common::ErrorKind::TypeMismatch diagnostics.record_error_string
-                false = self.valid
-            fi
+        false = self.valid
+        std::Set[std::String]::new = visited
+        std::List[RecipeCycleStep]::new = returning
+        if returning visited checks self.root.as_str call.name.as_str graph.find_path ! then
+            "A recipe component must contain a return path" panic
+        fi
+        source self.path_to = incoming
+        origin.clone call.clone source.to_str RecipeCycleStep incoming.push
+        returning.clone incoming.append
+        if diagnostics checks incoming report_recipe_cycle_path then
             return
         fi
-        # Several bindings can reach the same recipe before a changing cycle is found.
-        # Retain every completed instance for this root, not only the latest binding.
-        f"{name.length}:{name}{key}" = instance
-        if instance self.completed.has then
-            return
+        # The incoming walk preserves the root. The stored path must then differ
+        # around the same return path, since both maps are injective renamings.
+        call.name.as_str self.path_to = previous
+        returning previous.append
+        if diagnostics checks previous report_recipe_cycle_path ! then
+            "Conflicting recipe bindings must change a cycle" panic
         fi
-        if name checks.functions.get_str std::Option::Some(work) is then
-            if work FunctionWork::Completed(completed) is then
-                key name.to_str self.active.set
-                name.to_str self.path.push
-                {
-                    = call: $semantic_body::Callable
-                    = call_origin: $common::Location
-                    if self.valid ! then
-                        return
-                    fi
-                    if
-                        self.component call.name graph
-                            .components
-                            .get
-                            .unwrap copy !=
-                    then
-                        return
-                    fi
-                    std::Map[std::String common::Type]::new = composed
-                    for pair in call.substitutions.iter do
-                        bindings pair.second.substitute_t pair.first.clone composed.set
-                    done
-                    diagnostics checks graph call_origin composed call.name.as_str self.validate
-                } = visitor
-                visitor completed.body.visit_calls
-                name self.active.delete_str
-                self.path.pop drop
+    }
+
+    fn validate
+        self:mut$RecipeCycleValidator
+        name:$str
+        bindings:$std::Map[std::String common::Type]
+        graph:$RecipeCycleGraph
+        checks:$SemanticChecks
+        diagnostics:mut$error::Diagnostics
+    {
+        bindings.clone name.to_str self.bindings.set
+        name checks
+            .functions
+            .get_str
+            .unwrap
+            .get_body
+            .unwrap = body
+        {
+            = call: $semantic_body::Callable
+            = origin: $common::Location
+            if self.valid ! then
+                return
             fi
-        fi
-        instance self.completed.add
+            if
+                self.component call.name graph
+                    .components
+                    .get
+                    .unwrap copy !=
+            then
+                return
+            fi
+            bindings call compose_recipe_bindings = composed
+            if call.name self.bindings.get std::Option::Some(previous) is then
+                if previous composed do_recipe_bindings_match ! then
+                    diagnostics checks graph origin call name self.report_conflict
+                fi
+                return
+            fi
+            if self.symbols composed are_recipe_bindings_injective ! then
+                diagnostics checks graph origin call name self.report_conflict
+                return
+            fi
+            origin.clone call.clone name.to_str RecipeCycleStep call.name.clone self.parents.set
+            diagnostics checks graph composed call.name.as_str self.validate
+        } = visitor
+        visitor body.visit_calls
     }
 }
 
@@ -13684,6 +13913,7 @@ impl SemanticSession {
     {
         self.checks diagnostics self.store check_trait_impls
         RecipeCycleGraph::new = graph
+        std::Map[i64 std::String]::new = roots
         self.store.get_function_names = names
         for name in names.iter do
             name.as_str self
@@ -13697,23 +13927,52 @@ impl SemanticSession {
                     .is_empty declaration
                     .stack_effect
                     .const_params
-                    .length 0 == &&
+                    .is_empty &&
             then
                 continue
             fi
+            if
+                name.as_str self
+                    .checks
+                    .functions
+                    .get_str std::Option::Some(work) is
+            then
+                if work.get_body.is_none then
+                    continue
+                fi
+            else
+                continue
+            fi
             self.checks name.as_str graph.visit drop
+            name graph
+                .components
+                .get
+                .unwrap copy i64::try_from.unwrap = component
+            # Choose stable roots in one pass, without sorting every source name.
+            if component roots.get std::Option::Some(previous) is then
+                if previous name does_binding_name_precede then
+                    name.clone component roots.set
+                fi
+            else
+                name.clone component roots.set
+            fi
+        done
+        for root in roots.iter do
+            root.second = name
+            name.as_str self
+                .store
+                .get_function
+                .unwrap = declaration
             declaration.stack_effect identity_generic_bindings = bindings
             RecipeCycleValidator {
-                active: std::Map[std::String std::String]::new
-                completed: std::Set[std::String]::new
-                path: std::List[std::String]::new
-                component: name graph
-                    .components
-                    .get
-                    .unwrap copy
+                bindings: std::Map[std::String std::Map[std::String common::Type]]::new
+                parents: std::Map[std::String RecipeCycleStep]::new
+                symbols: bindings.clone
+                root: name.clone
+                component: root.first copy u64::try_from.unwrap
                 valid: true
             } = validator
-            diagnostics self.checks graph declaration.location bindings name.as_str validator.validate
+            diagnostics self.checks graph bindings name.as_str validator.validate
         done
     }
 }
