@@ -524,7 +524,7 @@ fn collect_source_variable_uses body:$source_body::SourceBody uses:VariableUses 
 enum SourceWork {
     Array(source_body::SourceBody)
     Group(source_body::SourceBody)
-    Guard(source_body::SourceBody)
+    Arm(source_body::SourceBody)
 }
 
 fn decrement_binding_use counts:mut$std::Map[std::String u64] name:$str {
@@ -1244,6 +1244,8 @@ struct MatchContext {
     match_place:             std::Option[Place]
     current_branch_label:    std::String
     current_branch_location: common::Location
+    entry_facts_available:   bool
+    arms_have_facts:         bool
 }
 
 enum BranchFrame {
@@ -1337,6 +1339,7 @@ impl WhileContext {
 
 impl MatchContext {
     pub fn new match_type:common::Type -> MatchContext {
+        true true
         common::empty_location
         "".to_str
         std::Option[Place]::None
@@ -9597,20 +9600,24 @@ impl TypeChecker {
         subject_type.clone std::Option::Some op common::Op::set_type_hint
     }
 
-    # Check one source match arm and its optional guard.
+    # Return the error checkpoint after completing the previous arm, so its
+    # failures cannot invalidate this arm's independent pattern bindings.
     fn typecheck_match_op
         self:mut$TypeChecker
         function_opt:mut$std::Option[common::Function]
         op:mut$common::Op
         source_guard:std::Option[source_body::SourceBody]
-    {
+    -> u64 {
+        self.diagnostics.error_count = errors_before_arm
         if 0 self.branched_stacks.length == then
-            return
+            errors_before_arm return
         fi
         self.branched_stacks.pop = top_frame
         if top_frame BranchFrame::BranchMatch is then
             top_frame.into_match = match_ctx
             if match_ctx.condition_present then
+                self.facts_available match_ctx.arms_have_facts && = match_ctx.arms_have_facts
+                self.diagnostics.error_count = errors_before_completion
                 op match_ctx.before self.complete_branch
                 match_ctx.flow_after self.merge_current_ownership_flow
                 op match_ctx self.unify_arm_stacks
@@ -9619,7 +9626,11 @@ impl TypeChecker {
                 fi
                 match_ctx.flow_before self.restore_ownership_flow
                 match_ctx.entry_continues = self.path_continues
+                errors_before_completion self.diagnostics.error_count == match_ctx.arms_have_facts &&
+                = match_ctx.arms_have_facts
             fi
+            match_ctx.entry_facts_available = self.facts_available
+            self.diagnostics.error_count = errors_before_arm
             match_ctx MatchContext::match_type.clone = match_subject_type
             if source_guard.is_some then
                 "".to_str
@@ -9677,6 +9688,7 @@ impl TypeChecker {
                 self.current_ownership_flow = guard_flow
                 self.infer_parameters self.checks
                 self.active_calls.clone self.diagnostics self.store TypeChecker::new = guard_checker
+                self.facts_available = guard_checker.facts_available
                 self.current_trait_bounds.clone = guard_checker.current_trait_bounds
                 guard_scope = guard_checker.scope
                 guard_flow guard_checker.restore_ownership_flow
@@ -9724,7 +9736,9 @@ impl TypeChecker {
                         .unwrap_or = guard_end
                     first_guard_binding guard_end guard_checker.close_source_bindings
                 fi
+                guard_checker.facts_available = guard_facts_available
                 guard_checker.into_semantic_dependencies = guard_dependencies
+                guard_facts_available = self.facts_available
                 guard_ops self.checked_guards.push
                 if guard_continues ! then
                     false = self.path_continues
@@ -9732,11 +9746,14 @@ impl TypeChecker {
                 guard_dependencies self.merge_dependencies
             fi
 
+            errors_before_arm self.diagnostics.error_count == self.facts_available &&
+            = self.facts_available
             covered_key match_ctx MatchContext::set_current_branch_label
             op common::Op::location.clone match_ctx MatchContext::set_current_branch_location
             match_ctx BranchFrame::BranchMatch = top_frame
         fi
         top_frame self.branched_stacks.push
+        errors_before_arm
     }
 }
 
@@ -9943,6 +9960,7 @@ impl TypeChecker {
         op:mut$common::Op
         function_opt:mut$std::Option[common::Function]
     {
+        self.diagnostics.error_count = errors_before
         std::Option[std::List[Origin]]::None = match_origins
         std::Option[Place]::None = match_place
         common::make_unknown_type.clone = match_type
@@ -9996,6 +10014,8 @@ impl TypeChecker {
         fi
         match_type.clone std::Option::Some = op.type_hint
         match_type MatchContext::new = match_ctx
+        errors_before self.diagnostics.error_count == self.facts_available &&
+        = match_ctx.entry_facts_available
         match_origins = match_ctx.match_origins
         match_place = match_ctx.match_place
         self.path_continues = match_ctx.entry_continues
@@ -10095,6 +10115,8 @@ impl TypeChecker {
             .branched_stacks
             .pop
             .into_match = match_ctx
+        self.facts_available match_ctx.arms_have_facts && = match_ctx.arms_have_facts
+        self.diagnostics.error_count = errors_before_completion
         # Close the final arm's scope frame (only opened if an arm ran).
         if match_ctx MatchContext::condition_present then
             op match_ctx.before self.complete_branch
@@ -10115,6 +10137,8 @@ impl TypeChecker {
         match_ctx.has_continuing_arm = self.path_continues
 
         match_ctx op self.check_match_exhaustiveness
+        match_ctx.entry_facts_available match_ctx.arms_have_facts &&
+        errors_before_completion self.diagnostics.error_count == && = self.facts_available
     }
 }
 
@@ -11847,7 +11871,6 @@ impl TypeChecker {
             common::OpValue::Syscall6 => function_opt current_op self.check_syscalls
             common::OpValue::PushEnumVariant(_) => function_opt current_op self.check_enum_variant
             common::OpValue::IsCheck(_) => function_opt emitted_ops current_op self.check_is
-            common::OpValue::MatchArm(_) => std::Option[source_body::SourceBody]::None current_op function_opt self.typecheck_match_op
             common::OpValue::StructNew(_) => current_op self.check_struct_new
             common::OpValue::StructLiteral(_) => current_op self.check_struct_literal
             common::OpValue::MethodCall(_) => function_opt emitted_ops current_op self.check_method_call
@@ -11958,8 +11981,12 @@ impl TypeChecker {
                             function_opt items pending_ops body self.check_source_sequence
                             items std::Option::Some = compound
                         }
-                        SourceWork::Guard(body) => {
-                            body std::Option::Some current_op function_opt self.typecheck_match_op
+                        SourceWork::Arm(body) => {
+                            if body.get_nodes.is_empty then
+                                std::Option[source_body::SourceBody]::None
+                            else
+                                body std::Option::Some
+                            fi current_op function_opt self.typecheck_match_op = errors_before
                             if self.checked_guards.is_empty ! then
                                 self.checked_guards.pop std::Option::Some = compound
                             fi
@@ -12079,11 +12106,7 @@ impl TypeChecker {
     -> body_builder::Arm {
         arm match
             source_body::SourceArm { origin: origin pattern: pattern guard: guard guard_end: guard_end body: body } => {
-                if guard.get_nodes.is_empty then
-                    std::Option[SourceWork]::None
-                else
-                    guard SourceWork::Guard std::Option::Some
-                fi = source_work
+                guard SourceWork::Arm std::Option::Some = source_work
                 origin guard_end std::List[common::Op]::new pattern common::MatchArm common::OpValue::MatchArm common::Op::from_source = operation
                 body_builder::Builder::new = work
                 function work pending source_work operation self.check_work_operation = checked_guard

@@ -144,7 +144,9 @@ It traverses completed semantic bodies directly and releases all compiler
 bodies before returning the index. Verified operation
 identities are settled after literal checks and recursive call obligations.
 A failed operation withholds facts that depend on its recovered stack. An
-independent sibling branch or function can still contribute verified facts.
+independent sibling branch, match arm, or function can still contribute verified
+facts. Match arms start from the established subject facts. A failed arm withholds
+facts after the join without suppressing independent sibling arms.
 A return-signature error rejects assembly without erasing established calls.
 
 Ownership checking keeps typed places with a resolved binding name and field
