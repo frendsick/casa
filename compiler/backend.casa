@@ -1474,80 +1474,6 @@ impl FunctionPlanner {
 }
 
 impl FunctionPlanner {
-    fn compile_static_struct
-        self:mut$FunctionPlanner
-        store:$common::SymbolStore
-        body:$semantic_body::Body
-    -> u64 {
-        body.get_nodes = nodes
-        if 0 nodes.length == then
-            "Static struct expression group is empty during bytecode compilation" self.record_failure
-            0 return
-        fi
-        nodes.length 1 - nodes.get = last
-        if last semantic_body::Node::Leaf(leaf) is ! then
-            "Invalid checked static struct" self.record_failure 0 return
-        fi
-        last match
-            semantic_body::Node::Leaf(leaf) => leaf.action
-            _ => "Invalid checked static struct" panic
-        end = last_action: $semantic_body::Action
-        0 = static_struct_index: u64
-        if last_action semantic_body::Action::StructFields(literal _) is then
-            literal.struct_name.clone = struct_name
-            literal common::StructLiteral::field_order = field_order: $std::List[std::String]
-            struct_name store.structs.get = casa_struct_opt
-            if casa_struct_opt.is_none then
-                f"Struct `{struct_name}` is missing during bytecode compilation" self.record_failure_string
-                0 return
-            fi
-            casa_struct_opt.unwrap = casa_struct
-
-            std::List[StaticArrayElement]::new = ordered_elems
-            0 = i: u64
-            while i field_order.length > do
-                i nodes.get match
-                    semantic_body::Node::Leaf(leaf) => leaf self.compile_static_element
-                    _ => {
-                        "Invalid checked static field" self.record_failure 0 return
-                    }
-                end ordered_elems.push
-                1 += i
-            done
-
-            # Reorder to match struct member definition order
-            std::List[StaticArrayElement]::new = fields
-            0 = mi: u64
-            while mi casa_struct common::CasaStruct::members.length > do
-                mi casa_struct common::CasaStruct::members.get common::Member::name.as_str = member_name: $str
-                member_name field_order common::string_list_index = fo_idx
-                if 0 fo_idx < then
-                    f"Static struct field `{member_name}` is missing during bytecode compilation" self.record_failure_string
-                    0 return
-                fi
-                fo_idx u64::try_from.unwrap ordered_elems.get.clone fields.push
-                1 += mi
-            done
-
-            self
-                .state
-                .program
-                .static_structs
-                .length = struct_index
-            fields StaticStruct self
-                .state
-                .program
-                .static_structs
-                .push
-            struct_index = static_struct_index
-        else
-            "compile_static_struct received a non-struct expression group" self.record_failure
-        fi
-        static_struct_index
-    }
-}
-
-impl FunctionPlanner {
     fn compile_static_array
         compiler:mut$FunctionPlanner
         body:$semantic_body::Body
@@ -1557,20 +1483,6 @@ impl FunctionPlanner {
         std::List[StaticArrayElement]::new = elements
         for item in items.iter do
             item match
-                semantic_body::Node::Array(array) => {
-                    std::List[InstValue]::new = discard_bytecode
-                    discard_bytecode array.body compiler.compile_static_array
-                    compiler
-                        .state
-                        .program
-                        .static_arrays
-                        .length 1 - = inner_idx
-                    inner_idx StaticArrayElement::Array elements.push
-                }
-                semantic_body::Node::Group(group) => {
-                    group.body compiler.state.store compiler.compile_static_struct = struct_label
-                    struct_label StaticArrayElement::Struct elements.push
-                }
                 semantic_body::Node::Leaf(leaf) => leaf compiler.compile_static_element elements.push
                 _ => "Invalid checked static array" compiler.record_failure
             end
@@ -1594,20 +1506,6 @@ impl FunctionPlanner {
 }
 
 impl FunctionPlanner {
-    fn static_array_element_is_word self:$FunctionPlanner element_type:$common::Type -> bool {
-        if self.state.store element_type common::type_inline_size std::Option::Some(element_size) is then
-            if
-                self.state.store element_type common::type_value_representation std::Option::Some(representation) is
-            then
-                common::WORD_SIZE element_size ==
-                common::VALUE_REPR_RAW representation ==
-                common::VALUE_REPR_SIGNED representation == || &&
-                return
-            fi
-        fi
-        false
-    }
-
     fn compile_push_array
         self:mut$FunctionPlanner
         array:$semantic_body::ArrayLiteral
@@ -1615,17 +1513,21 @@ impl FunctionPlanner {
     {
         array.body.get_nodes = nodes: $std::List[semantic_body::Node]
         nodes.length = length
-        if length 0 != array.body self.is_static_sequence && then
-            if array.typ.array_element_type std::Option::Some(element) is then
-                if element self.static_array_element_is_word then
-                    bytecode array.body self.compile_static_array return
-                fi
-            fi
-        fi
         array
             .typ
             .array_element_type
             .unwrap = element_type
+        self.state.store element_type common::type_inline_size.unwrap = element_size
+        # Static elements occupy one raw word. Aggregates use the dynamic path
+        # even when their inline storage is one word (ADR-0152).
+        if length 0 != common::WORD_SIZE element_size == && then
+            self.state.store element_type common::type_value_representation.unwrap = representation
+            if common::VALUE_REPR_RAW representation == common::VALUE_REPR_SIGNED representation == || then
+                if array.body self.is_static_sequence then
+                    bytecode array.body self.compile_static_array return
+                fi
+            fi
+        fi
         nodes.length = position
         while 0 position != do
             1 -= position
@@ -1635,7 +1537,6 @@ impl FunctionPlanner {
         # An array stores only its elements (ADR-0152), so the allocation
         # is exactly the element storage.
         self.allocate_local = list_local
-        self.state.store element_type common::type_inline_size.unwrap = element_size
         element_size length common::get_array_storage_size i64::try_from.unwrap InstValue::Push bytecode.push
         InstValue::HeapAlloc bytecode.push
         list_local InstValue::LocalSet bytecode.push
@@ -2792,35 +2693,6 @@ impl FunctionPlanner {
                 semantic_body::Node::Leaf(leaf) => {
                     if leaf self.is_static_element ! then false return fi
                 }
-                semantic_body::Node::Array(array) => {
-                    if array.body self.is_static_sequence ! then
-                        false return
-                    fi
-                }
-                semantic_body::Node::Group(group) => {
-                    group.body.get_nodes = fields
-                    if fields.is_empty then
-                        false return
-                    fi
-                    fields.length 1 - fields.get = last
-                    if last semantic_body::Node::Leaf(leaf) is then
-                        if leaf.action semantic_body::Action::StructFields is ! then
-                            false return
-                        fi
-                    else
-                        false return
-                    fi
-                    0 = field_index: u64
-                    while field_index fields.length 1 - > do
-                        field_index fields.get match
-                            semantic_body::Node::Leaf(leaf) => {
-                                if leaf self.is_static_element ! then false return fi
-                            }
-                            _ => false return
-                        end
-                        1 += field_index
-                    done
-                }
                 _ => false return
             end
         done
@@ -3172,17 +3044,11 @@ enum InstValue {
 enum StaticArrayElement derives std::Clone {
     Imm(i64)
     String(u64)
-    Array(u64)
-    Struct(u64)
     Function(std::String)
 }
 
 struct StaticArray derives std::Clone {
     elements: std::List[StaticArrayElement]
-}
-
-struct StaticStruct derives std::Clone {
-    fields: std::List[StaticArrayElement]
 }
 
 fn primitive_to_inst value:$semantic_body::PrimitiveKind -> std::Option[InstValue] {
@@ -3286,7 +3152,6 @@ struct Emitter {
     strings:         std::List[std::String]
     string_indexes:  std::Map[std::String u64]
     static_arrays:   std::List[StaticArray]
-    static_structs:  std::List[StaticStruct]
     constants_count: u64
     expanding_leaf:  bool
     labels:          std::Set[i64]
@@ -3303,7 +3168,7 @@ impl Emitter {
         f"    cmpq $return_stack+{call_limit}, %r14\n    ja return_stack_overflow\n    addq ${word_size}, %r14\n" = call_prefix
         std::Option[std::String]::None false std::Set[std::String]::new std::Set[i64]::new
         false 0
-        std::List[StaticStruct]::new std::List[StaticArray]::new
+        std::List[StaticArray]::new
         std::Map[std::String u64]::new std::List[std::String]::new
         std::Set[std::String]::new std::Map[std::String LeafTemplate]::new
         std::Map[std::String std::String]::new
@@ -3708,8 +3573,6 @@ impl Emitter {
         element match
             StaticArrayElement::Imm(value) => f".quad {value}" self.line_string
             StaticArrayElement::String(identity) => f".quad str_{identity}" self.line_string
-            StaticArrayElement::Array(identity) => f".quad static_array_{identity}" self.line_string
-            StaticArrayElement::Struct(identity) => f".quad static_struct_{identity}" self.line_string
             StaticArrayElement::Function(name) => {
                 name.as_str self.function_label = label
                 f".quad closure_{label}" self.line_string
@@ -3763,20 +3626,6 @@ impl Emitter {
                 elem self.emit_static_element
             done
             1 += sa_index
-        done
-
-        # Static struct literals
-        self.static_structs.reverse
-        0 = ss_index: u64
-        while self.static_structs.is_empty ! do
-            self.static_structs.pop = ss
-            ss StaticStruct::fields = fields: $std::List[StaticArrayElement]
-            ".align 8" self.line
-            f"static_struct_{ss_index}:" self.line_string
-            for field in fields.iter do
-                field self.emit_static_element
-            done
-            1 += ss_index
         done
 
         "" self.line
@@ -5646,8 +5495,6 @@ impl Emitter {
         element match
             StaticArrayElement::Imm(_) => true
             StaticArrayElement::String(identity) => self.strings.length identity <
-            StaticArrayElement::Array(identity) => self.static_arrays.length identity <
-            StaticArrayElement::Struct(identity) => self.static_structs.length identity <
             StaticArrayElement::Function(name) => name self.completed.has
         end
     }
@@ -5657,13 +5504,6 @@ impl Emitter {
             for element in array.elements.iter do
                 if element self.validate_pool_element ! then
                     "Invalid static array reference".to_str std::Result::Error return
-                fi
-            done
-        done
-        for value in self.static_structs.iter do
-            for element in value.fields.iter do
-                if element self.validate_pool_element ! then
-                    "Invalid static struct reference".to_str std::Result::Error return
                 fi
             done
         done
