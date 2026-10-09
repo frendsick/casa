@@ -597,6 +597,9 @@ pub fn test_callable_return_recursion_terminates {
         .unwrap = recurse
     parsed.source_bodies parsed.store recurse semantics::analyze_function_semantics = direct
     direct.diagnostics.clone diagnostics.merge
+    for targets in direct.return_callables.iter do
+        "direct recursion without a base has no established targets" targets.is_empty test::assert_true
+    done
 
     "left" parsed
         .store
@@ -604,6 +607,9 @@ pub fn test_callable_return_recursion_terminates {
         .unwrap = left
     parsed.source_bodies parsed.store left semantics::analyze_function_semantics = mutual
     mutual.diagnostics.clone diagnostics.merge
+    for targets in mutual.return_callables.iter do
+        "mutual recursion without a base has no established targets" targets.is_empty test::assert_true
+    done
 
     std::List[common::Op]::new = default_ops
     common::empty_location "default_root".to_str common::Function::new = default_root
@@ -613,6 +619,125 @@ pub fn test_callable_return_recursion_terminates {
     parsed.source_bodies parsed.store default_root semantics::analyze_function_semantics = default_method
     default_method.diagnostics.clone diagnostics.merge
     diagnostics "recursive callable analysis terminates" helpers::assert_no_errors
+}
+
+pub fn test_recursive_callable_summaries_ignore_checking_order {
+    "recursive_callable_summaries_ignore_checking_order" test::test_start
+    for body in ["true right", "true left drop true right", "true right drop true left"].iter do
+        error::Diagnostics::new = diagnostics
+        f"fn answer -> i64 \{ 42 \} fn left stop:bool -> fn[-> i64] \{ if stop then &answer else true right fi \} fn right stop:bool -> fn[-> i64] \{ stop left \} fn probe -> fn[-> i64] \{ {body} \}" = source
+        diagnostics source.as_str helpers::parse_resolve_test_source = parsed
+        diagnostics "recursive source parses" helpers::assert_no_errors
+        "probe" parsed
+            .store
+            .get_function
+            .unwrap = probe
+        parsed.source_bodies parsed.store probe semantics::analyze_declared_function_semantics = analysis
+        analysis.diagnostics "recursive source checks" helpers::assert_no_errors
+        "one returned value" 1 analysis.return_callables.length test::assert_eq
+        0 analysis.return_callables.get = targets
+        "returned target is retained" "answer" targets.has_str test::assert_true
+        "only the established target is published" 1 targets.length test::assert_eq
+    done
+}
+
+pub fn test_recursive_callable_summaries_substitute_inputs {
+    "recursive_callable_summaries_substitute_inputs" test::test_start
+    error::Diagnostics::new = diagnostics
+    diagnostics
+    "fn answer -> i64 { 42 } fn other -> i64 { 7 } fn left stop:bool callback:fn[-> i64] -> fn[-> i64] { if stop then callback else callback true right fi } fn right stop:bool input:fn[-> i64] -> fn[-> i64] { input stop left } fn probe -> fn[-> i64] { &answer true left drop &other true right }"
+    helpers::parse_resolve_test_source = parsed
+    diagnostics "recursive source parses" helpers::assert_no_errors
+    "probe" parsed
+        .store
+        .get_function
+        .unwrap = probe
+    parsed.source_bodies parsed.store probe semantics::analyze_declared_function_semantics = analysis
+    analysis.diagnostics "recursive input forwarding checks" helpers::assert_no_errors
+    0 analysis.return_callables.get = targets
+    "recursive input is substituted" "other" targets.has_str test::assert_true
+    "discarded call does not contaminate the result" 1 targets.length test::assert_eq
+}
+
+pub fn test_recursive_callable_summaries_union_returns {
+    "recursive_callable_summaries_union_returns" test::test_start
+    error::Diagnostics::new = diagnostics
+    diagnostics
+    "fn answer -> i64 { 42 } fn other -> i64 { 7 } fn left stop:bool -> fn[-> i64] fn[-> i64] { if stop then &answer &other else true right fi } fn right stop:bool -> fn[-> i64] fn[-> i64] { if stop then false left else &other &answer fi } fn probe -> fn[-> i64] fn[-> i64] { true left drop drop true right }"
+    helpers::parse_resolve_test_source = parsed
+    diagnostics "recursive source parses" helpers::assert_no_errors
+    "probe" parsed
+        .store
+        .get_function
+        .unwrap = probe
+    parsed.source_bodies parsed.store probe semantics::analyze_declared_function_semantics = analysis
+    analysis.diagnostics "recursive multiple returns check" helpers::assert_no_errors
+    "both return positions are retained" 2 analysis.return_callables.length test::assert_eq
+    for targets in analysis.return_callables.iter do
+        "first recursive target" "answer" targets.has_str test::assert_true
+        "second recursive target" "other" targets.has_str test::assert_true
+        "only established targets escape" 2 targets.length test::assert_eq
+    done
+}
+
+pub fn test_recursive_callable_completion_preserves_checked_bodies {
+    "recursive_callable_completion_preserves_checked_bodies" test::test_start
+    error::Diagnostics::new = diagnostics
+    diagnostics
+    "fn answer -> i64 { 42 } fn left stop:bool -> fn[-> i64] { if stop then &answer else true right fi } fn right stop:bool -> fn[-> i64] { stop left } true left drop true right exec drop"
+    helpers::parse_resolve_test_parts = bodies = store = operations
+    diagnostics "recursive source parses" helpers::assert_no_errors
+    bodies store semantics::SemanticSession::from_store = session
+    session operations semantics::analyze_root_semantics = first
+    first.diagnostics "completed recursive callable executes" helpers::assert_no_errors
+    "right" session
+        .find_checked_body
+        .unwrap
+        .lower_operations = before
+    session operations semantics::analyze_root_semantics = second
+    second.diagnostics "completed recursive summaries are reusable" helpers::assert_no_errors
+    "right" session
+        .find_checked_body
+        .unwrap
+        .lower_operations = after
+    "recursive completion retains checked operation identities"
+    0 before.get.id 0 after.get.id test::assert_eq
+}
+
+pub fn test_independent_recursive_callable_groups_settle {
+    "independent_recursive_callable_groups_settle" test::test_start
+    for
+        body in [
+        "stop left drop true inner exec drop &answer",
+        "true inner exec drop stop left drop &answer",
+    ].iter
+    do
+        error::Diagnostics::new = diagnostics
+        f"fn answer -> i64 \{ 42 \} fn inner stop:bool -> fn[-> i64] \{ if stop then &answer else true inner fi \} fn left stop:bool -> fn[-> i64] \{ if stop then &answer else true right fi \} fn right stop:bool -> fn[-> i64] \{ {body} \}" = source
+        diagnostics source.as_str helpers::parse_resolve_test_source = parsed
+        diagnostics "independent recursive groups parse" helpers::assert_no_errors
+        "left" parsed
+            .store
+            .get_function
+            .unwrap = function
+        parsed.source_bodies parsed.store function semantics::analyze_declared_function_semantics = analysis
+        analysis.diagnostics "completed inner group executes during outer recursion" helpers::assert_no_errors
+        0 analysis.return_callables.get = targets
+        "outer group retains its target" "answer" targets.has_str test::assert_true
+        "outer group publishes only established targets" 1 targets.length test::assert_eq
+    done
+}
+
+pub fn test_pending_recursive_callable_execution_is_rejected {
+    "pending_recursive_callable_execution_is_rejected" test::test_start
+    error::Diagnostics::new = diagnostics
+    diagnostics
+    "fn answer -> i64 { 42 } fn left stop:bool -> fn[-> i64] { if stop then &answer else true right exec drop &answer fi } fn right stop:bool -> fn[-> i64] { stop left } true left exec drop"
+    helpers::typecheck_test_source = checked
+    checked.get_diagnostics "pending execution has a source diagnostic"
+    "Cannot execute a recursive callable before its return targets are established"
+    helpers::assert_error_contains
+    "unresolved execution cannot produce a checked program" checked.into_checked_program.is_error test::assert_true
 }
 
 pub fn test_unnamed_effect_parameter_uses_function_variable_name {
@@ -804,6 +929,12 @@ test_checked_method_reference_dependencies
 test_generic_callable_body_checked_once
 test_completed_lambda_keeps_checked_stack_effect
 test_callable_return_recursion_terminates
+test_recursive_callable_summaries_ignore_checking_order
+test_recursive_callable_summaries_substitute_inputs
+test_recursive_callable_summaries_union_returns
+test_recursive_callable_completion_preserves_checked_bodies
+test_independent_recursive_callable_groups_settle
+test_pending_recursive_callable_execution_is_rejected
 test_unnamed_effect_parameter_uses_function_variable_name
 test_checked_scoped_binding_types
 test_semantics_snapshot_isolated_from_source_store

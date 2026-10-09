@@ -166,10 +166,18 @@ Each explicit return checks its declared stack effect. Both early returns and
 fallthrough validate borrowed origins and restore owned captures for repeatable
 closures. A payload-free enum variant establishes an empty origin set. Recursive
 borrowed callable results retain conservative input origins when a recursive
-summary is still active. Calls reuse completed callable summaries. Independent
-function-analysis queries create their own source snapshots. Session consumers
-request completed declarations and borrow checked bodies without managing body
-phase transitions.
+summary is still active. Recursive callable returns retain dependencies and
+symbolic callable arguments during source checking. Once the participating
+functions publish their return equations, the checker unions possible targets
+until the summaries stop growing. Completed callers receive those targets
+without checking their source bodies again. Each return position keeps its own
+target set. Calls substitute their callable arguments into the stable summary.
+Executing a callable whose recursive targets are still pending produces a source
+error because deferred execution ownership obligations are not yet represented.
+
+Independent function-analysis queries create their own source snapshots. Session
+consumers request completed declarations and borrow checked bodies without
+managing body phase transitions.
 
 Semantic operations own their assignment, move, and cleanup actions. Operations
 that need none omit them. Specialization substitutes cleanup types within the
