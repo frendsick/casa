@@ -99,6 +99,7 @@ impl Counter {
 
 Private declarations remain available to code in the same module. Imports do not re-export their dependencies.
 
+Struct patterns outside the defining module can bind only public fields.
 Code outside the defining module can construct a struct only when every field is public. A public struct with private fields must provide a public factory function or method.
 
 ### Import failures
