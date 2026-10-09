@@ -3767,74 +3767,112 @@ pub fn enum_type_layout
     alignment size TypeLayout std::Option::Some
 }
 
-pub fn plan_struct_member_storage
-    casa_struct:$CasaStruct
-    member_index:u64
-    store:$SymbolStore
--> std::Option[FieldStoragePlan] {
-    std::Set[std::String]::new = visiting
-    0 = offset: u64
-    0 = index: u64
-    while index casa_struct.members.length > do
-        index casa_struct.members.get = member
-        if
-            visiting store casa_struct offset member.typ plan_struct_field_storage
-            std::Option::Some(plan) is
-        then
-            if index member_index == then
-                plan.clone std::Option::Some return
-            fi
-            plan.offset plan.size + = offset
-        else
-            std::Option[FieldStoragePlan]::None return
-        fi
-        1 += index
-    done
-    std::Option[FieldStoragePlan]::None
+# One planner belongs to one backend request and borrows its immutable store.
+# Cache only independent queries with a fresh recursion path. Nested layout results
+# can depend on the current recursion cut point and must not enter these caches.
+pub struct LayoutPlanner {
+    store:         $SymbolStore
+    sizes:         std::Map[std::String std::Option[u64]]
+    struct_fields: std::Map[std::String std::List[FieldStoragePlan]]
+    enum_fields:   std::Map[std::String std::List[FieldStoragePlan]]
 }
 
-pub fn struct_member_offset
-    casa_struct:$CasaStruct
-    member_index:u64
-    store:$SymbolStore
--> std::Option[u64] {
-    if store member_index casa_struct plan_struct_member_storage std::Option::Some(plan) is then
-        plan.offset std::Option::Some
-    else
-        std::Option[u64]::None
-    fi
-}
+impl LayoutPlanner {
+    pub fn new store:$SymbolStore -> LayoutPlanner {
+        std::Map[std::String std::List[FieldStoragePlan]]::new
+        std::Map[std::String std::List[FieldStoragePlan]]::new
+        std::Map[std::String std::Option[u64]]::new
+        store LayoutPlanner
+    }
 
-pub fn plan_enum_payload_storage
-    casa_enum:$CasaEnum
-    variant_name:$str
-    payload_index:u64
-    store:$SymbolStore
--> std::Option[FieldStoragePlan] {
-    variant_name casa_enum.variant_types.get_str = payload_types_opt
-    if payload_types_opt.is_none then
-        std::Option[FieldStoragePlan]::None return
-    fi
-    payload_types_opt.unwrap = payload_types
-    std::Set[std::String]::new = visiting
-    WORD_SIZE = offset: u64
-    0 = index: u64
-    while index payload_types.length > do
-        index payload_types.get = payload_type
-        if
-            visiting store offset payload_type plan_aggregate_field_storage
-            std::Option::Some(plan) is
-        then
-            if index payload_index == then
-                plan.clone std::Option::Some return
-            fi
-            plan.offset plan.size + = offset
-        else
+    pub fn inline_size self:mut$LayoutPlanner typ:$Type -> std::Option[u64] {
+        if typ.is_borrow typ Type::Builtin is || typ Type::Function is || then
+            self.store typ type_inline_size return
+        fi
+        typ.format = name
+        if name self.sizes.get std::Option::Some(size) is then
+            size.clone return
+        fi
+        self.store typ type_inline_size = size
+        size.clone name self.sizes.set
+        size
+    }
+
+    pub fn plan_struct_member
+        self:mut$LayoutPlanner
+        casa_struct:$CasaStruct
+        member_index:u64
+    -> std::Option[FieldStoragePlan] {
+        if casa_struct.members.length member_index >= then
             std::Option[FieldStoragePlan]::None return
         fi
-        1 += index
-    done
-    std::Option[FieldStoragePlan]::None
+        if casa_struct.name self.struct_fields.has ! then
+            std::Set[std::String]::new = visiting
+            std::List[FieldStoragePlan]::new = fields
+            0 = offset: u64
+            for member in casa_struct.members.iter do
+                if
+                    visiting self.store casa_struct offset member.typ plan_struct_field_storage
+                    std::Option::Some(plan) is
+                then
+                    plan.offset plan.size + = offset
+                    plan fields.push
+                else
+                    # Retain valid earlier fields, but never plan past a failed field.
+                    break
+                fi
+            done
+            fields casa_struct.name.clone self.struct_fields.set
+        fi
+        casa_struct.name self
+            .struct_fields
+            .get
+            .unwrap = fields
+        if fields.length member_index >= then
+            std::Option[FieldStoragePlan]::None return
+        fi
+        member_index fields.get.clone std::Option::Some
+    }
+
+    pub fn plan_enum_payload
+        self:mut$LayoutPlanner
+        casa_enum:$CasaEnum
+        variant_name:$str
+        payload_index:u64
+    -> std::Option[FieldStoragePlan] {
+        if variant_name casa_enum.variant_types.get_str std::Option::Some(payload_types) is then
+            if payload_types.length payload_index >= then
+                std::Option[FieldStoragePlan]::None return
+            fi
+            f"{casa_enum.name}::{variant_name}" = name
+            if name self.enum_fields.has ! then
+                std::Set[std::String]::new = visiting
+                std::List[FieldStoragePlan]::new = fields
+                WORD_SIZE = offset: u64
+                for payload_type in payload_types.iter do
+                    if
+                        visiting self.store offset payload_type plan_aggregate_field_storage
+                        std::Option::Some(plan) is
+                    then
+                        plan.offset plan.size + = offset
+                        plan fields.push
+                    else
+                        break
+                    fi
+                done
+                fields name.clone self.enum_fields.set
+            fi
+            name self
+                .enum_fields
+                .get
+                .unwrap = fields
+            if fields.length payload_index >= then
+                std::Option[FieldStoragePlan]::None return
+            fi
+            payload_index fields.get.clone std::Option::Some return
+        fi
+        std::Option[FieldStoragePlan]::None
+    }
 }
 
 pub fn array_type_layout
