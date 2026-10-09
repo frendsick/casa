@@ -72,6 +72,16 @@ struct ReturnOriginSummary derives std::Clone {
 }
 
 const CALLABLE_PARAMETER_PREFIX "parameter "
+const CALLABLE_RETURN_PREFIX "return "
+
+# A return dependency retains the caller's symbolic arguments until its recursive
+# group has published all equations. Source bodies are never checked again.
+struct CallableReturnDependency {
+    function_name: std::String
+    arguments:     std::Map[std::String std::Set[std::String]]
+    return_index:  u64
+    reference:     std::String
+}
 
 struct CallReturnSummary derives std::Clone {
     callables: std::List[std::Set[std::String]]
@@ -1511,14 +1521,260 @@ impl FunctionWork {
 }
 
 struct SemanticChecks {
-    functions:           std::Map[std::String FunctionWork]
-    verified_operations: std::Set[i64]
-    return_summaries:    std::Map[std::String CallReturnSummary]
-    bindings:            binding::BindingStore
-    capture_bindings:    std::Map[std::String std::Map[std::String u64]]
+    functions:             std::Map[std::String FunctionWork]
+    verified_operations:   std::Set[i64]
+    return_summaries:      std::Map[std::String CallReturnSummary]
+    callable_dependencies: std::List[CallableReturnDependency]
+    resolved_callables:    std::Map[std::String std::Set[std::String]]
+    bindings:              binding::BindingStore
+    capture_bindings:      std::Map[std::String std::Map[std::String u64]]
 }
 
 impl SemanticChecks {
+    fn resolve_callables
+        self:$SemanticChecks
+        callables:$std::Set[std::String]
+    -> std::Set[std::String] {
+        std::Set[std::String]::new = resolved
+        for callable in callables.iter do
+            if callable.as_str self.resolved_callables.get_str std::Option::Some(targets) is then
+                for target in targets.iter do
+                    target.clone resolved.add
+                done
+            else
+                callable.clone resolved.add
+            fi
+        done
+        resolved
+    }
+
+    fn resolve_return_callables
+        self:$SemanticChecks
+        returns:$std::List[std::Set[std::String]]
+    -> std::List[std::Set[std::String]] {
+        std::List[std::Set[std::String]]::new = resolved
+        for returned in returns.iter do
+            returned self.resolve_callables resolved.push
+        done
+        resolved
+    }
+
+    fn resolve_callable_arguments
+        self:$SemanticChecks
+        arguments:$std::Map[std::String std::Set[std::String]]
+    -> std::Map[std::String std::Set[std::String]] {
+        std::Map[std::String std::Set[std::String]]::new = resolved
+        for argument in arguments.iter do
+            argument.second self.resolve_callables argument.first.clone resolved.set
+        done
+        resolved
+    }
+
+    fn resolve_dependency_callables
+        self:$SemanticChecks
+        facts:std::List[SemanticDependency]
+    -> std::List[SemanticDependency] {
+        0 = index: u64
+        while index facts.length > do
+            index facts.get_mut match
+                SemanticDependency::BoundCall(call) => {
+                    call.argument_callables self.resolve_callable_arguments = call.argument_callables
+                }
+                SemanticDependency::DefaultMethodCall(call) => {
+                    call.argument_callables self.resolve_callable_arguments = call.argument_callables
+                }
+                _ => {
+                }
+            end
+            1 += index
+        done
+        facts
+    }
+
+    fn has_pending_callables self:$SemanticChecks callables:$std::Set[std::String] -> bool {
+        for callable in callables.iter do
+            if callable.as_str CALLABLE_RETURN_PREFIX str::starts_with then
+                if callable.as_str self.resolved_callables.has_str ! then
+                    true return
+                fi
+            fi
+        done
+        false
+    }
+
+    fn defer_return_callables
+        self:mut$SemanticChecks
+        function_name:$str
+        arguments:$std::Map[std::String std::Set[std::String]]
+        return_types:$std::List[common::Type]
+    -> std::List[std::Set[std::String]] {
+        std::List[std::Set[std::String]]::new = returns
+        0 = index: u64
+        while index return_types.length > do
+            if index return_types.get TypeChecker::does_type_need_symbolic_origin ! then
+                std::Set[std::String]::new returns.push
+                1 += index
+                continue
+            fi
+            self.resolved_callables.length self.callable_dependencies.length + = identity
+            f"{CALLABLE_RETURN_PREFIX}{identity}" = reference
+            reference.clone index arguments.clone function_name.to_str
+            CallableReturnDependency self.callable_dependencies.push
+            std::Set[std::String]::new = callables
+            reference callables.add
+            callables returns.push
+            1 += index
+        done
+        returns
+    }
+
+    fn evaluate_callable_dependency
+        self:$SemanticChecks
+        dependency:$CallableReturnDependency
+    -> std::Set[std::String] {
+        dependency.function_name.as_str self
+            .return_summaries
+            .get_str
+            .unwrap = summary
+        if dependency.return_index summary.callables.length > ! then
+            std::Set[std::String]::new return
+        fi
+        dependency.return_index summary.callables.get self.resolve_callables = returned
+        dependency.arguments self.resolve_callable_arguments returned resolve_returned_callables
+    }
+
+    fn callables_are_ready
+        self:$SemanticChecks
+        callables:$std::Set[std::String]
+        ready:$std::Set[std::String]
+    -> bool {
+        for callable in callables.iter do
+            if callable.as_str CALLABLE_RETURN_PREFIX str::starts_with ! then
+                continue
+            fi
+            if callable.as_str self.resolved_callables.has_str callable ready.has || ! then
+                false return
+            fi
+        done
+        true
+    }
+
+    fn dependency_is_ready
+        self:$SemanticChecks
+        dependency:$CallableReturnDependency
+        ready:$std::Set[std::String]
+    -> bool {
+        dependency.function_name.as_str self.return_summaries.get_str match
+            std::Option::Some(summary) => {
+                if dependency.return_index summary.callables.length > then
+                    if ready dependency.return_index summary.callables.get self.callables_are_ready ! then
+                        false return
+                    fi
+                fi
+            }
+            std::Option::None => false return
+        end
+        for
+            argument in dependency
+                .arguments
+                .values
+                .iter
+        do
+            if ready argument self.callables_are_ready ! then
+                false return
+            fi
+        done
+        true
+    }
+
+    fn find_ready_callable_dependencies self:$SemanticChecks -> std::Set[std::String] {
+        # Settle closed groups independently. An unrelated active caller must not
+        # withhold a completed group's facts merely because it was visited first.
+        std::Set[std::String]::new = ready
+        for dependency in self.callable_dependencies.iter do
+            dependency.reference.clone ready.add
+        done
+        true = changed
+        while changed do
+            false = changed
+            for dependency in self.callable_dependencies.iter do
+                if dependency.reference ready.has ! then
+                    continue
+                fi
+                if ready dependency self.dependency_is_ready ! then
+                    dependency.reference ready.remove
+                    true = changed
+                fi
+            done
+        done
+        ready
+    }
+
+    fn solve_return_callables self:mut$SemanticChecks ready:$std::Set[std::String] {
+        for reference in ready.iter do
+            std::Set[std::String]::new reference.clone self.resolved_callables.set
+        done
+        true = changed
+        while changed do
+            false = changed
+            for dependency in self.callable_dependencies.iter do
+                if dependency.reference ready.has ! then
+                    continue
+                fi
+                dependency self.evaluate_callable_dependency = incoming
+                dependency.reference.as_str self
+                    .resolved_callables
+                    .get_str
+                    .unwrap = previous
+                previous.clone = merged
+                for target in incoming.iter do
+                    target.clone merged.add
+                done
+                if previous.length merged.length != then
+                    true = changed
+                fi
+                merged dependency.reference.clone self.resolved_callables.set
+            done
+        done
+        for
+            name in self
+                .return_summaries
+                .keys
+                .iter
+        do
+            name.as_str self
+                .return_summaries
+                .get_str
+                .unwrap = summary
+            summary.callables self.resolve_return_callables = resolved
+            name.as_str self
+                .return_summaries
+                .get_mut_str
+                .unwrap = target
+            resolved = target.callables
+        done
+    }
+
+    fn settle_return_callables self:mut$SemanticChecks {
+        if self.callable_dependencies.is_empty then
+            return
+        fi
+        self.find_ready_callable_dependencies = ready
+        if ready.is_empty then
+            return
+        fi
+        ready self.solve_return_callables
+        std::List[CallableReturnDependency]::new = pending
+        self.callable_dependencies.reverse
+        while self.callable_dependencies.is_empty ! do
+            self.callable_dependencies.pop = remaining
+            if remaining.reference ready.has ! then
+                remaining pending.push
+            fi
+        done
+        pending = self.callable_dependencies
+    }
+
     fn function_is_rejected self:$SemanticChecks name:$str -> bool {
         if name self.functions.get_str std::Option::Some(status) is then
             status FunctionWork::Rejected is return
@@ -1646,6 +1902,8 @@ impl SemanticChecks {
 
     fn new -> SemanticChecks {
         std::Map[std::String std::Map[std::String u64]]::new binding::BindingStore::new
+        std::Map[std::String std::Set[std::String]]::new
+        std::List[CallableReturnDependency]::new
         std::Map[std::String CallReturnSummary]::new std::Set[i64]::new
         std::Map[std::String FunctionWork]::new SemanticChecks
     }
@@ -8716,11 +8974,21 @@ impl TypeChecker {
                 false = tc.facts_available
             fi
         elif fn_value common::OpValue::FnExec is fn_value common::OpValue::FnExecOwned is || then
-            tc.stack.peek_callables = executable_callables
+            tc.stack.peek_callables tc.checks.resolve_callables = executable_callables
+            # Executing a still-pending recursive target needs deferred ownership
+            # obligations. Reject this context until those obligations are represented.
+            if executable_callables tc.checks.has_pending_callables then
+                op.location "Cannot execute a recursive callable before its return targets are established"
+                common::ErrorKind::TypeMismatch tc.diagnostics.record_error
+                false = tc.facts_available
+            fi
             CallReturnSummary::new = executable_summary
             std::Option[common::StackEffect]::None = callable_effect
             for callable in executable_callables.iter do
-                if callable.as_str CALLABLE_PARAMETER_PREFIX str::starts_with then
+                if
+                    callable.as_str CALLABLE_PARAMETER_PREFIX str::starts_with
+                    callable.as_str CALLABLE_RETURN_PREFIX str::starts_with ||
+                then
                     continue
                 fi
                 if
@@ -11052,6 +11320,7 @@ impl ActiveFunction {
                     body signature CompletedFunction FunctionWork::Completed name.clone checks.functions.set
                     checked.return_origin_summaries.clone checked.return_callables.clone CallReturnSummary
                     name checks.return_summaries.set
+                    checks.settle_return_callables
                 else
                     operations RejectedBody::Partial FunctionWork::Rejected name checks.functions.set
                 fi
@@ -11279,25 +11548,46 @@ impl TypeChecker {
         summaries
     }
 
-    # Substitute callable inputs in the saved symbolic result without checking the body again.
+    # Substitute stable results immediately and retain an equation for recursive results.
     fn collect_function_return_summary
-        self:$TypeChecker
+        self:mut$TypeChecker
         function_name:$str
         argument_callables:$std::Map[std::String std::Set[std::String]]
     -> CallReturnSummary {
+        CallReturnSummary::new = summary
+        false = pending
         if
             function_name self
                 .checks
                 .return_summaries
                 .get_str std::Option::Some(saved) is
         then
-            std::List[std::Set[std::String]]::new = returns
+            saved.origins.clone = summary.origins
             for returned in saved.callables.iter do
-                argument_callables returned resolve_returned_callables returns.push
+                returned self.checks.resolve_callables = targets
+                if targets self.checks.has_pending_callables then
+                    true = pending
+                fi
+                argument_callables targets resolve_returned_callables summary.callables.push
             done
-            saved.origins.clone returns CallReturnSummary return
+        elif
+            function_name self
+                .checks
+                .functions
+                .get_str std::Option::Some(work) is
+        then
+            work FunctionWork::Reserved is = pending
         fi
-        CallReturnSummary::new
+        if pending then
+            function_name self
+                .store
+                .get_function
+                .unwrap
+                .stack_effect
+                .return_types
+            argument_callables function_name self.checks.defer_return_callables = summary.callables
+        fi
+        summary
     }
 
     fn find_call_argument
@@ -12723,11 +13013,11 @@ fn analyze_function_semantics_in_store
             .get_function
             .unwrap
             .clone
-        ordered_facts: checked.ordered_facts.clone
+        ordered_facts: checked.ordered_facts.clone checks.resolve_dependency_callables
         inferred_effect: checked.inferred_effect.clone
         operations: operations
         diagnostics: diagnostics
-        return_callables: checked.return_callables.clone
+        return_callables: checked.return_callables checks.resolve_return_callables
         return_origin_summaries: checked.return_origin_summaries.clone
     }
 }
@@ -12812,11 +13102,11 @@ pub fn analyze_source_root_semantics
         checked_ops AnalysisBody::Rejected
     fi = body
     RootSemantics {
-        ordered_facts: checked.ordered_facts.clone
+        ordered_facts: checked.ordered_facts.clone session.checks.resolve_dependency_callables
         inferred_effect: checked.inferred_effect.clone
         body: body
         diagnostics: diagnostics
-        return_callables: checked.return_callables.clone
+        return_callables: checked.return_callables session.checks.resolve_return_callables
     }
 }
 
