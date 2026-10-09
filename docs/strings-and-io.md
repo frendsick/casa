@@ -252,6 +252,10 @@ import "std"
 
 ## Owned strings
 
+The storage pointer is private. Construct owned text with `new`, `from_str`, or
+`with_capacity`, and change it through the String methods. Direct construction
+from a pointer and field assignment are unavailable outside `std`.
+
 `String` is non-`Copy` and [moves](ownership.md#move-a-value) by default. Use `clone` when you need an
 independent owner. `as_str` returns a [borrowed view](ownership.md#return-a-borrow) without allocation.
 

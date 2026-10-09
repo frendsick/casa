@@ -18,6 +18,7 @@ Run complete examples from the repository root with
 | [Iterators](#iterator-sources) | Process a sequence |
 | [List](lists.md) | Growable sequence |
 | [Map](#maps) | Key-value lookup |
+| [RawBuffer](#raw-buffers) | Untyped allocation for low-level code |
 | [Set](#sets) | Unique values |
 | [Slice](#slices) | Borrowed list range |
 | [String](strings-and-io.md#owned-strings) | Growable UTF-8 text |
@@ -333,6 +334,16 @@ the logical length so `as_cstr` does not allocate.
 See [examples/bytes.casa](../examples/bytes.casa) for a runnable example.
 
 ## Maps
+
+Map storage fields are private. Construct a map with `new`, inspect its count
+with `length`, and use the checked lookup and mutation methods below. Callers
+cannot construct a map from bucket pointers or assign its size or capacity.
+
+Low-level `entry_key` and `entry_value` require `unsafe`. They interpret the
+supplied address as `$K` or `$V` without checking it. The address must point to an
+initialized value that remains live and immutable for the returned borrow,
+which is bounded by the shared Map borrow. `entry_value` expects the value
+address, not the start of an entry. Prefer `get`, `get_mut`, or `iter`.
 
 `Map[K V]` associates unique keys with values. `K` must implement [Hashable](traits.md#hashable-contract).
 A new map allocates its buckets when the first entry is inserted:
@@ -980,3 +991,39 @@ import "std"
 
 See [examples/iterator_combinators.casa](../examples/iterator_combinators.casa)
 for every lazy and terminal operation.
+
+## Raw buffers
+
+`RawBuffer` owns an untyped allocation. Its storage field is private, and it
+releases that allocation when dropped. `Bytes` provides checked byte access
+when raw memory is not needed.
+
+| Method | Signature | Behavior |
+|---|---|---|
+| `data` | `fn data self:$RawBuffer -> ptr` | Non-owning pointer, with no setter |
+| `from_raw` | `unsafe fn from_raw data:ptr -> RawBuffer` | Adopt sole ownership of an allocation |
+| `into_raw` | `fn into_raw self:RawBuffer -> ptr` | Consume the buffer and transfer responsibility for freeing its allocation |
+| `new` | `fn new size:u64 -> RawBuffer` | Own `size` uninitialized bytes |
+| `swap_with` | `fn swap_with self:mut$RawBuffer other:mut$RawBuffer` | Exchange the allocations of two exclusively borrowed buffers |
+
+`data` does not transfer ownership or extend the allocation's lifetime. Raw
+reads, writes, and deallocation require `unsafe`. Initialize bytes before
+reading them, stay within the allocation, and respect active typed borrows.
+
+`from_raw` requires null or the start of a complete, live allocation from
+`alloc`. Ownership transfers to the returned buffer. The caller must not free
+the pointer afterwards or retain another owner. A pointer returned by
+`into_raw` must eventually be freed or adopted by one owner.
+
+```casa
+import "std"
+
+8 std::RawBuffer::new = buffer
+# SAFETY: buffer owns eight writable bytes.
+unsafe { 42 buffer.data store64 }
+buffer.into_raw = address
+# SAFETY: into_raw transferred sole ownership of this alloc allocation.
+unsafe { address std::RawBuffer::from_raw } = adopted
+# SAFETY: adopted still owns the eight initialized bytes.
+unsafe { adopted.data load64 } print
+```

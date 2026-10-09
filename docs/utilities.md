@@ -239,7 +239,8 @@ Returns elapsed nanoseconds without consuming the timer.
 fn new -> Timer
 ```
 
-Creates a timer using the monotonic clock.
+Creates a timer using the monotonic clock. Clock reads use local scratch
+storage, so elapsed-time queries do not mutate storage owned by the timer.
 
 ### Timer::to_str
 

@@ -223,6 +223,11 @@ line.to_str.unwrap print
 | `io::stdin_read_exact reader:mut$StdinReader count:u64 -> Bytes` | Up to `count` bytes |
 | `io::stdin_read_line reader:mut$StdinReader -> Bytes` | Bytes before a newline or end of input |
 
+The reader's buffer and counters are private. `reader.has_buffered_input`
+reports whether an unread byte is buffered. `reader.buffer` returns a shared
+RawBuffer borrow for low-level access, with no storage replacement or counter
+setters. Raw memory access still requires `unsafe`.
+
 Read errors are treated as end of input. `stdin_read_exact` can return fewer
 bytes than requested. Check the returned length when the protocol requires an
 exact count. `stdin_read_line` consumes the newline without including it in the
@@ -237,9 +242,13 @@ The module also exposes direct Linux file-descriptor operations:
 | `os::errno_to_io_error result:i64 -> IoError` | Convert a negative result |
 | `file::close fd:i64 -> i64` | Zero or negative error |
 | `file::open path:$cstr flags:i64 mode:i64 -> i64` | File descriptor or negative error |
-| `file::read fd:i64 buffer:ptr size:u64 -> i64` | Bytes read or negative error |
+| `file::read fd:i64 buffer:ptr size:u64 -> i64` | Unsafe. Bytes read or negative error |
 | `file::write fd:i64 data:$Bytes -> i64` | Bytes written or negative error |
 
 Open flags are `os::O_RDONLY`, `os::O_WRONLY`, `os::O_CREAT`, and `os::O_TRUNC`. Combine flags
 with `|`. Prefer the high-level `Result` functions unless direct descriptors
 are required.
+
+`file::read` requires an `unsafe` block. The caller must provide `size` writable
+bytes at `buffer` with exclusive access for the call. Prefer `read_all` for
+checked reads into owned `Bytes`.
