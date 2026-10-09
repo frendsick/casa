@@ -103,10 +103,17 @@ Rejected source retains diagnostics and editor facts but cannot produce backend 
 type and structural checks. It retains source occurrences for editor queries,
 without executable operands or ownership actions.
 
+`body_builder.casa` keeps private checking work structured while literal types
+and ownership moves are pending. Finalization transfers each branch, loop,
+match arm, and nested literal directly into its semantic node. Flat
+checked-operation views remain available through compatibility APIs used by
+tests.
+
 Scalar and aggregate programs use one backend entry. Physical instructions,
 function plans, pools, selection, and spelling helpers are private to
 `backend.casa`. A deterministic worklist
-plans each reachable function from its structured body. Each function plan fixes
+plans each reachable function from its structured body. Leaf planning consumes
+typed semantic actions and their facts directly. Each function plan fixes
 storage actions, frame size, ownership flags, cleanup, and concrete call targets
 before instruction selection. Native calls share one request-owned ABI plan per
 concrete extern function. Recursive calls refer to reserved identities.
@@ -137,7 +144,9 @@ It traverses completed semantic bodies directly and releases all compiler
 bodies before returning the index. Verified operation
 identities are settled after literal checks and recursive call obligations.
 A failed operation withholds facts that depend on its recovered stack. An
-independent sibling branch or function can still contribute verified facts.
+independent sibling branch, match arm, or function can still contribute verified
+facts. Match arms start from the established subject facts. A failed arm withholds
+facts after the join without suppressing independent sibling arms.
 A return-signature error rejects assembly without erasing established calls.
 
 Ownership checking keeps typed places with a resolved binding name and field

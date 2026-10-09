@@ -1,0 +1,614 @@
+# Private checking work retains structure while literal types and moves are still pending.
+import "std" as std
+import "common" as common
+import "semantic_body" as semantic_body
+import "error" as error
+import "literal_resolution" as literal_resolution
+
+pub struct Builder derives std::Clone {
+    parts: std::List[Part]
+}
+
+pub enum Part derives std::Clone {
+    Operation(common::Op)
+    Conditional(std::List[Branch] std::Option[Alternative] common::Op)
+    Loop(common::Op Builder common::Op Builder common::Op)
+    Match(common::Op std::List[Arm] common::Op)
+    Region(common::Op Builder common::Op)
+    Array(common::Op Builder)
+    Group(common::Op Builder)
+    Unreachable(Builder)
+}
+
+pub struct Branch derives std::Clone {
+    pub entry:      common::Op
+    pub condition:  Builder
+    pub test:       common::Op
+    pub consequent: Builder
+}
+
+pub struct Alternative derives std::Clone {
+    pub entry: common::Op
+    pub body:  Builder
+}
+
+pub struct Arm derives std::Clone {
+    pub entry: common::Op
+    pub guard: Builder
+    pub body:  Builder
+}
+
+impl Builder {
+    pub fn new -> Builder { std::List[Part]::new Builder }
+
+    pub fn push self:mut$Builder part:Part { part self.parts.push }
+
+    pub fn push_operation self:mut$Builder operation:common::Op {
+        operation Part::Operation self.push
+    }
+
+    pub fn append_operations self:mut$Builder operations:std::List[common::Op] {
+        operations.reverse
+        while operations.is_empty ! do
+            operations.pop self.push_operation
+        done
+    }
+
+    pub fn pop_operation self:mut$Builder -> common::Op {
+        self.parts.pop match
+            Part::Operation(operation) => operation
+            _ => "Expected one checked boundary" panic
+        end
+    }
+
+    pub fn length self:$Builder -> u64 { self.parts.length }
+
+    pub fn is_empty self:$Builder -> bool { self.parts.is_empty }
+
+    pub fn has_numeric_literal self:$Builder -> bool {
+        for part in self.parts.iter do
+            part match
+                Part::Operation(operation) => {
+                    if operation.value common::OpValue::PushInt is operation.value common::OpValue::PushFloat is || then
+                        true return
+                    fi
+                }
+                Part::Array(_ body) => {
+                    if body.has_numeric_literal then true return fi
+                }
+                Part::Group(_ body) => {
+                    if body.has_numeric_literal then true return fi
+                }
+                _ => {
+                }
+            end
+        done
+        false
+    }
+
+    pub fn visit_operations self:$Builder visitor:$fn[$common::Op] {
+        for part in self.parts.iter do
+            visitor part.visit_operations
+        done
+    }
+
+    pub fn visit_operations_mut self:mut$Builder visitor:$fn[mut$common::Op] {
+        0 = index: u64
+        while index self.parts.length > do
+            visitor index self
+                .parts
+                .get_mut
+                .visit_operations_mut
+            1 += index
+        done
+    }
+
+    pub fn lower_operations self:$Builder -> std::List[common::Op] {
+        std::List[common::Op]::new = operations
+        for part in self.parts.iter do
+            operations part.lower_into
+        done
+        operations
+    }
+
+    pub fn resolve_literals
+        self:mut$Builder
+        diagnostics:mut$error::Diagnostics
+        expected:$std::Option[common::Type]
+    {
+        0 = index: u64
+        while index self.parts.length > do
+            expected diagnostics index self
+                .parts
+                .get_mut
+                .resolve_literals
+            1 += index
+        done
+    }
+
+    pub fn into_body
+        self:Builder
+        store:$common::SymbolStore
+    -> std::Result[semantic_body::Body std::String] {
+        self match
+            Builder { parts: parts } => {
+                std::List[semantic_body::Node]::new = nodes
+                parts.reverse
+                while parts.is_empty ! do
+                    store parts.pop.into_node ? nodes.push
+                done
+                nodes semantic_body::Body::new std::Result::Ok
+            }
+        end
+    }
+
+    fn into_unreachable self:Builder -> semantic_body::Unreachable {
+        std::List[semantic_body::CallSite]::new = calls
+        std::List[semantic_body::Occurrence]::new = occurrences
+        common::empty_location = origin
+        {
+            = operation: $common::Op
+            if occurrences.is_empty then
+                operation.location.clone = origin
+            fi
+            operation semantic_body::Occurrence::from_operation occurrences.push
+            operation.value match
+                common::OpValue::FnCall(name) => {
+                    operation.location.clone operation.call_bindings.clone name.clone semantic_body::Callable
+                    semantic_body::CallSite calls.push
+                }
+                common::OpValue::FnPush(name) => {
+                    operation.location.clone operation.call_bindings.clone name.clone semantic_body::Callable
+                    semantic_body::CallSite calls.push
+                }
+                _ => {
+                }
+            end
+        } = visitor
+        visitor self.visit_operations
+        occurrences origin calls semantic_body::Unreachable
+    }
+
+    pub fn settle_facts
+        self:$Builder
+        available:bool
+        rejected:$std::Set[std::String]
+        verified:mut$std::Set[i64]
+    -> bool {
+        for part in self.parts.iter do
+            available rejected verified part.settle_facts = available
+        done
+        available
+    }
+}
+
+impl Part {
+    fn visit_operations self:$Part visitor:$fn[$common::Op] {
+        self match
+            Part::Operation(operation) => operation visitor exec
+            Part::Conditional(branches alternative exit) => {
+                for branch in branches.iter do
+                    branch.entry visitor exec
+                    visitor branch.condition.visit_operations
+                    branch.test visitor exec
+                    visitor branch.consequent.visit_operations
+                done
+                if alternative std::Option::Some(otherwise) is then
+                    otherwise.entry visitor exec
+                    visitor otherwise.body.visit_operations
+                fi
+                exit visitor exec
+            }
+            Part::Loop(entry condition test body exit) => {
+                entry visitor exec visitor condition.visit_operations
+                test visitor exec visitor body.visit_operations exit visitor exec
+            }
+            Part::Match(entry arms exit) => {
+                entry visitor exec
+                for arm in arms.iter do
+                    visitor arm.guard.visit_operations arm.entry visitor exec visitor arm.body.visit_operations
+                done
+                exit visitor exec
+            }
+            Part::Region(entry body exit) => {
+                entry visitor exec visitor body.visit_operations exit visitor exec
+            }
+            Part::Array(operation body) => {
+                visitor body.visit_operations operation visitor exec
+            }
+            Part::Group(operation body) => {
+                visitor body.visit_operations operation visitor exec
+            }
+            Part::Unreachable(body) => visitor body.visit_operations
+        end
+    }
+
+    fn visit_operations_mut self:mut$Part visitor:$fn[mut$common::Op] {
+        self match
+            Part::Operation(operation) => operation visitor exec
+            Part::Conditional(branches alternative exit) => {
+                0 = index: u64
+                while index branches.length > do
+                    index branches.get_mut = branch
+                    branch.entry visitor exec visitor branch.condition.visit_operations_mut
+                    branch.test visitor exec visitor branch.consequent.visit_operations_mut
+                    1 += index
+                done
+                if alternative std::Option::Some(otherwise) is then
+                    otherwise.entry visitor exec visitor otherwise.body.visit_operations_mut
+                fi
+                exit visitor exec
+            }
+            Part::Loop(entry condition test body exit) => {
+                entry visitor exec visitor condition.visit_operations_mut
+                test visitor exec visitor body.visit_operations_mut exit visitor exec
+            }
+            Part::Match(entry arms exit) => {
+                entry visitor exec
+                0 = index: u64
+                while index arms.length > do
+                    index arms.get_mut = arm
+                    visitor arm.guard.visit_operations_mut arm.entry visitor exec visitor arm.body.visit_operations_mut
+                    1 += index
+                done
+                exit visitor exec
+            }
+            Part::Region(entry body exit) => {
+                entry visitor exec visitor body.visit_operations_mut exit visitor exec
+            }
+            Part::Array(operation body) => {
+                visitor body.visit_operations_mut operation visitor exec
+            }
+            Part::Group(operation body) => {
+                visitor body.visit_operations_mut operation visitor exec
+            }
+            Part::Unreachable(body) => visitor body.visit_operations_mut
+        end
+    }
+
+    fn resolve_literals
+        self:mut$Part
+        diagnostics:mut$error::Diagnostics
+        expected:$std::Option[common::Type]
+    {
+        self match
+            Part::Operation(operation) => {
+                operation.value match
+                    common::OpValue::PushInt(_) => common::make_i64_type
+                    common::OpValue::PushFloat(_) => common::make_f64_type
+                    _ => return
+                end operation
+                    .type_hint
+                    .clone
+                    .unwrap_or = target
+                if expected std::Option::Some(context) is then
+                    context.clone = target
+                fi
+                if diagnostics target operation.resolve_literal ! then
+                    common::OpValue::Rejected = operation.value
+                fi
+            }
+            Part::Array(operation body) => {
+                if expected std::Option::Some(context) is then
+                    context.clone std::Option::Some = operation.type_hint
+                fi
+                std::Option[common::Type]::None = element
+                diagnostics.error_count = errors_before
+                if operation.type_hint std::Option::Some(array_type) is then
+                    array_type.clone = target
+                    if array_type common::Type::Generic(generic) is then
+                        if common::ARRAY_TYPE generic.base.as_str == 1 generic.params.length == && then
+                            body.length 0 generic
+                                .params
+                                .get
+                                .clone common::make_array_type = target
+                        fi
+                    fi
+                    if target common::get_array_length_parameter std::Option::Some(length) is then
+                        if length.is_symbolic then
+                            operation.location
+                            f"Array literal length {body.length} cannot satisfy constant parameter `{length.name}`"
+                            common::ErrorKind::TypeMismatch diagnostics.record_error_string
+                        elif body.length i64::try_from.unwrap length.value != then
+                            operation.location f"Array literal with {body.length} element(s) does not fit `{target.format}`"
+                            common::ErrorKind::TypeMismatch diagnostics.record_error_string
+                        fi
+                    fi
+                    if target.array_element_type std::Option::Some(element_type) is then
+                        element_type.clone std::Option::Some = element
+                    fi
+                    target std::Option::Some = operation.type_hint
+                fi
+                element diagnostics body.resolve_literals
+                if errors_before diagnostics.error_count != then
+                    common::OpValue::Rejected = operation.value
+                fi
+            }
+            Part::Group(_ body) => std::Option[common::Type]::None diagnostics body.resolve_literals
+            Part::Conditional(branches alternative _) => {
+                0 = index: u64
+                while index branches.length > do
+                    index branches.get_mut = branch
+                    expected diagnostics branch.condition.resolve_literals
+                    expected diagnostics branch.consequent.resolve_literals
+                    1 += index
+                done
+                if alternative std::Option::Some(otherwise) is then
+                    expected diagnostics otherwise.body.resolve_literals
+                fi
+            }
+            Part::Loop(entry condition test body exit) => {
+                expected diagnostics condition.resolve_literals expected diagnostics body.resolve_literals
+            }
+            Part::Match(entry arms exit) => {
+                0 = index: u64
+                while index arms.length > do
+                    index arms.get_mut = arm
+                    expected diagnostics arm.guard.resolve_literals expected diagnostics arm.body.resolve_literals
+                    1 += index
+                done
+            }
+            Part::Region(entry body exit) => expected diagnostics body.resolve_literals
+            Part::Unreachable(body) => expected diagnostics body.resolve_literals
+        end
+    }
+
+    fn into_node
+        self:Part
+        store:$common::SymbolStore
+    -> std::Result[semantic_body::Node std::String] {
+        self match
+            Part::Operation(operation) => store operation semantic_body::consume_leaf ? semantic_body::Node::Leaf
+            Part::Conditional(branches alternative exit) => {
+                std::List[semantic_body::Branch]::new = checked_branches
+                branches.reverse
+                while branches.is_empty ! do
+                    store branches.pop.into_branch ? checked_branches.push
+                done
+                std::Option[semantic_body::Alternative]::None = checked_alternative
+                if alternative std::Option::Some(otherwise) is then
+                    otherwise match
+                        Alternative {
+                            entry: entry body: body
+                        } => {
+                            store body.into_body ? = checked_body
+                            checked_body entry.into_facts semantic_body::Alternative std::Option::Some = checked_alternative
+                        }
+                    end
+                fi
+                exit.into_facts checked_alternative checked_branches semantic_body::Conditional semantic_body::Node::Conditional
+            }
+            Part::Loop(entry condition test body exit) => {
+                store condition.into_body ? = checked_condition
+                store body.into_body ? = checked_body
+                semantic_body::Loop {
+                    entry: entry.into_facts condition: checked_condition test: test.into_facts body: checked_body exit: exit.into_facts
+                }
+                semantic_body::Node::Loop
+            }
+            Part::Match(entry arms exit) => {
+                std::List[semantic_body::Arm]::new = checked_arms
+                entry
+                    .type_hint
+                    .clone
+                    .unwrap = subject_type
+                arms.reverse
+                while arms.is_empty ! do
+                    store arms.pop.into_arm ? checked_arms.push
+                done
+                exit.into_facts checked_arms subject_type entry.into_facts semantic_body::Match semantic_body::Node::Match
+            }
+            Part::Region(entry body exit) => {
+                store body.into_body ? = checked_body
+                exit.into_facts checked_body entry.into_facts semantic_body::Region semantic_body::Node::Region
+            }
+            Part::Array(operation body) => {
+                store body.into_body ? = checked_body
+                operation
+                    .type_hint
+                    .clone
+                    .unwrap checked_body operation.into_facts semantic_body::ArrayLiteral semantic_body::Node::Array
+            }
+            Part::Group(operation body) => {
+                store body.into_body ? = checked_body
+                checked_body operation.into_facts semantic_body::Compound semantic_body::Node::Group
+            }
+            Part::Unreachable(body) => body.into_unreachable semantic_body::Node::Unreachable
+        end
+        std::Result::Ok
+    }
+
+    fn settle_facts
+        self:$Part
+        verified:mut$std::Set[i64]
+        rejected:$std::Set[std::String]
+        available:bool
+    -> bool {
+        self match
+            Part::Operation(operation) => available rejected verified operation.settle_source_facts = available
+            Part::Conditional(branches alternative exit) => {
+                available = condition_available
+                true = branches_available
+                for branch in branches.iter do
+                    condition_available rejected verified branch.entry.settle_source_facts drop
+                    verified rejected condition_available branch.condition.settle_facts = condition_available
+                    condition_available rejected verified branch.test.settle_source_facts drop
+                    verified rejected condition_available branch.consequent.settle_facts branches_available && = branches_available
+                done
+                if alternative std::Option::Some(otherwise) is then
+                    condition_available rejected verified otherwise.entry.settle_source_facts drop
+                    verified rejected condition_available otherwise.body.settle_facts branches_available && = branches_available
+                fi
+                condition_available branches_available && = available
+                available rejected verified exit.settle_source_facts = available
+            }
+            Part::Loop(entry condition test body exit) => {
+                available rejected verified entry.settle_source_facts = available
+                verified rejected available condition.settle_facts = available
+                available rejected verified test.settle_source_facts = available
+                verified rejected available body.settle_facts = available
+                available rejected verified exit.settle_source_facts = available
+            }
+            Part::Match(entry arms exit) => {
+                available rejected verified entry.settle_source_facts = available
+                true = arms_available
+                for arm in arms.iter do
+                    verified rejected available arm.guard.settle_facts = arm_available
+                    arm_available rejected verified arm.entry.settle_source_facts = arm_available
+                    verified rejected arm_available arm.body.settle_facts arms_available && = arms_available
+                done
+                available arms_available && rejected verified exit.settle_source_facts = available
+            }
+            Part::Region(entry body exit) => {
+                available rejected verified entry.settle_source_facts = available
+                verified rejected available body.settle_facts = available
+                available rejected verified exit.settle_source_facts = available
+            }
+            Part::Array(operation body) => {
+                verified rejected available body.settle_facts = available
+                available rejected verified operation.settle_source_facts = available
+            }
+            Part::Group(operation body) => {
+                verified rejected available body.settle_facts = available
+                available rejected verified operation.settle_source_facts = available
+            }
+            Part::Unreachable(body) => verified rejected available body.settle_facts = available
+        end
+        available
+    }
+}
+
+impl Branch {
+    fn into_branch
+        self:Branch
+        store:$common::SymbolStore
+    -> std::Result[semantic_body::Branch std::String] {
+        self match
+            Branch { entry: entry condition: condition test: test consequent: consequent } => {
+                store condition.into_body ? = checked_condition
+                store consequent.into_body ? = checked_consequent
+                semantic_body::Branch {
+                    entry: entry.into_facts condition: checked_condition test: test.into_facts consequent: checked_consequent
+                }
+                std::Result::Ok
+            }
+        end
+    }
+}
+
+impl Arm {
+    fn into_arm self:Arm store:$common::SymbolStore -> std::Result[semantic_body::Arm std::String] {
+        self match
+            Arm { entry: entry guard: guard body: body } => {
+                store guard.into_body ? = checked_guard
+                store body.into_body ? = checked_body
+                entry match
+                    common::Op {
+                        id: identity location: origin ownership: effects bindings: bindings type_hint: hint value: value
+                    } => {
+                        value match
+                            common::OpValue::MatchArm(arm) => arm match
+                                common::MatchArm {
+                                    pattern_value: pattern
+                                } => pattern
+                            end
+                            _ => "Expected checked match arm" panic
+                        end = pattern
+                        semantic_body::OperationFacts {
+                            identity: identity origin: origin effects: effects bindings: bindings
+                        } = facts
+                        semantic_body::Arm {
+                            entry: facts pattern: pattern subject_type: hint.unwrap guard: checked_guard body: checked_body
+                        }
+                        std::Result::Ok
+                    }
+                end
+            }
+        end
+    }
+}
+
+impl common::Op {
+    fn settle_source_facts
+        self:$common::Op
+        verified:mut$std::Set[i64]
+        rejected:$std::Set[std::String]
+        available:bool
+    -> bool {
+        self.value match
+            common::OpValue::FnCall(name) => {
+                if name rejected.has then false = available fi
+            }
+            common::OpValue::FnPush(name) => {
+                if name rejected.has then false = available fi
+            }
+            common::OpValue::Identifier(_) => false = available
+            common::OpValue::Rejected => false = available
+            _ => {
+            }
+        end
+        if available ! then
+            self.id verified.remove
+        fi
+        available
+    }
+}
+
+impl Part {
+    fn lower_into self:$Part operations:mut$std::List[common::Op] {
+        self match
+            Part::Array(operation body) => {
+                operation.clone = lowered
+                body.lower_operations common::OpValue::PushArray = lowered.value
+                lowered operations.push
+            }
+            Part::Group(operation body) => {
+                operation.clone = lowered
+                body.lower_operations common::OpValue::ExprGroup = lowered.value
+                lowered operations.push
+            }
+            Part::Match(entry arms exit) => {
+                entry.clone operations.push
+                for arm in arms.iter do
+                    arm.entry.clone = lowered
+                    if lowered.value common::OpValue::MatchArm(value) is then
+                        arm.guard.lower_operations = value.guard_ops
+                    fi
+                    lowered operations.push
+                    arm.body.lower_operations operations.append
+                done
+                exit.clone operations.push
+            }
+            Part::Unreachable(body) => {
+                body.lower_operations = items
+                if items.is_empty ! then
+                    0 items
+                        .get
+                        .location
+                        .clone items common::OpValue::Unreachable common::Op::from_source operations.push
+                fi
+            }
+            Part::Operation(operation) => operation.clone operations.push
+            Part::Conditional(branches alternative exit) => {
+                for branch in branches.iter do
+                    branch.entry.clone operations.push
+                    branch.condition.lower_operations operations.append
+                    branch.test.clone operations.push
+                    branch.consequent.lower_operations operations.append
+                done
+                if alternative std::Option::Some(otherwise) is then
+                    otherwise.entry.clone operations.push
+                    otherwise.body.lower_operations operations.append
+                fi
+                exit.clone operations.push
+            }
+            Part::Loop(entry condition test body exit) => {
+                entry.clone operations.push condition.lower_operations operations.append
+                test.clone operations.push body.lower_operations operations.append exit.clone operations.push
+            }
+            Part::Region(entry body exit) => {
+                entry.clone operations.push body.lower_operations operations.append exit.clone operations.push
+            }
+        end
+    }
+}

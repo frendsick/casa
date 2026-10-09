@@ -12,6 +12,8 @@ import "semantic_rules" as rules
 import "pattern" as pattern
 import "source_body" as source_body
 import "semantic_body" as semantic_body
+import "body_builder" as body_builder
+import "literal_resolution" as literal_resolution
 
 # TypedStack — typed values with source and unresolved-literal origins.
 struct TypedStack {
@@ -299,6 +301,7 @@ fn should_preserve_contained_origin origin:$Origin place:$std::Option[Place] -> 
     fi
     true
 }
+
 # Ignore the loan used to access a container while preserving origins stored in it.
 fn merge_contained_origins
     target:std::Option[std::List[Origin]]
@@ -473,6 +476,7 @@ impl source_body::SourceLeaf {
         uses
     }
 }
+
 # Source uses are measured before checking, while lexical spelling is intact.
 fn collect_source_variable_uses body:$source_body::SourceBody uses:VariableUses -> VariableUses {
     body.get_nodes = nodes
@@ -518,9 +522,9 @@ fn collect_source_variable_uses body:$source_body::SourceBody uses:VariableUses 
 }
 
 enum SourceWork {
-    Array (source_body::SourceBody)
-    Group (source_body::SourceBody)
-    Guard (source_body::SourceBody)
+    Array(source_body::SourceBody)
+    Group(source_body::SourceBody)
+    Arm(source_body::SourceBody)
 }
 
 fn decrement_binding_use counts:mut$std::Map[std::String u64] name:$str {
@@ -1076,6 +1080,7 @@ impl TypedStack {
         unified
     }
 }
+
 # Branch contexts — one specialized struct per branch kind (if / while / match).
 struct BindingLoans derives std::Clone {
     origins:         std::Option[std::List[Origin]]
@@ -1239,12 +1244,14 @@ struct MatchContext {
     match_place:             std::Option[Place]
     current_branch_label:    std::String
     current_branch_location: common::Location
+    entry_facts_available:   bool
+    arms_have_facts:         bool
 }
 
 enum BranchFrame {
-    BranchIf (IfContext)
-    BranchWhile (WhileContext)
-    BranchMatch (MatchContext)
+    BranchIf(IfContext)
+    BranchWhile(WhileContext)
+    BranchMatch(MatchContext)
 }
 
 impl BranchFrame {
@@ -1332,6 +1339,7 @@ impl WhileContext {
 
 impl MatchContext {
     pub fn new match_type:common::Type -> MatchContext {
+        true true
         common::empty_location
         "".to_str
         std::Option[Place]::None
@@ -1348,6 +1356,7 @@ impl MatchContext {
         MatchContext
     }
 }
+
 # Own the diagnostic inputs until the parameter check finishes. Source-name
 # lookup and message construction run only when a diagnostic needs the text.
 struct ParameterContext {
@@ -1359,8 +1368,8 @@ struct ParameterContext {
 
 enum ExpectationContext {
     None
-    Text (std::String)
-    Parameter (ParameterContext)
+    Text(std::String)
+    Parameter(ParameterContext)
 }
 
 struct TypeChecker {
@@ -1405,6 +1414,7 @@ struct TypeChecker {
     seen_dependencies:          std::Set[std::String]
     diagnostics:                mut$error::Diagnostics
     facts_available:            bool
+    checked_guards:             std::List[body_builder::Builder]
 }
 
 pub struct FunctionSemantics {
@@ -1430,15 +1440,15 @@ impl FunctionSemantics {
 }
 
 enum FunctionWork {
-    Pending (source_body::SourceBody)
-    Reserved (CheckedFunction)
-    Completed (CompletedFunction)
-    Rejected (RejectedBody)
+    Pending(source_body::SourceBody)
+    Reserved(CheckedFunction)
+    Completed(CompletedFunction)
+    Rejected(RejectedBody)
 }
 
 enum RejectedBody {
-    Partial (std::List[common::Op])
-    Checked (CompletedFunction)
+    Partial(body_builder::Builder)
+    Checked(CompletedFunction)
 }
 
 impl RejectedBody {
@@ -1453,7 +1463,7 @@ impl RejectedBody {
                 completed.into_body AnalysisBody::RejectedChecked
             }
             RejectedBody::Partial(partial) => {
-                rejected true partial checks.settle_operation_facts drop
+                checks.verified_operations rejected true partial.settle_facts drop
                 partial AnalysisBody::Rejected
             }
         end
@@ -1461,7 +1471,7 @@ impl RejectedBody {
 
     fn lower_operations self:$RejectedBody -> std::List[common::Op] {
         self match
-            RejectedBody::Partial(operations) => operations.clone
+            RejectedBody::Partial(operations) => operations.lower_operations
             RejectedBody::Checked(completed) => completed.body.lower_operations
         end
     }
@@ -1500,11 +1510,6 @@ impl FunctionWork {
     }
 }
 
-struct FactBranch {
-    entry_available:    bool
-    branches_available: bool
-}
-
 struct SemanticChecks {
     functions:           std::Map[std::String FunctionWork]
     verified_operations: std::Set[i64]
@@ -1514,34 +1519,10 @@ struct SemanticChecks {
 }
 
 impl SemanticChecks {
-    fn has_rejected_target self:$SemanticChecks operation:$common::Op -> bool {
-        operation.value match
-            common::OpValue::FnCall(name) => name.as_str self.function_is_rejected
-            common::OpValue::FnPush(name) => name.as_str self.function_is_rejected
-            common::OpValue::ExprGroup(items) => items self.body_has_rejected_target
-            common::OpValue::PushArray(items) => items self.body_has_rejected_target
-            common::OpValue::MatchArm(arm) => arm.guard_ops self.body_has_rejected_target
-            _ => false
-        end
-    }
-
     fn function_is_rejected self:$SemanticChecks name:$str -> bool {
         if name self.functions.get_str std::Option::Some(status) is then
             status FunctionWork::Rejected is return
         fi
-        false
-    }
-
-    fn body_has_rejected_target self:$SemanticChecks operations:$std::List[common::Op] -> bool {
-        for operation in operations.iter do
-            if
-                operation.value common::OpValue::Rejected is
-                operation.value common::OpValue::Identifier is ||
-                operation self.has_rejected_target ||
-            then
-                true return
-            fi
-        done
         false
     }
 
@@ -1597,71 +1578,6 @@ impl SemanticChecks {
             fi
         done
         names
-    }
-
-    # Use retained rejections because publication consumes the function work registry.
-    fn settle_operation_facts
-        self:mut$SemanticChecks
-        operations:$std::List[common::Op]
-        available:bool
-        rejected:$std::Set[std::String]
-    -> bool {
-        std::List[FactBranch]::new = branches
-        for operation in operations.iter do
-            operation.value common::OpValue::IfCondition is
-            operation.value common::OpValue::IfElse is ||
-            operation.value common::OpValue::IfElif is ||
-            operation.value common::OpValue::IfEnd is || = branch_boundary
-            if branch_boundary branches.is_empty && then
-                operation.id self.verified_operations.remove
-                false = available
-                continue
-            fi
-            operation.value match
-                common::OpValue::IfStart => true available FactBranch branches.push
-                common::OpValue::IfCondition => {
-                    branches.pop = branch
-                    available branch.entry_available && = branch.entry_available
-                    branch branches.push
-                }
-                common::OpValue::IfElse => {
-                    branches.pop = branch
-                    available branch.branches_available && = branch.branches_available
-                    branch.entry_available = available
-                    branch branches.push
-                }
-                common::OpValue::IfElif => {
-                    branches.pop = branch
-                    available branch.branches_available && = branch.branches_available
-                    branch.entry_available = available
-                    branch branches.push
-                }
-                common::OpValue::IfEnd => {
-                    branches.pop = branch
-                    available branch.entry_available && branch.branches_available && = available
-                }
-                common::OpValue::Unreachable(items) => rejected available items self.settle_operation_facts = available
-                common::OpValue::ExprGroup(items) => rejected available items self.settle_operation_facts = available
-                common::OpValue::PushArray(items) => rejected available items self.settle_operation_facts = available
-                common::OpValue::MatchArm(arm) => rejected available arm.guard_ops self.settle_operation_facts = available
-                _ => {
-                }
-            end
-            operation.value match
-                common::OpValue::FnCall(name) => name rejected.has
-                common::OpValue::FnPush(name) => name rejected.has
-                common::OpValue::Rejected => true
-                common::OpValue::Identifier(_) => true
-                _ => false
-            end = rejected_target
-            if rejected_target then
-                false = available
-            fi
-            if available ! then
-                operation.id self.verified_operations.remove
-            fi
-        done
-        available
     }
 
     fn stage_sources self:mut$SemanticChecks bodies:std::Map[std::String source_body::SourceBody] {
@@ -1734,19 +1650,21 @@ impl SemanticChecks {
         std::Map[std::String FunctionWork]::new SemanticChecks
     }
 }
+
 # Rejected analysis retains occurrences but cannot be committed as backend input.
 pub enum AnalysisBody {
-    Checked (semantic_body::Body)
-    RejectedChecked (semantic_body::Body)
-    Rejected (std::List[common::Op])
-    Source (source_body::SourceBody)
+    Checked(semantic_body::Body)
+    RejectedChecked(semantic_body::Body)
+    Rejected(body_builder::Builder)
+    Source(source_body::SourceBody)
 }
 
 impl AnalysisBody {
     fn settle_facts self:$AnalysisBody checks:mut$SemanticChecks rejected:$std::Set[std::String] {
         self match
             AnalysisBody::Checked(body) => checks.verified_operations rejected true body.settle_facts drop
-            AnalysisBody::Rejected(operations) => rejected true operations checks.settle_operation_facts drop
+            AnalysisBody::RejectedChecked(body) => checks.verified_operations rejected true body.settle_facts drop
+            AnalysisBody::Rejected(operations) => checks.verified_operations rejected true operations.settle_facts drop
             _ => {
             }
         end
@@ -1756,7 +1674,7 @@ impl AnalysisBody {
         self match
             AnalysisBody::Checked(body) => body.lower_operations
             AnalysisBody::RejectedChecked(body) => body.lower_operations
-            AnalysisBody::Rejected(operations) => operations.clone
+            AnalysisBody::Rejected(operations) => operations.lower_operations
             AnalysisBody::Source(body) => body.lower_operations
         end
     }
@@ -1849,20 +1767,26 @@ impl SemanticSession {
 
     pub fn finish
         self:SemanticSession
-        operations:std::List[common::Op]
+        root:AnalysisBody
         diagnostics:mut$error::Diagnostics
     -> common::SymbolStore AnalysisBody std::Map[std::String AnalysisBody] std::Set[i64] binding::BindingStore {
         self match
             SemanticSession { store: store checks: checks } => {
-                if diagnostics.has_errors operations checks.body_has_rejected_target || then
-                    operations AnalysisBody::Rejected
-                else
-                    store operations semantic_body::consume_body.unwrap = body
-                    std::Set[std::String]::new std::Set[std::String]::new diagnostics checks store
-                    SemanticSpecializer = specializer
-                    body specializer.visit_body
-                    body AnalysisBody::Checked
-                fi = root
+                root match
+                    AnalysisBody::Checked(body) => {
+                        if diagnostics.has_errors then
+                            body AnalysisBody::RejectedChecked
+                        else
+                            std::Set[std::String]::new std::Set[std::String]::new diagnostics checks store
+                            SemanticSpecializer = specializer
+                            body specializer.visit_body
+                            body AnalysisBody::Checked
+                        fi
+                    }
+                    AnalysisBody::Rejected(work) => work AnalysisBody::Rejected
+                    AnalysisBody::RejectedChecked(body) => body AnalysisBody::RejectedChecked
+                    AnalysisBody::Source(source) => source AnalysisBody::Source
+                end = root
                 store checks.settle_function_rejections
                 checks.get_rejected_names = rejected
                 rejected checks root.settle_facts
@@ -1906,11 +1830,11 @@ impl SemanticSession {
 }
 
 pub enum SemanticDependency derives std::Clone {
-    Symbol (std::String)
-    Call (std::String)
-    BoundCall (SemanticBoundCall)
-    DefaultMethodCall (SemanticDefaultMethodCall)
-    Type (common::Type)
+    Symbol(std::String)
+    Call(std::String)
+    BoundCall(SemanticBoundCall)
+    DefaultMethodCall(SemanticDefaultMethodCall)
+    Type(common::Type)
 }
 
 pub struct SemanticBoundCall derives std::Clone {
@@ -1965,6 +1889,7 @@ impl TypeChecker {
         checks:mut$SemanticChecks
         infer_parameters:bool
     -> TypeChecker {
+        std::List[body_builder::Builder]::new # checked_guards
         true # facts_available
         diagnostics # diagnostics
         std::Set[std::String]::new # seen_dependencies
@@ -2084,190 +2009,6 @@ pub fn pattern_binding_type
     binding_is_copy binding_type subject_type rules::pattern_binding_type
 }
 
-impl common::Op {
-    pub fn has_numeric_literal self:$common::Op -> bool {
-        self.value match
-            common::OpValue::PushInt(_) => true
-            common::OpValue::PushFloat(_) => true
-            common::OpValue::PushArray(items) => {
-                for item in items.iter do
-                    if item.has_numeric_literal then
-                        true return
-                    fi
-                done
-                false
-            }
-            common::OpValue::ExprGroup(items) => {
-                for item in items.iter do
-                    if item.has_numeric_literal then
-                        true return
-                    fi
-                done
-                false
-            }
-            _ => false
-        end
-    }
-
-    pub fn resolve_array_literals
-        self:mut$common::Op
-        items:mut$std::List[common::Op]
-        target:$common::Type
-        diagnostics:mut$error::Diagnostics
-    -> bool {
-        target.as_generic = generic_option
-        if generic_option.is_none then
-            false return
-        fi
-        generic_option.unwrap = generic
-        if common::ARRAY_TYPE generic.base.as_str != 2 generic.params.length != || then
-            false return
-        fi
-        if target common::get_array_length_parameter std::Option::Some(target_length) is then
-            if target_length.is_symbolic then
-                self.location
-                f"Array literal length {items.length} cannot satisfy constant parameter `{target_length.name}`"
-                common::ErrorKind::TypeMismatch diagnostics.record_error_string
-                false return
-            fi
-            if items.length i64::try_from.unwrap target_length.value != then
-                self.location f"Array literal with {items.length} element(s) does not fit `{target.format}`" common::ErrorKind::TypeMismatch diagnostics.record_error_string
-                false return
-            fi
-        fi
-        true = valid
-        0 generic.params.get = element_type
-        0 = item_index: u64
-        while item_index items.length > do
-            item_index items.get_mut = item
-            1 += item_index
-            if item.has_numeric_literal diagnostics element_type item.resolve_literal ! && then
-                false = valid
-            fi
-        done
-        if valid then
-            target.clone std::Option::Some self common::Op::set_type_hint
-        fi
-        valid
-    }
-
-    pub fn resolve_literal
-        self:mut$common::Op
-        target:$common::Type
-        diagnostics:mut$error::Diagnostics
-    -> bool {
-        self.value match
-            common::OpValue::PushInt(literal) => {
-                if target.is_integer_type_t ! then
-                    self.location f"Integer literal `{literal.raw}` requires an integer context, got `{target.format}`" common::ErrorKind::TypeMismatch diagnostics.record_error_string
-                    false return
-                fi
-                if target literal.fits ! then
-                    target.get_integer_min = minimum
-                    target.get_integer_max = maximum
-                    self.location f"Integer literal `{literal.raw}` is outside `{target.format}` range {minimum}..{maximum}" common::ErrorKind::TypeMismatch diagnostics.record_error_string
-                    false return
-                fi
-                target.clone std::Option::Some self common::Op::set_type_hint
-                true
-            }
-            common::OpValue::PushFloat(value) => {
-                if target.is_float_type_t ! then
-                    self.location f"Floating-point literal `{value}` requires `f32` or `f64` context, got `{target.format}`" common::ErrorKind::TypeMismatch diagnostics.record_error_string
-                    false return
-                fi
-                if
-                    target common::make_f32_type.eq value.to_f32.is_none &&
-                    target common::make_f64_type.eq value.to_f64.is_none && ||
-                then
-                    self.location f"Floating-point literal `{value}` is outside `{target.format}` finite range" common::ErrorKind::TypeMismatch diagnostics.record_error_string
-                    false return
-                fi
-                target.clone std::Option::Some self common::Op::set_type_hint
-                true
-            }
-            common::OpValue::PushArray(items) => diagnostics target items self.resolve_array_literals
-            _ => false
-        end
-    }
-}
-
-pub fn resolve_default_literals ops:mut$std::List[common::Op] diagnostics:mut$error::Diagnostics {
-    0 = default_op_index: u64
-    while default_op_index ops.length > do
-        default_op_index ops.get_mut = op
-        1 += default_op_index
-        diagnostics.error_count = errors_before_literal
-        op.value match
-            common::OpValue::PushInt => {
-                common::make_i64_type op
-                    .type_hint
-                    .clone
-                    .unwrap_or = target
-                diagnostics target op.resolve_literal drop
-            }
-            common::OpValue::PushFloat => {
-                common::make_f64_type op
-                    .type_hint
-                    .clone
-                    .unwrap_or = target
-                diagnostics target op.resolve_literal drop
-            }
-            common::OpValue::PushArray => {
-                if op.type_hint std::Option::Some(hint) is then
-                    hint.clone = target
-                    diagnostics target op.resolve_literal drop
-                elif op.value common::OpValue::PushArray(items) is then
-                    diagnostics items resolve_default_literals
-                fi
-            }
-            common::OpValue::Unreachable(items) => diagnostics items resolve_default_literals
-            common::OpValue::ExprGroup(items) => diagnostics items resolve_default_literals
-            common::OpValue::MatchArm(arm) => diagnostics arm.guard_ops resolve_default_literals
-            _ => {
-            }
-        end
-        if errors_before_literal diagnostics.error_count != then
-            common::OpValue::Rejected op common::Op::set_value
-        fi
-    done
-}
-
-pub fn apply_resolved_literal_hints
-    ops:mut$std::List[common::Op]
-    resolutions:$std::Map[i64 common::Type]
-{
-    0 = op_index: u64
-    while op_index ops.length > do
-        op_index ops.get_mut = op
-        if 0 op.id != then
-            if op.id resolutions.get std::Option::Some(target) is then
-                target.clone = resolved_target
-                if op.value common::OpValue::PushArray(items) is then
-                    if target common::Type::Generic(generic) is then
-                        if common::ARRAY_TYPE generic.base.as_str == 1 generic.params.length == && then
-                            items.length 0 generic
-                                .params
-                                .get
-                                .clone common::make_array_type = resolved_target
-                        fi
-                    fi
-                fi
-                resolved_target std::Option::Some op common::Op::set_type_hint
-            fi
-        fi
-        op.value match
-            common::OpValue::PushArray(items) => resolutions items apply_resolved_literal_hints
-            common::OpValue::Unreachable(items) => resolutions items apply_resolved_literal_hints
-            common::OpValue::ExprGroup(items) => resolutions items apply_resolved_literal_hints
-            common::OpValue::MatchArm(arm) => resolutions arm.guard_ops apply_resolved_literal_hints
-            _ => {
-            }
-        end
-        1 += op_index
-    done
-}
-
 impl TypeChecker {
     pub fn within_param_cap tc:mut$TypeChecker -> bool {
         if tc.param_cap std::Option::Some(cap) is then
@@ -2304,12 +2045,14 @@ impl TypeChecker {
         std::Set[std::String]::new
     }
 }
+
 # Raise a TypeMismatch error at the type checker's current location.
 impl TypeChecker {
     pub fn raise_type_mismatch tc:mut$TypeChecker message:std::String {
         tc.current_location message common::ErrorKind::TypeMismatch tc.diagnostics.record_error_string
     }
 }
+
 # Stack operations
 impl TypeChecker {
     # A branch-local binding cannot identify the value after control-flow joins.
@@ -3514,6 +3257,7 @@ impl TypeChecker {
         value tc.finish_value_use
     }
 }
+
 # Infer a lambda's missing left operand from the concrete right operand.
 impl TypeChecker {
     pub fn stack_pop_left_like tc:mut$TypeChecker right:mut$TypedValue -> TypedValue {
@@ -3602,6 +3346,7 @@ impl TypeChecker {
         value expected tc.expect_value_type_t
     }
 }
+
 # Type compatibility
 pub fn type_exists_recursive_t
     typ:$common::Type
@@ -3702,6 +3447,7 @@ impl TypeChecker {
         location f"type `{typ.format}` does not exist" common::ErrorKind::Syntax self.diagnostics.record_error_string
     }
 }
+
 # Unify stack element types. Return an empty list on a mismatch.
 pub fn stacks_compatible
     stack_a:$std::List[common::Type]
@@ -3739,6 +3485,7 @@ pub fn stacks_equal stack_a:$std::List[common::Type] stack_b:$std::List[common::
     done
     true
 }
+
 # Apply stack effect: pop params, push returns, with type variable binding.
 pub fn resolve_return_type_t
     bindings:$std::Map[std::String common::Type]
@@ -5599,6 +5346,7 @@ impl TypeChecker {
         target tc.stack_push_type
     }
 }
+
 # Check comparison operations
 # Primitive comparisons are emitted as direct bytecode. `str` is handled
 # separately because it only supports `==`/`!=` and carries a type hint.
@@ -5883,6 +5631,7 @@ impl TypeChecker {
         std::Option[common::Function]::None op tc.apply_fixed_semantics
     }
 }
+
 # Check memory operations
 # Returns true if `bound` names `Word` directly or transitively via supertraits.
 pub fn bound_implies_word bound:$common::TraitBound store:$common::SymbolStore -> bool {
@@ -5903,6 +5652,7 @@ pub fn bound_implies_word bound:$common::TraitBound store:$common::SymbolStore -
     fi
     false
 }
+
 # Validate that `type_name` satisfies the `Word` marker trait at the given op
 # location. Concrete single-slot types always satisfy `Word` in current Casa.
 # A type variable from the enclosing function satisfies `Word` only when its
@@ -6232,6 +5982,7 @@ impl TypeChecker {
         fi
     }
 }
+
 # Check assignment operations
 impl TypeChecker {
     fn does_type_need_symbolic_origin typ:$common::Type -> bool {
@@ -6930,6 +6681,7 @@ impl TypeChecker {
         std::List[common::Type]::new std::List[common::Type]::new common::FunctionType common::Type::Function tc.stack_push_type
     }
 }
+
 # Check push variable / capture
 impl TypeChecker {
     fn apply_binding_callables self:mut$TypeChecker name:$str {
@@ -7008,6 +6760,7 @@ impl TypeChecker {
         fi
     }
 }
+
 # Check if/elif/else/fi blocks
 impl TypeChecker {
     pub fn merge_if_branch_stack self:mut$TypeChecker op:mut$common::Op if_ctx:mut$IfContext {
@@ -7151,6 +6904,7 @@ impl TypeChecker {
         fi
     }
 }
+
 # Check while/do/break/continue/done blocks
 impl TypeChecker {
     pub fn current_while_scope_depth tc:mut$TypeChecker -> std::Option[u64] {
@@ -7359,6 +7113,7 @@ impl TypeChecker {
         fi
     }
 }
+
 # Trait support: bind_generic_params_standalone and type_satisfies_trait
 pub fn bind_standalone_type_variable
     bindings:std::Map[std::String common::Type]
@@ -7444,6 +7199,7 @@ pub fn bind_generic_params_standalone
     fi
     bindings
 }
+
 # Bind every symbolic constant parameter in `expected` to the argument in the
 # matching position of `actual` (ADR-0152). The bound value is either a concrete
 # constant or the caller's own constant parameter when the call forwards it.
@@ -7736,6 +7492,7 @@ pub fn try_bind_caller_tvar
         concrete.clone caller_type_var.clone bindings.set
     fi
 }
+
 # Given a single (trait-side expected type, concrete-side actual type) pair
 # from a method stack-effect diff, if the expected type references a trait
 # type parameter that maps (via the current bound's type args) to an unbound
@@ -8196,6 +7953,7 @@ impl TypeChecker {
         done
     }
 }
+
 # Check function-related operations
 impl TypeChecker {
     fn materialize_named_lambda
@@ -8829,7 +8587,6 @@ impl TypeChecker {
     {
         op.value.clone = question_value
         if question_value common::OpValue::Question(hidden_name) is then
-            common::make_unknown_type.clone = return_type
             if function_opt std::Option::Some(function) is then
                 function.stack_effect.return_types = return_types: $std::List[common::Type]
                 if 1 return_types.length != then
@@ -8837,7 +8594,6 @@ impl TypeChecker {
                     common::ErrorKind::InvalidScope checker.diagnostics.record_error
                     return
                 fi
-                0 return_types.get.clone = return_type
                 if hidden_name.as_str function.variables common::variable_list_contains ! then
                     hidden_name.as_str common::Variable::new function.variables.push
                 fi
@@ -8849,11 +8605,6 @@ impl TypeChecker {
             hidden_name.clone common::OpValue::AssignVar op common::Op::set_value
             function_opt pending_ops op checker.check_assignment
             hidden_name.clone common::OpValue::Question op common::Op::set_value
-
-            std::List[common::Op]::new = lowered_ops
-            return_type hidden_name.clone op.location.clone lowered_ops rules::lower_question_operations
-            lowered_ops.reverse
-            lowered_ops pending_ops.append
         fi
     }
 
@@ -9246,51 +8997,25 @@ impl TypeChecker {
         self.end_path
     }
 }
+
 # Check literal push operations
-impl common::OpValue {
-    pub fn clone_array_literal_items self:$common::OpValue -> std::List[common::Op] {
-        if self common::OpValue::PushArray(items) is then
-            items.clone return
-        fi
-        std::List[common::Op]::new
-    }
-}
-
-pub fn check_expression_group
-    tc:mut$TypeChecker
-    function_opt:mut$std::Option[common::Function]
-    op:mut$common::Op
-{
-    if op.value common::OpValue::ExprGroup(group_ops) is then
-        group_ops.clone = owned_group_ops
-        function_opt owned_group_ops tc.run_type_check_ops
-        owned_group_ops common::OpValue::ExprGroup op common::Op::set_value
-    fi
-}
-
 impl TypeChecker {
     fn finish_array_literal
         self:mut$TypeChecker
         op:mut$common::Op
-        checked_items:std::List[common::Op]
+        item_count:u64
+        has_numeric_literal:bool
     {
-        false = has_numeric_literal
-        for item in checked_items.iter do
-            if item.has_numeric_literal then
-                true = has_numeric_literal
-            fi
-        done
-        if 0 checked_items.length == then
+        if 0 item_count == then
             0 common::make_unknown_type.clone common::make_array_type = empty_array_type
             op empty_array_type self.stack_push_literal
-            checked_items common::OpValue::PushArray op common::Op::set_value
             return
         fi
         common::make_unknown_type.clone = elem_type_t
         std::Option[std::List[Origin]]::None = origins
         std::Option[std::List[Origin]]::None = cleanup_origins
         0 = items_idx: u64
-        while items_idx checked_items.length > do
+        while items_idx item_count > do
             self.stack_pop_value = item_value
             item_value.type_value.clone = item_type_t
             # The literal takes ownership of every element, so a moved
@@ -9312,7 +9037,7 @@ impl TypeChecker {
             end
             1 += items_idx
         done
-        checked_items.length elem_type_t common::make_array_type = array_type
+        item_count elem_type_t common::make_array_type = array_type
         array_type.clone std::Option::Some op common::Op::set_type_hint
         if has_numeric_literal then
             op array_type self.stack_push_literal
@@ -9328,14 +9053,9 @@ impl TypeChecker {
         else
             cleanup_origins origins array_type self.push_value_origins
         fi
-        checked_items common::OpValue::PushArray op common::Op::set_value
     }
 
-    pub fn check_literals
-        tc:mut$TypeChecker
-        op:mut$common::Op
-        function_opt:mut$std::Option[common::Function]
-    {
+    fn check_literals tc:mut$TypeChecker op:mut$common::Op {
         if op.value common::OpValue::PushInt is then
             op.type_hint.clone = integer_type_opt
             integer_type_opt match
@@ -9354,15 +9074,10 @@ impl TypeChecker {
                 }
                 std::Option::None => op common::make_float_literal_type tc.stack_push_literal
             end
-        elif op.value common::OpValue::PushArray is then
-            op.value.clone_array_literal_items = checked_items
-            function_opt checked_items tc.run_type_check_ops
-            checked_items op tc.finish_array_literal
-        elif op.value common::OpValue::ExprGroup is then
-            op function_opt tc check_expression_group
         fi
     }
 }
+
 # Check print dispatch
 impl TypeChecker {
     pub fn check_io
@@ -9444,6 +9159,7 @@ impl TypeChecker {
         fi
     }
 }
+
 # Check enum variant push
 pub fn get_enum_variant_shape
     enum_name:$str
@@ -9538,6 +9254,7 @@ impl TypeChecker {
         fi
     }
 }
+
 # diagnose_bare_enum_pattern — emit a targeted error if a match arm uses an
 # unqualified enum variant (e.g. `North =>` instead of `Direction::North =>`).
 impl TypeChecker {
@@ -9883,20 +9600,24 @@ impl TypeChecker {
         subject_type.clone std::Option::Some op common::Op::set_type_hint
     }
 
-    # Check one source match arm and its optional guard.
+    # Return the error checkpoint after completing the previous arm, so its
+    # failures cannot invalidate this arm's independent pattern bindings.
     fn typecheck_match_op
         self:mut$TypeChecker
         function_opt:mut$std::Option[common::Function]
         op:mut$common::Op
         source_guard:std::Option[source_body::SourceBody]
-    {
+    -> u64 {
+        self.diagnostics.error_count = errors_before_arm
         if 0 self.branched_stacks.length == then
-            return
+            errors_before_arm return
         fi
         self.branched_stacks.pop = top_frame
         if top_frame BranchFrame::BranchMatch is then
             top_frame.into_match = match_ctx
             if match_ctx.condition_present then
+                self.facts_available match_ctx.arms_have_facts && = match_ctx.arms_have_facts
+                self.diagnostics.error_count = errors_before_completion
                 op match_ctx.before self.complete_branch
                 match_ctx.flow_after self.merge_current_ownership_flow
                 op match_ctx self.unify_arm_stacks
@@ -9905,7 +9626,11 @@ impl TypeChecker {
                 fi
                 match_ctx.flow_before self.restore_ownership_flow
                 match_ctx.entry_continues = self.path_continues
+                errors_before_completion self.diagnostics.error_count == match_ctx.arms_have_facts &&
+                = match_ctx.arms_have_facts
             fi
+            match_ctx.entry_facts_available = self.facts_available
+            self.diagnostics.error_count = errors_before_arm
             match_ctx MatchContext::match_type.clone = match_subject_type
             if source_guard.is_some then
                 "".to_str
@@ -9963,6 +9688,7 @@ impl TypeChecker {
                 self.current_ownership_flow = guard_flow
                 self.infer_parameters self.checks
                 self.active_calls.clone self.diagnostics self.store TypeChecker::new = guard_checker
+                self.facts_available = guard_checker.facts_available
                 self.current_trait_bounds.clone = guard_checker.current_trait_bounds
                 guard_scope = guard_checker.scope
                 guard_flow guard_checker.restore_ownership_flow
@@ -9972,7 +9698,7 @@ impl TypeChecker {
                 variable_uses.observing_counts.clone = guard_checker.remaining_observing_uses
                 variable_uses.cleanup_only_use_offsets.clone = guard_checker.cleanup_only_use_offsets
                 variable_uses.last_locations.clone = guard_checker.last_use_locations
-                std::List[common::Op]::new = guard_ops
+                body_builder::Builder::new = guard_ops
                 std::List[common::Op]::new = pending
                 function_opt guard_ops pending guard_body guard_checker.check_source_sequence
                 guard_checker.path_continues = guard_continues
@@ -9995,7 +9721,7 @@ impl TypeChecker {
                         op common::Op::location "Guard expression must leave a single `bool` on the stack" common::ErrorKind::TypeMismatch guard_checker.diagnostics.record_error
                     fi
                 fi
-                guard_checker.moved_operations guard_ops attach_checked_moves
+                guard_checker.moved_operations guard_ops attach_body_moves
                 if op.value common::OpValue::MatchArm(arm) is then
                     guard_checker
                         .current_location
@@ -10009,22 +9735,28 @@ impl TypeChecker {
                         .clone
                         .unwrap_or = guard_end
                     first_guard_binding guard_end guard_checker.close_source_bindings
-                    guard_ops = arm.guard_ops
                 fi
+                guard_checker.facts_available = guard_facts_available
                 guard_checker.into_semantic_dependencies = guard_dependencies
+                guard_facts_available = self.facts_available
+                guard_ops self.checked_guards.push
                 if guard_continues ! then
                     false = self.path_continues
                 fi
                 guard_dependencies self.merge_dependencies
             fi
 
+            errors_before_arm self.diagnostics.error_count == self.facts_available &&
+            = self.facts_available
             covered_key match_ctx MatchContext::set_current_branch_label
             op common::Op::location.clone match_ctx MatchContext::set_current_branch_location
             match_ctx BranchFrame::BranchMatch = top_frame
         fi
         top_frame self.branched_stacks.push
+        errors_before_arm
     }
 }
+
 # Check is keyword
 impl TypeChecker {
     fn bind_is_subject
@@ -10228,6 +9960,7 @@ impl TypeChecker {
         op:mut$common::Op
         function_opt:mut$std::Option[common::Function]
     {
+        self.diagnostics.error_count = errors_before
         std::Option[std::List[Origin]]::None = match_origins
         std::Option[Place]::None = match_place
         common::make_unknown_type.clone = match_type
@@ -10281,6 +10014,8 @@ impl TypeChecker {
         fi
         match_type.clone std::Option::Some = op.type_hint
         match_type MatchContext::new = match_ctx
+        errors_before self.diagnostics.error_count == self.facts_available &&
+        = match_ctx.entry_facts_available
         match_origins = match_ctx.match_origins
         match_place = match_ctx.match_place
         self.path_continues = match_ctx.entry_continues
@@ -10380,6 +10115,8 @@ impl TypeChecker {
             .branched_stacks
             .pop
             .into_match = match_ctx
+        self.facts_available match_ctx.arms_have_facts && = match_ctx.arms_have_facts
+        self.diagnostics.error_count = errors_before_completion
         # Close the final arm's scope frame (only opened if an arm ran).
         if match_ctx MatchContext::condition_present then
             op match_ctx.before self.complete_branch
@@ -10400,22 +10137,11 @@ impl TypeChecker {
         match_ctx.has_continuing_arm = self.path_continues
 
         match_ctx op self.check_match_exhaustiveness
-    }
-
-    pub fn check_match
-        self:mut$TypeChecker
-        op:mut$common::Op
-        function_opt:mut$std::Option[common::Function]
-    {
-        op.value match
-            common::OpValue::MatchStart => function_opt op self.begin_match
-            common::OpValue::MatchArm => std::Option[source_body::SourceBody]::None op function_opt self.typecheck_match_op
-            common::OpValue::MatchEnd => op self.finish_match
-            _ => {
-            }
-        end
+        match_ctx.entry_facts_available match_ctx.arms_have_facts &&
+        errors_before_completion self.diagnostics.error_count == && = self.facts_available
     }
 }
+
 # Check struct new
 impl TypeChecker {
     pub fn resolve_aggregate_literal
@@ -10491,6 +10217,7 @@ impl TypeChecker {
         fi
     }
 }
+
 # Check struct literal
 pub fn get_struct_literal_shape
     literal:$common::StructLiteral
@@ -10570,6 +10297,7 @@ impl TypeChecker {
         fi
     }
 }
+
 # Instantiate default trait method for a concrete type
 pub fn get_default_trait_specialization_parts
     trait_name:$str
@@ -10813,6 +10541,7 @@ impl TypeChecker {
         common::DeferredTraitCall::new common::OpValue::TraitMethodCall op common::Op::set_value
     }
 }
+
 # Check method call
 impl TypeChecker {
     pub fn check_char_codepoint tc:mut$TypeChecker op:mut$common::Op method_name:$str -> bool {
@@ -11104,6 +10833,7 @@ impl TypeChecker {
         fi
     }
 }
+
 # Check f-string expression conversion (Display trait dispatch)
 impl TypeChecker {
     pub fn check_fstring_to_str
@@ -11170,6 +10900,7 @@ impl TypeChecker {
         function_opt emitted_ops op tc.check_method_call
     }
 }
+
 # Ensure a function is typechecked
 # The private active owner keeps the recipe alive through recursive specialization.
 struct ActiveSpecialization {
@@ -11276,6 +11007,7 @@ fn ensure_checked_function
         .unwrap
         .clone std::Option::Some
 }
+
 # The active frame consumes source and publishes the declaration with its completed body.
 # Recursion can observe the reserved signature, never this frame's mutable operations.
 struct ActiveFunction {
@@ -11296,7 +11028,7 @@ impl ActiveFunction {
         self match
             ActiveFunction { declaration: declaration source: source } => {
                 declaration std::Option::Some = function_opt
-                std::List[common::Op]::new = operations
+                body_builder::Builder::new = operations
                 infer_parameters checks active_calls argument_callables
                 false diagnostics store function_opt operations source analyze_ops = checked
                 function_opt.unwrap = function
@@ -11310,7 +11042,7 @@ impl ActiveFunction {
                 function checked_function_summary = signature
                 function store.set_function
                 if checked.is_valid then
-                    store operations semantic_body::consume_body.unwrap = body
+                    store operations.into_body.unwrap = body
                     body signature CompletedFunction FunctionWork::Completed name.clone checks.functions.set
                     checked.return_origin_summaries.clone checked.return_callables.clone CallReturnSummary
                     name checks.return_summaries.set
@@ -12107,12 +11839,6 @@ impl TypeChecker {
                 false = self.facts_available
             }
             common::OpValue::Rejected => false = self.facts_available
-            common::OpValue::UnsafeStart => 1 += self.unsafe_depth
-            common::OpValue::UnsafeEnd => {
-                if 0 self.unsafe_depth != then
-                    1 -= self.unsafe_depth
-                fi
-            }
             common::OpValue::Question(_) => function_opt pending_ops current_op self.lower_question_operator
             common::OpValue::QuestionMove(_) => current_op self.consume_question_owner
             common::OpValue::NumericCall(_) => current_op self.check_numeric_call
@@ -12122,26 +11848,16 @@ impl TypeChecker {
             common::OpValue::BindTemporary(_) => function_opt current_op self.check_temporary_binding
             common::OpValue::PushVar(_) => function_opt current_op self.check_push_var
             common::OpValue::PushCapture(_) => function_opt current_op self.check_push_var
-            common::OpValue::IfStart => current_op self.check_if_block
-            common::OpValue::IfCondition => current_op self.check_if_block
-            common::OpValue::IfElif => current_op self.check_if_block
-            common::OpValue::IfElse => current_op self.check_if_block
-            common::OpValue::IfEnd => current_op self.check_if_block
-            common::OpValue::WhileStart => current_op self.check_while_block
-            common::OpValue::WhileCondition => current_op self.check_while_block
             common::OpValue::WhileBreak => current_op self.check_while_block
             common::OpValue::WhileContinue => current_op self.check_while_block
-            common::OpValue::WhileEnd => current_op self.check_while_block
             common::OpValue::TraitMethodRef(_) => function_opt current_op self.check_trait_method_ref
             common::OpValue::FnCall(_) => function_opt emitted_ops current_op self.check_function_ops
             common::OpValue::FnExec => function_opt emitted_ops current_op self.check_function_ops
             common::OpValue::FnExecOwned => function_opt emitted_ops current_op self.check_function_ops
             common::OpValue::FnPush(_) => function_opt emitted_ops current_op self.check_function_ops
             common::OpValue::FnReturn => function_opt emitted_ops current_op self.check_function_ops
-            common::OpValue::PushInt(_) => function_opt current_op self.check_literals
-            common::OpValue::PushFloat(_) => function_opt current_op self.check_literals
-            common::OpValue::PushArray(_) => function_opt current_op self.check_literals
-            common::OpValue::ExprGroup(_) => function_opt current_op self.check_literals
+            common::OpValue::PushInt(_) => current_op self.check_literals
+            common::OpValue::PushFloat(_) => current_op self.check_literals
             common::OpValue::Print => function_opt emitted_ops pending_ops current_op self.check_io
             common::OpValue::Panic => self.check_panic
             common::OpValue::Typeof => current_op self.check_typeof
@@ -12155,9 +11871,6 @@ impl TypeChecker {
             common::OpValue::Syscall6 => function_opt current_op self.check_syscalls
             common::OpValue::PushEnumVariant(_) => function_opt current_op self.check_enum_variant
             common::OpValue::IsCheck(_) => function_opt emitted_ops current_op self.check_is
-            common::OpValue::MatchStart => function_opt current_op self.check_match
-            common::OpValue::MatchArm(_) => function_opt current_op self.check_match
-            common::OpValue::MatchEnd => function_opt current_op self.check_match
             common::OpValue::StructNew(_) => current_op self.check_struct_new
             common::OpValue::StructLiteral(_) => current_op self.check_struct_literal
             common::OpValue::MethodCall(_) => function_opt emitted_ops current_op self.check_method_call
@@ -12201,92 +11914,151 @@ impl TypeChecker {
         fi
     }
 
+    fn begin_operation self:mut$TypeChecker operation:mut$common::Op -> u64 u64 {
+        operation self.assign_op_id
+        operation.id self.scope.begin_operation
+        operation.location.clone = self.current_location
+        ExpectationContext::None = self.current_expect_ctx
+        false = self.underflow_reported_this_op
+        operation self.record_operation_binding_facts
+        self.diagnostics.error_count self.ordered_facts.length
+    }
+
+    fn finish_operation
+        self:mut$TypeChecker
+        operation:mut$common::Op
+        errors_before:u64
+        facts_before:u64
+    -> bool {
+        errors_before self.diagnostics.error_count == = succeeded
+        operation.value common::OpValue::IfElse is
+        operation.value common::OpValue::IfElif is || = restores_branch
+        if succeeded ! restores_branch ! && then
+            false = self.facts_available
+        fi
+        if succeeded self.facts_available && then
+            operation self.record_source_reference
+            operation self.collect_operation_facts
+            operation.id self
+                .checks
+                .verified_operations
+                .add
+        else
+            facts_before self.rollback_operation_facts
+        fi
+        succeeded
+    }
+
     fn check_work_operation
         self:mut$TypeChecker
         operation:common::Op
         source_work:std::Option[SourceWork]
         pending_ops:mut$std::List[common::Op]
-        emitted_ops:mut$std::List[common::Op]
+        emitted:mut$body_builder::Builder
         function_opt:mut$std::Option[common::Function]
-    {
+    -> std::Option[body_builder::Builder] {
+        std::Option[body_builder::Builder]::None = compound
         operation pending_ops.push
         while pending_ops.is_empty ! do
             pending_ops.pop = current_op
-            current_op self.assign_op_id
-            current_op.id self.scope.begin_operation
-            current_op common::Op::location.clone = self.current_location
-            ExpectationContext::None = self.current_expect_ctx
-            false = self.underflow_reported_this_op
-            self.diagnostics.error_count = errors_before
-            self.ordered_facts.length = facts_before
-            current_op self.record_operation_binding_facts
-            current_op.value common::OpValue::IfElse is
-            current_op.value common::OpValue::IfElif is || = restores_branch
+            current_op self.begin_operation = facts_before = errors_before
+            std::Option[std::String]::None = question_name
+            if current_op.value common::OpValue::Question(name) is then
+                name.clone std::Option::Some = question_name
+            fi
+            std::List[common::Op]::new = emitted_ops
             source_work match
                 std::Option::Some(work) => {
                     work match
                         SourceWork::Array(body) => {
-                            std::List[common::Op]::new = items
+                            body_builder::Builder::new = items
                             function_opt items pending_ops body self.check_source_sequence
-                            items current_op self.finish_array_literal
+                            items.has_numeric_literal items.length current_op self.finish_array_literal
+                            items std::Option::Some = compound
                         }
                         SourceWork::Group(body) => {
-                            std::List[common::Op]::new = items
+                            body_builder::Builder::new = items
                             function_opt items pending_ops body self.check_source_sequence
-                            items common::OpValue::ExprGroup = current_op.value
+                            items std::Option::Some = compound
                         }
-                        SourceWork::Guard(body) => {
-                            body std::Option::Some current_op function_opt self.typecheck_match_op
+                        SourceWork::Arm(body) => {
+                            if body.get_nodes.is_empty then
+                                std::Option[source_body::SourceBody]::None
+                            else
+                                body std::Option::Some
+                            fi current_op function_opt self.typecheck_match_op = errors_before
+                            if self.checked_guards.is_empty ! then
+                                self.checked_guards.pop std::Option::Some = compound
+                            fi
                         }
                     end
                 }
                 std::Option::None => function_opt emitted_ops pending_ops current_op self.run_type_check_op
             end
             std::Option[SourceWork]::None = source_work
-            errors_before self.diagnostics.error_count == = succeeded
-            if succeeded ! restores_branch ! && then
-                false = self.facts_available
+            facts_before errors_before current_op self.finish_operation = succeeded
+            emitted_ops emitted.append_operations
+            current_op.location.clone = origin
+            current_op emitted.push_operation
+            if succeeded then
+                if question_name std::Option::Some(name) is then
+                    function_opt emitted name.as_str origin self.check_question_tail
+                fi
             fi
-            if succeeded self.facts_available && then
-                current_op self.record_source_reference
-                current_op self.collect_operation_facts
-                current_op.id self
-                    .checks
-                    .verified_operations
-                    .add
-            else
-                facts_before self.rollback_operation_facts
-            fi
-            current_op emitted_ops.push
         done
+        compound
     }
 
     fn check_source_boundary
         self:mut$TypeChecker
         origin:common::Location
         value:common::OpValue
-        pending_ops:mut$std::List[common::Op]
-        emitted_ops:mut$std::List[common::Op]
-        function_opt:mut$std::Option[common::Function]
-    {
-        function_opt emitted_ops pending_ops std::Option[SourceWork]::None origin value common::Op::from_source self.check_work_operation
+        function:mut$std::Option[common::Function]
+    -> common::Op {
+        origin value common::Op::from_source = operation
+        operation self.begin_operation = facts_before = errors_before
+        operation.value match
+            common::OpValue::IfStart => operation self.check_if_block
+            common::OpValue::IfCondition => operation self.check_if_block
+            common::OpValue::IfElif => operation self.check_if_block
+            common::OpValue::IfElse => operation self.check_if_block
+            common::OpValue::IfEnd => operation self.check_if_block
+            common::OpValue::WhileStart => operation self.check_while_block
+            common::OpValue::WhileCondition => operation self.check_while_block
+            common::OpValue::WhileEnd => operation self.check_while_block
+            common::OpValue::MatchStart => function operation self.begin_match
+            common::OpValue::MatchEnd => operation self.finish_match
+            common::OpValue::UnsafeStart => 1 += self.unsafe_depth
+            common::OpValue::UnsafeEnd => {
+                if 0 self.unsafe_depth != then
+                    1 -= self.unsafe_depth
+                fi
+            }
+            _ => "Expected a structured source boundary" panic
+        end
+        facts_before errors_before operation self.finish_operation drop
+        operation
     }
 
     fn check_source_branch
         self:mut$TypeChecker
         branch:source_body::SourceBranch
         pending:mut$std::List[common::Op]
-        emitted:mut$std::List[common::Op]
         function:mut$std::Option[common::Function]
         first:bool
-    {
+    -> body_builder::Branch {
         branch match
             source_body::SourceBranch { origin: origin condition_origin: test condition: condition consequent: consequent } => {
                 if first then common::OpValue::IfStart else common::OpValue::IfElif fi = boundary
-                function emitted pending boundary origin self.check_source_boundary
-                function emitted pending condition self.check_source_sequence
-                function emitted pending common::OpValue::IfCondition test self.check_source_boundary
-                function emitted pending consequent self.check_source_sequence
+                function boundary origin self.check_source_boundary = entry
+                body_builder::Builder::new = checked_condition
+                function checked_condition pending condition self.check_source_sequence
+                function common::OpValue::IfCondition test self.check_source_boundary = checked_test
+                body_builder::Builder::new = checked_consequent
+                function checked_consequent pending consequent self.check_source_sequence
+                body_builder::Branch {
+                    entry: entry condition: checked_condition test: checked_test consequent: checked_consequent
+                }
             }
         end
     }
@@ -12295,32 +12067,33 @@ impl TypeChecker {
         self:mut$TypeChecker
         conditional:source_body::SourceConditional
         pending:mut$std::List[common::Op]
-        emitted:mut$std::List[common::Op]
+        emitted:mut$body_builder::Builder
         function:mut$std::Option[common::Function]
     {
         conditional match
             source_body::SourceConditional { branches: branches alternative: alternative end_origin: end_origin } => {
+                std::List[body_builder::Branch]::new = checked_branches
                 true = first
                 branches.reverse
                 while branches.is_empty ! do
-                    first function emitted pending branches.pop self.check_source_branch
+                    first function pending branches.pop self.check_source_branch checked_branches.push
                     false = first
                 done
-                alternative match
-                    std::Option::Some(branch) => {
-                        branch match
-                            source_body::SourceAlternative {
-                                origin: origin body: body
-                            } => {
-                                function emitted pending common::OpValue::IfElse origin self.check_source_boundary
-                                function emitted pending body self.check_source_sequence
-                            }
-                        end
-                    }
-                    std::Option::None => {
-                    }
-                end
-                function emitted pending common::OpValue::IfEnd end_origin self.check_source_boundary
+                std::Option[body_builder::Alternative]::None = checked_alternative
+                if alternative std::Option::Some(branch) is then
+                    branch match
+                        source_body::SourceAlternative {
+                            origin: origin body: body
+                        } => {
+                            function common::OpValue::IfElse origin self.check_source_boundary = entry
+                            body_builder::Builder::new = checked_body
+                            function checked_body pending body self.check_source_sequence
+                            checked_body entry body_builder::Alternative std::Option::Some = checked_alternative
+                        }
+                    end
+                fi
+                function common::OpValue::IfEnd end_origin self.check_source_boundary = exit
+                exit checked_alternative checked_branches body_builder::Part::Conditional emitted.push
             }
         end
     }
@@ -12329,19 +12102,19 @@ impl TypeChecker {
         self:mut$TypeChecker
         arm:source_body::SourceArm
         pending:mut$std::List[common::Op]
-        emitted:mut$std::List[common::Op]
         function:mut$std::Option[common::Function]
-    {
+    -> body_builder::Arm {
         arm match
             source_body::SourceArm { origin: origin pattern: pattern guard: guard guard_end: guard_end body: body } => {
-                if guard.get_nodes.is_empty then
-                    std::Option[SourceWork]::None
-                else
-                    guard SourceWork::Guard std::Option::Some
-                fi = work
+                guard SourceWork::Arm std::Option::Some = source_work
                 origin guard_end std::List[common::Op]::new pattern common::MatchArm common::OpValue::MatchArm common::Op::from_source = operation
-                function emitted pending work operation self.check_work_operation
-                function emitted pending body self.check_source_sequence
+                body_builder::Builder::new = work
+                function work pending source_work operation self.check_work_operation = checked_guard
+                body_builder::Builder::new checked_guard.unwrap_or = guard_work
+                work.pop_operation = entry
+                body_builder::Builder::new = checked_body
+                function checked_body pending body self.check_source_sequence
+                checked_body guard_work entry body_builder::Arm
             }
         end
     }
@@ -12350,17 +12123,19 @@ impl TypeChecker {
         self:mut$TypeChecker
         match_body:source_body::SourceMatch
         pending:mut$std::List[common::Op]
-        emitted:mut$std::List[common::Op]
+        emitted:mut$body_builder::Builder
         function:mut$std::Option[common::Function]
     {
         match_body match
             source_body::SourceMatch { origin: origin arms: arms end_origin: end_origin } => {
-                function emitted pending common::OpValue::MatchStart origin self.check_source_boundary
+                function common::OpValue::MatchStart origin self.check_source_boundary = entry
+                std::List[body_builder::Arm]::new = checked_arms
                 arms.reverse
                 while arms.is_empty ! do
-                    function emitted pending arms.pop self.check_source_arm
+                    function pending arms.pop self.check_source_arm checked_arms.push
                 done
-                function emitted pending common::OpValue::MatchEnd end_origin self.check_source_boundary
+                function common::OpValue::MatchEnd end_origin self.check_source_boundary = exit
+                exit checked_arms entry body_builder::Part::Match emitted.push
             }
         end
     }
@@ -12369,7 +12144,7 @@ impl TypeChecker {
         self:mut$TypeChecker
         node:source_body::SourceNode
         pending:mut$std::List[common::Op]
-        emitted:mut$std::List[common::Op]
+        emitted:mut$body_builder::Builder
         function:mut$std::Option[common::Function]
     {
         node match
@@ -12380,12 +12155,12 @@ impl TypeChecker {
                     } => {
                         origin message common::ErrorKind::UnmatchedBlock self.diagnostics.record_error_string
                         origin.clone common::OpValue::Rejected common::Op::from_source = operation
-                        function emitted pending std::Option[SourceWork]::None operation self.check_work_operation
+                        function emitted pending std::Option[SourceWork]::None operation self.check_work_operation drop
                     }
                 end
             }
             source_body::SourceNode::Leaf(leaf) => {
-                function emitted pending std::Option[SourceWork]::None leaf.into_operation self.check_work_operation
+                function emitted pending std::Option[SourceWork]::None leaf.into_operation self.check_work_operation drop
             }
             source_body::SourceNode::Conditional(conditional) => function emitted pending conditional self.check_source_conditional
             source_body::SourceNode::Loop(loop) => {
@@ -12393,11 +12168,14 @@ impl TypeChecker {
                     source_body::SourceLoop {
                         origin: origin condition_origin: condition_origin condition: condition body: body end_origin: end_origin
                     } => {
-                        function emitted pending common::OpValue::WhileStart origin self.check_source_boundary
-                        function emitted pending condition self.check_source_sequence
-                        function emitted pending common::OpValue::WhileCondition condition_origin self.check_source_boundary
-                        function emitted pending body self.check_source_sequence
-                        function emitted pending common::OpValue::WhileEnd end_origin self.check_source_boundary
+                        function common::OpValue::WhileStart origin self.check_source_boundary = entry
+                        body_builder::Builder::new = checked_condition
+                        function checked_condition pending condition self.check_source_sequence
+                        function common::OpValue::WhileCondition condition_origin self.check_source_boundary = test
+                        body_builder::Builder::new = checked_body
+                        function checked_body pending body self.check_source_sequence
+                        function common::OpValue::WhileEnd end_origin self.check_source_boundary = exit
+                        exit checked_body test checked_condition entry body_builder::Part::Loop emitted.push
                     }
                 end
             }
@@ -12407,9 +12185,11 @@ impl TypeChecker {
                     source_body::SourceRegion {
                         origin: origin body: body end_origin: end_origin
                     } => {
-                        function emitted pending common::OpValue::UnsafeStart origin self.check_source_boundary
-                        function emitted pending body self.check_source_sequence
-                        function emitted pending common::OpValue::UnsafeEnd end_origin self.check_source_boundary
+                        function common::OpValue::UnsafeStart origin self.check_source_boundary = entry
+                        body_builder::Builder::new = checked_body
+                        function checked_body pending body self.check_source_sequence
+                        function common::OpValue::UnsafeEnd end_origin self.check_source_boundary = exit
+                        exit checked_body entry body_builder::Part::Region emitted.push
                     }
                 end
             }
@@ -12419,7 +12199,9 @@ impl TypeChecker {
                         origin: origin body: body
                     } => {
                         origin std::List[common::Op]::new common::OpValue::PushArray common::Op::from_source = operation
-                        function emitted pending body SourceWork::Array std::Option::Some operation self.check_work_operation
+                        body_builder::Builder::new = work
+                        function work pending body SourceWork::Array std::Option::Some operation self.check_work_operation.unwrap = items
+                        items work.pop_operation body_builder::Part::Array emitted.push
                     }
                 end
             }
@@ -12429,7 +12211,9 @@ impl TypeChecker {
                         origin: origin body: body
                     } => {
                         origin std::List[common::Op]::new common::OpValue::ExprGroup common::Op::from_source = operation
-                        function emitted pending body SourceWork::Group std::Option::Some operation self.check_work_operation
+                        body_builder::Builder::new = work
+                        function work pending body SourceWork::Group std::Option::Some operation self.check_work_operation.unwrap = items
+                        items work.pop_operation body_builder::Part::Group emitted.push
                     }
                 end
             }
@@ -12440,7 +12224,7 @@ impl TypeChecker {
         self:mut$TypeChecker
         body:source_body::SourceBody
         pending_ops:mut$std::List[common::Op]
-        emitted_ops:mut$std::List[common::Op]
+        emitted_ops:mut$body_builder::Builder
         function_opt:mut$std::Option[common::Function]
     {
         body.into_nodes = nodes
@@ -12449,29 +12233,13 @@ impl TypeChecker {
             if self.path_continues then
                 function_opt emitted_ops pending_ops nodes.pop self.check_source_node
             else
-                std::List[common::Op]::new = unreachable
+                body_builder::Builder::new = unreachable
                 function_opt unreachable pending_ops nodes.pop self.check_source_node
                 if unreachable.is_empty ! then
-                    0 unreachable
-                        .get
-                        .location
-                        .clone = origin
-                    origin unreachable common::OpValue::Unreachable common::Op::from_source emitted_ops.push
+                    unreachable body_builder::Part::Unreachable emitted_ops.push
                 fi
             fi
         done
-    }
-
-    pub fn run_type_check_ops
-        self:mut$TypeChecker
-        ops:mut$std::List[common::Op]
-        function_opt:mut$std::Option[common::Function]
-    {
-        ops source_body::consume_source_operations = body
-        std::List[common::Op]::new = pending_ops
-        std::List[common::Op]::new = emitted_ops
-        function_opt emitted_ops pending_ops body self.check_source_sequence
-        emitted_ops ops.append
     }
 }
 
@@ -12620,27 +12388,9 @@ pub fn checked_generic_body_effect_matches
     done
     true
 }
+
 # A stack value can be consumed after its source operation has been emitted.
 # Resolve those private pending moves before publishing the checked body.
-fn attach_checked_moves ops:mut$std::List[common::Op] moved:$std::Set[i64] {
-    0 = index: u64
-    while index ops.length > do
-        index ops.get_mut = op
-        if op.id moved.has then
-            true = op.ensure_ownership.moves_owner
-        fi
-        op.value match
-            common::OpValue::Unreachable(items) => moved items attach_checked_moves
-            common::OpValue::PushArray(items) => moved items attach_checked_moves
-            common::OpValue::ExprGroup(items) => moved items attach_checked_moves
-            common::OpValue::MatchArm(arm) => moved arm.guard_ops attach_checked_moves
-            _ => {
-            }
-        end
-        1 += index
-    done
-}
-
 struct CheckedOperations {
     is_valid:                bool
     inferred_effect:         common::StackEffect
@@ -12651,7 +12401,7 @@ struct CheckedOperations {
 
 fn analyze_ops
     source:source_body::SourceBody
-    ops:mut$std::List[common::Op]
+    ops:mut$body_builder::Builder
     function_opt:mut$std::Option[common::Function]
     store:mut$common::SymbolStore
     diagnostics:mut$error::Diagnostics
@@ -12768,13 +12518,13 @@ fn analyze_ops
         checker.current_location.clone common::OpValue::OwnerCleanup common::Op::new = cleanup_op
         cleanup_op checker.assign_op_id
         cleanup_op checker.attach_all_owner_cleanups
-        cleanup_op ops.push
+        cleanup_op ops.push_operation
     fi
     function_opt checker.close_source_function
     checker.resolve_return_literals
-    checker.moved_operations ops attach_checked_moves
-    checker.literal_resolutions ops apply_resolved_literal_hints
-    checker.diagnostics ops resolve_default_literals
+    checker.moved_operations ops attach_body_moves
+    checker.literal_resolutions ops apply_body_literal_hints
+    std::Option[common::Type]::None checker.diagnostics ops.resolve_literals
 
     # Build inferred stack effect from every returning path.
     checker.stack.get_types = inferred_returns
@@ -12885,7 +12635,9 @@ fn check_ops_with_parameter_policy
     std::Set[std::String]::new
     std::Map[std::String std::Set[std::String]]::new
     ops source_body::consume_source_operations = source
-    require_empty_final_stack diagnostics store function_opt ops source analyze_ops = checked
+    body_builder::Builder::new = work
+    require_empty_final_stack diagnostics store function_opt work source analyze_ops = checked
+    work.lower_operations ops.append
     checked.inferred_effect.clone = effect
     effect
 }
@@ -13025,27 +12777,40 @@ pub fn analyze_owned_root_semantics
     checked_ops:std::List[common::Op]
     session:mut$SemanticSession
 -> FunctionSemantics {
-    session checked_ops source_body::consume_source_body analyze_source_root_semantics
+    session checked_ops source_body::consume_source_body analyze_source_root_semantics = result
+    FunctionSemantics { ordered_facts: result.ordered_facts.clone inferred_effect: result.inferred_effect.clone operations: result.body.lower_operations diagnostics: result.diagnostics.clone return_callables: result.return_callables.clone checked_function: std::Option[common::Function]::None }
+}
+
+pub struct RootSemantics {
+    pub body:             AnalysisBody
+    pub inferred_effect:  common::StackEffect
+    pub diagnostics:      error::Diagnostics
+    pub ordered_facts:    std::List[SemanticDependency]
+    pub return_callables: std::List[std::Set[std::String]]
 }
 
 pub fn analyze_source_root_semantics
     source:source_body::SourceBody
     session:mut$SemanticSession
--> FunctionSemantics {
-    std::List[common::Op]::new = checked_ops
+-> RootSemantics {
+    body_builder::Builder::new = checked_ops
     std::Option[common::Function]::None = function_opt
     error::Diagnostics::new = diagnostics
     false session.checks
     std::Set[std::String]::new
     std::Map[std::String std::Set[std::String]]::new
     true diagnostics session.store function_opt checked_ops source analyze_ops = checked
-    FunctionSemantics {
+    if checked.is_valid then
+        session.store checked_ops.into_body.unwrap AnalysisBody::Checked
+    else
+        checked_ops AnalysisBody::Rejected
+    fi = body
+    RootSemantics {
         ordered_facts: checked.ordered_facts.clone
         inferred_effect: checked.inferred_effect.clone
-        operations: checked_ops
+        body: body
         diagnostics: diagnostics
         return_callables: checked.return_callables.clone
-        checked_function: std::Option[common::Function]::None
     }
 }
 
@@ -13166,29 +12931,21 @@ fn specialize_function_declaration
     specialized
 }
 
-fn resolve_specialized_trait_operation_in_work
-    op:mut$common::Op
-    as_reference:bool
+fn resolve_specialized_trait_callable
+    callable:$semantic_body::ConstrainedCallable
+    origin:$common::Location
     store:mut$common::SymbolStore
     diagnostics:mut$error::Diagnostics
     checks:mut$SemanticChecks
-{
-    std::Option[common::DeferredTraitCall]::None = call_opt
-    if op.value common::OpValue::TraitMethodCall(call) is then
-        call.clone std::Option::Some = call_opt
-    elif op.value common::OpValue::TraitMethodRef(call) is then
-        call.clone std::Option::Some = call_opt
-    fi
-    if call_opt.is_none then
-        return
-    fi
-    call_opt.unwrap = call
+-> std::Option[semantic_body::Callable] {
+    callable.dispatch = call: $common::DeferredTraitCall
+    callable.substitutions.clone = substitutions
     call.receiver.clone = lookup_receiver
     if call.receiver.borrow_target std::Option::Some(target) is then
         target.clone = lookup_receiver
     fi
     if "clone" call.method_name.as_str == then
-        checks op.location lookup_receiver store ensure_function_clone_method
+        checks origin lookup_receiver store ensure_function_clone_method
     fi
     std::Option[rules::MethodSemantics]::None = semantics_opt
     if call.trait_type std::Option::Some(trait_type) is then
@@ -13205,9 +12962,9 @@ fn resolve_specialized_trait_operation_in_work
         = semantics_opt
     fi
     if semantics_opt.is_none then
-        op.location f"No implementation of trait method `{call.method_name}` exists for `{call.receiver.format}`"
+        origin f"No implementation of trait method `{call.method_name}` exists for `{call.receiver.format}`"
         common::ErrorKind::MissingTraitMethod diagnostics.record_error_string
-        return
+        std::Option[semantic_body::Callable]::None return
     fi
     semantics_opt.unwrap = semantics
     semantics.function_name.clone = function_name
@@ -13219,19 +12976,15 @@ fn resolve_specialized_trait_operation_in_work
     fi
     false checks diagnostics store function_name.as_str ensure_checked_function drop
     if
-        0 op.call_bindings.length ==
+        0 substitutions.length ==
         function_name.as_str store.get_function std::Option::Some(implementation) is &&
     then
         call.stack_effect implementation.stack_effect bind_stack_effect_pattern = bindings_opt
         if bindings_opt std::Option::Some(bindings) is then
-            bindings.clone = op.call_bindings
+            bindings = substitutions
         fi
     fi
-    if as_reference then
-        function_name common::OpValue::FnPush op common::Op::set_value
-    else
-        function_name common::OpValue::FnCall op common::Op::set_value
-    fi
+    substitutions function_name semantic_body::Callable std::Option::Some
 }
 
 pub fn monomorphized_function_name
@@ -13272,6 +13025,7 @@ pub fn function_receiver_bindings
     bindings actual pattern rules::bind_trait_impl_type drop
     bindings
 }
+
 # Recipes and concrete instances stay in the checking owner until publication.
 struct SemanticSpecializer {
     store:       mut$common::SymbolStore
@@ -13444,13 +13198,16 @@ impl SemanticSpecializer {
             leaf.action semantic_body::Action::ConstrainedCall is leaf.action semantic_body::Action::ConstrainedClosure is ||
         then
             leaf.action semantic_body::Action::ConstrainedClosure is = as_reference
-            leaf.lower = operation
-            self.checks self.diagnostics self.store as_reference operation resolve_specialized_trait_operation_in_work
-            operation common::op_str_value = name
-            operation match
-                common::Op { call_bindings: bindings } => bindings
-            end = bindings
-            semantic_body::Callable { name: name substitutions: bindings } = call
+            leaf.action match
+                semantic_body::Action::ConstrainedCall(call) => call
+                semantic_body::Action::ConstrainedClosure(call) => call
+                _ => "Expected constrained action" panic
+            end = constrained: $semantic_body::ConstrainedCallable
+            self.checks self.diagnostics self.store leaf.facts.origin constrained resolve_specialized_trait_callable = resolved
+            if resolved.is_none then
+                return
+            fi
+            resolved.unwrap = call
             if as_reference then
                 call semantic_body::Action::Closure
             else
@@ -14166,5 +13923,76 @@ impl common::Function {
             fi
         done
         std::Option[common::Location]::None
+    }
+}
+
+fn attach_body_moves body:mut$body_builder::Builder moved:$std::Set[i64] {
+    {
+        = operation: mut$common::Op
+        if operation.id moved.has then
+            true = operation.ensure_ownership.moves_owner
+        fi
+    } = visitor
+    visitor body.visit_operations_mut
+}
+
+fn apply_body_literal_hints body:mut$body_builder::Builder resolutions:$std::Map[i64 common::Type] {
+    {
+        = operation: mut$common::Op
+        if operation.id resolutions.get std::Option::Some(target) is then
+            target.clone std::Option::Some = operation.type_hint
+        fi
+    } = visitor
+    visitor body.visit_operations_mut
+}
+
+impl TypeChecker {
+    fn check_generated_leaf
+        self:mut$TypeChecker
+        operation:common::Op
+        emitted:mut$body_builder::Builder
+        function:mut$std::Option[common::Function]
+    {
+        std::List[common::Op]::new = pending
+        function emitted pending std::Option[SourceWork]::None operation self.check_work_operation drop
+    }
+
+    # The hidden owner is consumed on exactly one continuing or returning path.
+    fn check_question_tail
+        self:mut$TypeChecker
+        origin:common::Location
+        hidden_name:$str
+        emitted:mut$body_builder::Builder
+        function:mut$std::Option[common::Function]
+    {
+        function match
+            std::Option::Some(declaration) => 0 declaration
+                .stack_effect
+                .return_types
+                .get
+                .clone
+            std::Option::None => "Checked question has no function" panic
+        end = return_type
+        function common::OpValue::IfStart origin.clone self.check_source_boundary = entry
+        body_builder::Builder::new = condition
+        function condition origin.clone hidden_name.to_str common::OpValue::PushVar common::Op::new self.check_generated_leaf
+        function condition origin.clone "is_ok".to_str common::OpValue::MethodCall common::Op::new self.check_generated_leaf
+        function condition origin.clone common::OpValue::Not common::Op::new self.check_generated_leaf
+        function common::OpValue::IfCondition origin.clone self.check_source_boundary = test
+        body_builder::Builder::new = consequent
+        function consequent origin.clone hidden_name.to_str common::OpValue::PushVar common::Op::new self.check_generated_leaf
+        origin.clone "propagate".to_str common::OpValue::MethodCall common::Op::new = propagate
+        return_type std::Option::Some = propagate.type_hint
+        function consequent propagate self.check_generated_leaf
+        function consequent origin.clone hidden_name.to_str common::OpValue::QuestionMove common::Op::new self.check_generated_leaf
+        function consequent origin.clone common::OpValue::FnReturn common::Op::new self.check_generated_leaf
+        function common::OpValue::IfEnd origin.clone self.check_source_boundary = exit
+        consequent test condition entry body_builder::Branch = branch
+        exit std::Option[body_builder::Alternative]::None[
+            branch,
+        ] std::List::from_array body_builder::Part::Conditional emitted.push
+        function emitted origin.clone hidden_name.to_str common::OpValue::PushVar common::Op::new self.check_generated_leaf
+        function emitted origin.clone "unwrap".to_str common::OpValue::MethodCall common::Op::new self.check_generated_leaf
+        function emitted origin hidden_name.to_str common::OpValue::QuestionMove common::Op::new self.check_generated_leaf
     }
 }
