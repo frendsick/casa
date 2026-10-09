@@ -3,6 +3,10 @@
 `std::List[T]` [owns](ownership.md#move-a-value) a growable sequence of `T` values. Use it when elements must be
 added or removed. Import `std` and qualify its constructors.
 
+Storage fields are private. Use `new` or `from_array` to construct a list and
+`length` to inspect its element count. Element access and mutation go through
+checked methods such as `get`, `get_mut`, `push`, and `remove`.
+
 ## Create and use a list
 
 Save this complete program as `sample.casa` and run `./casac sample.casa -L lib -r` from
@@ -38,6 +42,7 @@ names. Call forms below assume a list binding named `numbers`.
 | Method | Signature | Description |
 |---|---|---|
 | [append](#listtappend) | `fn append [T] self:mut$List[T] other:List[T]` | Move every element of `other` onto the end |
+| [as_ptr](#listtas_ptr) | `fn as_ptr self:$List -> ptr` | Non-owning pointer to element storage |
 | [as_slice](#listtas_slice) | `fn as_slice [T] self:$List[T] -> Slice[T]` | Borrowed view of the complete list |
 | [clone](#listtclone) | `fn clone self:$List[T] -> List[T]` | Independent list when `T: Clone` |
 | [contains](#liststrcontains) | `fn contains self:$List[str] needle:$str -> bool` | Whether a string list contains `needle` |
@@ -76,6 +81,17 @@ Borrows the receiver exclusively and consumes the other list, moving all its ele
 onto the receiver's end.
 
 Call: `other numbers.append`.
+
+### List[T]::as_ptr
+
+```text
+fn as_ptr self:$List -> ptr
+```
+
+Returns a non-owning pointer for low-level interoperation. An empty list can
+return null. Storage growth or destruction invalidates the pointer. Dereferencing
+it requires `unsafe`. The caller must preserve element initialization, ownership,
+and borrow exclusivity. Prefer `get` or `get_mut` for checked access.
 
 ### List[T]::as_slice
 

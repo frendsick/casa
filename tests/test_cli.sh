@@ -80,6 +80,13 @@ if matches_filter missing_import "$@"; then
     [ ! -e "$CLI_TMP/missing_import" ]
 fi
 
+if matches_filter stdin_buffered_input "$@"; then
+    matched=true
+    "$COMPILER" -L lib tests/compiler/fixtures/stdin_buffered_input.casa -o "$CLI_TMP/stdin_buffered_input"
+    printf 'ab' >"$CLI_TMP/stdin_bytes"
+    "$CLI_TMP/stdin_buffered_input" <"$CLI_TMP/stdin_bytes"
+fi
+
 if matches_filter process_exit "$@"; then
     matched=true
     process_exit_binary="$CLI_TMP/process_exit"
