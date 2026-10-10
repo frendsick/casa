@@ -18,7 +18,8 @@ pub struct TypecheckResult {
     binding_store:       binding::BindingStore
 }
 
-# Only this module can construct backend input. Bodies and their declarations transfer together.
+# Only this module can construct backend input. Bodies and required declarations
+# transfer together after checking-only symbol state has been released.
 pub struct CheckedProgram {
     store:   common::SymbolStore
     root:    semantic_body::Body
@@ -281,20 +282,42 @@ fn commit_checked_program
         body name bodies.set
     done
     std::Map[std::String CheckedType]::new = types
-    types store root commit_body_type_facts
+    std::Set[std::String]::new = aggregates
+    aggregates types store root commit_body_type_facts
     for variable in store.variables.iter do
-        types store variable.second.typ commit_type_facts
+        aggregates types store variable.second.typ commit_type_facts
+    done
+    # Signatures include ABI-only types and function-reference inputs and outputs.
+    for name in visited.iter do
+        name.as_str store.get_function.unwrap = signature
+        for
+            parameter in signature
+                .stack_effect
+                .parameters
+                .iter
+        do
+            aggregates types store parameter.typ commit_type_facts
+        done
+        for
+            typ in signature
+                .stack_effect
+                .return_types
+                .iter
+        do
+            aggregates types store typ commit_type_facts
+        done
     done
     for body in bodies.iter do
-        types store body.second commit_body_type_facts
+        aggregates types store body.second commit_body_type_facts
         body.first.as_str store.get_function.unwrap = typed_declaration
         for variable in typed_declaration.variables.iter do
-            types store variable.typ commit_type_facts
+            aggregates types store variable.typ commit_type_facts
         done
         for capture in typed_declaration.captures.iter do
-            types store capture.typ commit_type_facts
+            aggregates types store capture.typ commit_type_facts
         done
     done
+    aggregates visited store.into_backend_store = store
     externs types bodies root store CheckedProgram std::Result::Ok
 }
 
@@ -457,6 +480,7 @@ fn commit_type_facts
     typ:$common::Type
     store:$common::SymbolStore
     types:mut$std::Map[std::String CheckedType]
+    aggregates:mut$std::Set[std::String]
 {
     typ.format = key
     if key types.has then
@@ -520,7 +544,14 @@ fn commit_type_facts
     fi
     kind drop_function needs_destruction copy_aggregate shape_kind plain_storage CheckedType key types.set
     if typ common::Type::Generic(generic) is then
-        types store typ generic commit_child_type_facts
+        aggregates types store typ generic commit_child_type_facts
+    elif typ common::Type::Function(function) is then
+        for parameter in function.parameters.iter do
+            aggregates types store parameter commit_type_facts
+        done
+        for result in function.return_types.iter do
+            aggregates types store result commit_type_facts
+        done
     fi
 }
 
@@ -529,22 +560,25 @@ fn commit_child_type_facts
     typ:$common::Type
     store:$common::SymbolStore
     types:mut$std::Map[std::String CheckedType]
+    aggregates:mut$std::Set[std::String]
 {
     for parameter in generic.params.iter do
-        types store parameter commit_type_facts
+        aggregates types store parameter commit_type_facts
     done
     if generic.base store.structs.get std::Option::Some(shape) is then
+        generic.base.clone aggregates.add
         shape.type_vars typ common::aggregate_type_bindings = substitutions
         for member in shape.members.iter do
             substitutions member.typ.substitute_t = child_type
-            types store child_type commit_type_facts
+            aggregates types store child_type commit_type_facts
         done
     elif generic.base store.enums.get std::Option::Some(shape) is then
+        generic.base.clone aggregates.add
         shape.type_vars typ common::aggregate_type_bindings = substitutions
         for variant in shape.variant_types.iter do
             for member in variant.second.iter do
                 substitutions member.substitute_t = child_type
-                types store child_type commit_type_facts
+                aggregates types store child_type commit_type_facts
             done
         done
     fi
@@ -554,7 +588,8 @@ fn commit_body_type_facts
     body:$semantic_body::Body
     store:$common::SymbolStore
     types:mut$std::Map[std::String CheckedType]
+    aggregates:mut$std::Set[std::String]
 {
-    { = typ: $common::Type types store typ commit_type_facts } = visitor
+    { = typ: $common::Type aggregates types store typ commit_type_facts } = visitor
     visitor body.visit_types
 }

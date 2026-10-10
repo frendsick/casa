@@ -99,6 +99,14 @@ by checking.
 local and capture types, storage references, and dispatch targets are complete.
 It also owns the selected copy behavior, value categories, and concrete drop
 hooks for each used type. The backend consumes these facts without trait queries.
+Commit moves reachable function declarations, root storage, and recursively
+required struct and enum declarations into fresh maps. It releases source-name
+and module lookup tables, visibility sets, trait indexes, semantic caches, and
+unused declarations before backend emission. Shared layout queries still use
+the `SymbolStore` type, with checking-only collections empty. Reports retain
+the exact source text independently of this store.
+Drop declarations needed by field layout survive even when no reachable cleanup
+needs their bodies.
 Rejected source retains diagnostics and editor facts but cannot produce backend input. Unreachable source still receives
 type and structural checks. It retains source occurrences for editor queries,
 without executable operands or ownership actions.
