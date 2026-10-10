@@ -734,9 +734,16 @@ and examples. Use [Bytes](#bytes) for binary data.
 | `str` | `Iter[char]` |
 
 A [for loop](control-flow.md#for-loops) consumes the iterator. Create another iterator to traverse the
-source again.
+source again. A borrowed iterator remains available after its loop ends.
 
-Arrays, lists, slices, maps, and sets yield borrows because the source keeps
+Lists also provide [`iter_mut`](lists.md#listtiter_mut), which lends one mutable
+element at a time, and [`into_iter`](lists.md#listtinto_iter), which consumes
+the list and yields owned elements. `ListIterMut[T]` supports `for` and its own
+`all`, `any`, `count`, `find`, and `next` methods. It does not implement
+`Iterable`. Consuming list iteration returns `Iter[T]` and supports the lazy
+and terminal operations below.
+
+`iter` on arrays, lists, slices, maps, and sets yields borrows because the source keeps
 owning its elements. Clone a yielded value when an owned value is needed.
 
 ## Lazy iterator operations

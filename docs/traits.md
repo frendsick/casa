@@ -49,6 +49,25 @@ fn keep_first [A, B] first:A second:B -> A {
 A type parameter can appear only in the outputs. If context cannot determine
 it, supply it explicitly. For example, `std::List[i64]::new` supplies the element type.
 
+## Borrowed results in generic contracts
+
+A lending result must expose its borrow in the trait or callback contract.
+For example, `fn next self:mut$self -> Option[mut$T]` keeps the receiver loaned
+while the result is live. An implementation cannot hide that relationship
+inside the `T` of `fn next self:mut$self -> Option[T]`. That contract permits
+generic code to retain earlier values while advancing.
+
+The same rule applies to callback specialization and callback fields.
+`fn[mut$I -> T]` cannot specialize `T` to a borrowed result that requires an
+input storage loan absent from the generic contract. Use an explicit result
+borrow, such as `fn[mut$I -> mut$T]`, when the callback lends from its argument.
+An explicit `fn[...]` contract uses conservative input sources.
+
+Transferring a stored borrow remains valid. For example, `List[mut$T].pop`
+removes an existing value instead of lending list storage. A callback contract
+that consumes a generic argument by value, such as `fn[T -> T]`, can transfer
+that argument when `T` is a borrow type.
+
 ## Generic data
 
 Structs and enums can also declare type parameters:

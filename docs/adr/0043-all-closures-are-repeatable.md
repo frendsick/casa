@@ -1,5 +1,7 @@
 # All closures are repeatable
 
+status: amended by [ADR-0176](0176-list-mutable-iteration-lends-one-element-at-a-time.md)
+
 Casa has no single-use closure capability. Every closure has a repeatable `fn[...]` type. A closure definition is rejected when any invocation path could move or destroy a captured non-`Copy` value without restoring that capture before the invocation returns.
 
 Closures may consume their explicit arguments because each invocation receives new arguments. They may inspect or mutate captured owners and may temporarily move a capture when every continuing path reinitializes it. Destroying the closure value itself destroys its owned captures normally. The restriction applies to invoking the closure.

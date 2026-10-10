@@ -4434,7 +4434,7 @@ impl TypeChecker {
             end
             if
                 parameter_type.is_borrow
-                prefer_contained_origins ! argument.origins.is_none || &&
+                prefer_contained_origins ! argument.origins.is_none || exclusive || &&
             then
                 if argument.place std::Option::Some(place) is then
                     if exclusive ! parameter_type.is_exclusive_borrow || then
@@ -4888,6 +4888,11 @@ impl TypeChecker {
                 origins = value.origins
             fi
             return
+        fi
+        # An exclusive field borrow lends through the receiver. It cannot be
+        # copied out like a shared payload while the receiver remains usable.
+        if value_type.is_exclusive_borrow then
+            self.binding_loans true projected_place origins add_storage_origins = origins
         fi
         origins = value.origins
         if projected_place std::Option::Some(place) is then
@@ -8404,6 +8409,21 @@ impl TypeChecker {
         location:$common::Location
         function_opt:mut$std::Option[common::Function]
     {
+        for parameter in effect.parameters.iter do
+            bindings parameter.typ.substitute_t = resolved
+            if tc.store resolved parameter.typ hides_callable_storage_borrow then
+                location
+                f"Generic callback `{parameter.name}` hides a borrowed result in a type parameter"
+                common::ErrorKind::TypeMismatch tc.diagnostics.record_error_string
+            fi
+        done
+        for returned in effect.return_types.iter do
+            bindings returned.substitute_t = resolved
+            if tc.store resolved returned hides_callable_storage_borrow then
+                location "Generic callback result hides a borrowed result in a type parameter"
+                common::ErrorKind::TypeMismatch tc.diagnostics.record_error
+            fi
+        done
         for
             constant_name in effect
                 .const_params
@@ -8811,7 +8831,11 @@ impl TypeChecker {
                 if value.origins std::Option::Some(origins) is then
                     for origin in origins.iter do
                         origin.clone = checked_origin
-                        if checked_origin function self.is_return_origin_valid ! then
+                        if function checked_origin is_exclusive_capture_reborrow then
+                            self.current_location
+                            f"Repeatable closure cannot return a borrow through exclusive capture `{origin.place.binding}`"
+                            common::ErrorKind::InvalidVariable self.diagnostics.record_error_string
+                        elif checked_origin function self.is_return_origin_valid ! then
                             origin.place.format = place
                             self.current_location f"Borrowed return escapes local owner `{place}`"
                             common::ErrorKind::InvalidVariable self.diagnostics.record_error_string
@@ -9524,6 +9548,20 @@ impl TypeChecker {
             tc.end_path
         fi
     }
+}
+
+# A retained exclusive capture cannot lend through a repeatable fn contract.
+# Moving a stored payload uses symbolic dependencies and remains valid.
+fn is_exclusive_capture_reborrow origin:$Origin function:$common::Function -> bool {
+    if origin.kind OriginKind::Place is ! then
+        false return
+    fi
+    for capture in function.captures.iter do
+        if origin.place.binding capture.name == capture.typ.is_exclusive_borrow && then
+            true return
+        fi
+    done
+    false
 }
 
 impl TypeChecker {
@@ -10732,6 +10770,10 @@ impl TypeChecker {
         bindings binding_actual binding_expected rules::bind_semantic_type_arguments
 
         bindings expected.substitute_t = resolved_expected
+        if self.store resolved_expected expected hides_callable_storage_borrow then
+            self.current_location "Generic callback field hides a borrowed result in a type parameter"
+            common::ErrorKind::TypeMismatch self.diagnostics.record_error
+        fi
         self.binding_loans resolved_expected value origins merge_destination_origins = origins
         value.cleanup_origins cleanup_origins merge_origins = cleanup_origins
         value resolved_expected self.expect_value_type_t
@@ -13513,6 +13555,153 @@ pub fn analyze_source_root_semantics
     }
 }
 
+# Abstract callers can retain only the storage loans visible in the return type.
+fn allows_storage_borrow typ:$common::Type exclusive:bool store:mut$common::SymbolStore -> bool {
+    store typ get_borrow_shape = shape
+    if shape CAPTURED_BORROW_SHAPE & 0 != then
+        true return
+    fi
+    if exclusive then
+        shape EXCLUSIVE_BORROW_SHAPE & 0 !=
+    else
+        shape SHARED_BORROW_SHAPE EXCLUSIVE_BORROW_SHAPE | & 0 !=
+    fi
+}
+
+# An explicit fn contract erases body-specific sources. Specialization cannot
+# hide a storage loan that its generic caller was never required to retain.
+fn hides_callable_storage_borrow
+    declared:$common::Type
+    resolved:$common::Type
+    store:mut$common::SymbolStore
+-> bool {
+    if declared common::Type::Function(contract) is then
+        if resolved common::Type::Function(actual) is then
+            for parameter in contract.parameters.iter do
+                if parameter.is_borrow ! then
+                    continue
+                fi
+                for
+                    pair in actual.return_types.iter contract
+                        .return_types
+                        .iter
+                        .zip
+                do
+                    store pair.second get_borrow_shape = actual_shape
+                    actual_shape EXCLUSIVE_BORROW_SHAPE CAPTURED_BORROW_SHAPE | & 0 !=
+                    parameter.is_exclusive_borrow && = exclusive
+                    if actual_shape 0 != store exclusive pair.first allows_storage_borrow ! && then
+                        true return
+                    fi
+                done
+            done
+            for
+                pair in actual.parameters.iter contract
+                    .parameters
+                    .iter
+                    .zip
+            do
+                if store pair.second pair.first hides_callable_storage_borrow then
+                    true return
+                fi
+            done
+            for
+                pair in actual.return_types.iter contract
+                    .return_types
+                    .iter
+                    .zip
+            do
+                if store pair.second pair.first hides_callable_storage_borrow then
+                    true return
+                fi
+            done
+        fi
+    elif declared common::Type::Generic(contract) is then
+        if resolved common::Type::Generic(actual) is then
+            for
+                pair in actual.params.iter contract
+                    .params
+                    .iter
+                    .zip
+            do
+                if store pair.second pair.first hides_callable_storage_borrow then
+                    true return
+                fi
+            done
+        fi
+    fi
+    false
+}
+
+fn trait_return_borrows_match
+    contract:$common::StackEffect
+    implementation:$common::StackEffect
+    summary:$CallReturnSummary
+    store:mut$common::SymbolStore
+-> bool {
+    for
+        pair in implementation.parameters.iter contract
+            .parameters
+            .iter
+            .zip
+    do
+        if store pair.second.typ pair.first.typ hides_callable_storage_borrow then
+            false return
+        fi
+    done
+    for
+        pair in implementation.return_types.iter contract
+            .return_types
+            .iter
+            .zip
+    do
+        if store pair.second pair.first hides_callable_storage_borrow then
+            false return
+        fi
+    done
+    0 = index: u64
+    for returned in summary.origins.iter do
+        if contract.return_types.length index >= then
+            false return
+        fi
+        if implementation.return_types.length index >= then
+            false return
+        fi
+        index implementation.return_types.get = actual
+        if store actual get_borrow_shape 0 == then
+            1 += index
+            continue
+        fi
+        index contract.return_types.get = declared
+        returned.cleanup_origins returned.origins.clone merge_origins = origins
+        if origins std::Option::Some(items) is then
+            for origin in items.iter do
+                if origin.kind OriginKind::Place is ! then
+                    continue
+                fi
+                for
+                    pair in implementation.parameters.iter contract
+                        .parameters
+                        .iter
+                        .zip
+                do
+                    if
+                        pair
+                            .first
+                            .typ
+                            .is_borrow origin.place.binding pair.second.name == &&
+                        store origin.exclusive declared allows_storage_borrow ! &&
+                    then
+                        false return
+                    fi
+                done
+            done
+        fi
+        1 += index
+    done
+    true
+}
+
 fn check_trait_impls
     store:mut$common::SymbolStore
     diagnostics:mut$error::Diagnostics
@@ -13548,6 +13737,17 @@ fn check_trait_impls
                 trait_impl.receiver candidate.effect common::resolve_trait_stack_effect = expected
                 if true implementation.stack_effect expected trait_method_effects_match ! then
                     false = valid
+                fi
+                if function_name checks.return_summaries.get std::Option::Some(summary) is then
+                    if
+                        store summary implementation.stack_effect candidate.method.stack_effect
+                        trait_return_borrows_match !
+                    then
+                        trait_impl.location
+                        f"Trait method `{method_name}` hides a storage borrow in a return type parameter"
+                        common::ErrorKind::TraitSignatureMismatch diagnostics.record_error_string
+                        false = valid
+                    fi
                 fi
             elif store trait_type method_name.as_str rules::find_trait_default_method.is_none then
                 false = valid

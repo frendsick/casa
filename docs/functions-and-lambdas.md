@@ -393,5 +393,16 @@ an owned capture. If one invocation moves or destroys that capture, every
 continuing path must restore it before returning. Destroying the closure
 destroys its owned captures once.
 
+A closure cannot return a reference through an exclusive capture that it
+retains for the next invocation. This applies to shared and exclusive results,
+including references inside `Option` or another aggregate. The repeatable
+`fn[...]` contract cannot express a result that prevents the next invocation.
+Use a named method with an explicit borrowed receiver for that relationship,
+as [`ListIterMut.next`](lists.md#listtiter_mut) does.
+
+Returning a copied shared borrow from a shared capture is valid. Returning a
+value removed from an owned collection is also valid because the collection no
+longer owns that value. `List.into_iter` uses this form of ownership transfer.
+
 Use a lambda for a short callback. Use a named function when the operation is
 shared or needs its own documentation.

@@ -76,8 +76,20 @@ done
 ```
 
 The iterable expression is evaluated once. `break` and `continue` work as they
-do in a `while` loop. Custom iterators implement `Iterable`. See
-[Collections](collections.md) for standard iterators.
+do in a `while` loop. The iterator must provide a `next` method returning
+`Option[T]`. This can be an inherent method or an `Iterable[T]` implementation.
+The loop borrows its stored iterator for each `next` call and gives the body
+each `Some` payload. `None` ends the loop.
+
+An owned iterator is destroyed when the loop ends, before the next statement.
+This applies to exhaustion and `break`. `continue` retains the iterator.
+Function return and `?` also clean it up once. As elsewhere, panic and process
+exit do not unwind owners. A loop over a borrowed iterator ends that borrow
+and leaves the caller's iterator available.
+
+A lending cursor such as `ListIterMut[T]` lends each payload through the stored
+cursor. Finish using the payload before the next iteration. See
+[Collections](collections.md) for standard iterator sources.
 
 ## Test and bind an enum variant
 
