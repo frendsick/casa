@@ -5,7 +5,7 @@ Compile module-style imports with a library path such as `casac -L lib`.
 | Module | Purpose | Runnable example |
 |---|---|---|
 | `argparse` | Command-line definitions and help | [examples/argparse.casa](../examples/argparse.casa) |
-| `io` | Buffered standard input and output | [Standard input](os.md#standard-input) |
+| `io` | Buffered stdin and direct stdout writes | [Standard input](os.md#standard-input) |
 | `json` | JSON values, parsing, and serialization | See [JSON](#json) |
 | `log` | Leveled messages to standard error | [examples/log.casa](../examples/log.casa) |
 | `os` | Files, directories, environment, and paths | [OS reference](os.md) |
@@ -51,7 +51,7 @@ Use `""` when an option has no short or long spelling.
 fn add_flag self:mut$ArgParser name:str short_flag:str long_flag:str help_text:str
 ```
 
-Adds a Boolean flag.
+`add_flag` adds a Boolean flag.
 
 ### ArgParser::add_multi_option
 
@@ -59,7 +59,7 @@ Adds a Boolean flag.
 fn add_multi_option self:mut$ArgParser name:str short_flag:str long_flag:str help_text:str
 ```
 
-Adds a repeatable string option.
+`add_multi_option` adds a repeatable string option.
 
 ### ArgParser::add_option
 
@@ -67,7 +67,7 @@ Adds a repeatable string option.
 fn add_option self:mut$ArgParser name:str short_flag:str long_flag:str help_text:str
 ```
 
-Adds an option that accepts one string value.
+`add_option` adds an option that accepts one string value.
 
 ### ArgParser::add_positional
 
@@ -75,7 +75,7 @@ Adds an option that accepts one string value.
 fn add_positional self:mut$ArgParser name:str help_text:str
 ```
 
-Adds a required positional value.
+`add_positional` adds a required positional value.
 
 ### ArgParser::add_terminal_flag
 
@@ -83,7 +83,7 @@ Adds a required positional value.
 fn add_terminal_flag self:mut$ArgParser name:str short_flag:str long_flag:str help_text:str
 ```
 
-Adds a flag that permits missing positional values.
+`add_terminal_flag` adds a flag that permits missing positional values.
 
 ### ParsedArgs::get
 
@@ -91,7 +91,7 @@ Adds a flag that permits missing positional values.
 fn get self:$ParsedArgs name:$str -> std::Option[std::String]
 ```
 
-Returns an independent cloned positional or option value, if present.
+`get` returns an independent cloned positional or option value, if present.
 
 ### ParsedArgs::get_flag
 
@@ -99,7 +99,8 @@ Returns an independent cloned positional or option value, if present.
 fn get_flag self:$ParsedArgs name:$str -> bool
 ```
 
-Returns the state of a defined flag. An unknown name terminates the program.
+`get_flag` returns the state of a defined flag. An unknown name terminates the
+program.
 
 ### ParsedArgs::get_multi
 
@@ -107,7 +108,7 @@ Returns the state of a defined flag. An unknown name terminates the program.
 fn get_multi self:$ParsedArgs name:$str -> std::Option[std::List[std::String]]
 ```
 
-Returns an independent cloned list of repeatable values, if present.
+`get_multi` returns an independent cloned list of repeatable values, if present.
 
 ### ArgParser::new
 
@@ -115,7 +116,7 @@ Returns an independent cloned list of repeatable values, if present.
 fn new -> ArgParser
 ```
 
-Creates a parser named from process argument `0`.
+`new` creates a parser named from process argument `0`.
 
 ### ArgParser::parse_args
 
@@ -123,7 +124,7 @@ Creates a parser named from process argument `0`.
 fn parse_args self:$ArgParser -> ParsedArgs
 ```
 
-Parses process arguments without changing the parser definitions. `-h` and `--help` print help. Invalid arguments print usage and terminate with exit code `2`.
+`parse_args` parses process arguments without changing the parser definitions.
 
 ## JSON
 
@@ -171,7 +172,7 @@ A selected level includes less verbose levels.
 fn configure self:mut$Logger level:LogLevel
 ```
 
-Changes the logger level through an exclusive borrow.
+`configure` changes the logger level through an exclusive borrow.
 
 ### Logger::new
 
@@ -179,7 +180,7 @@ Changes the logger level through an exclusive borrow.
 fn new -> Logger
 ```
 
-Creates logger state with level `Warning`.
+`new` creates logger state with level `Warning`.
 
 ### Logging functions
 
@@ -223,7 +224,7 @@ f"elapsed: {timer}\n" print
 fn elapsed_ms self:$Timer -> i64
 ```
 
-Returns elapsed milliseconds without consuming the timer.
+`elapsed_ms` returns elapsed milliseconds without consuming the timer.
 
 ### Timer::elapsed_ns
 
@@ -231,7 +232,7 @@ Returns elapsed milliseconds without consuming the timer.
 fn elapsed_ns self:$Timer -> i64
 ```
 
-Returns elapsed nanoseconds without consuming the timer.
+`elapsed_ns` returns elapsed nanoseconds without consuming the timer.
 
 ### Timer::new
 
@@ -239,7 +240,7 @@ Returns elapsed nanoseconds without consuming the timer.
 fn new -> Timer
 ```
 
-Creates a timer using the monotonic clock. Clock reads use local scratch
+`new` creates a timer using the monotonic clock. Clock reads use local scratch
 storage, so elapsed-time queries do not mutate storage owned by the timer.
 
 ### Timer::to_str
@@ -248,7 +249,7 @@ storage, so elapsed-time queries do not mutate storage owned by the timer.
 fn to_str self:$Timer -> std::String
 ```
 
-Returns elapsed seconds as owned text, such as `1.042s`.
+`to_str` returns elapsed seconds as owned text, such as `1.042s`.
 
 ### Timer reuse
 

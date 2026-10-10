@@ -41,7 +41,8 @@ for signatures, fragments, and commands for running complete examples.
 fn advance self:mut$Cursor -> std::Option[char]
 ```
 
-Returns the current character and advances the cursor.
+`advance` returns the current byte as `Some(char)` and advances by one byte. If
+the cursor is at or past the end, the method returns `None` without advancing.
 
 ### Cursor::expect_char
 
@@ -49,7 +50,7 @@ Returns the current character and advances the cursor.
 fn expect_char self:mut$Cursor expected:char -> std::Result[char ParseError]
 ```
 
-Consumes one expected character.
+`expect_char` consumes one expected character.
 
 ### Cursor::is_eof
 
@@ -57,7 +58,7 @@ Consumes one expected character.
 fn is_eof self:$Cursor -> bool
 ```
 
-Returns whether the position reached the end.
+`is_eof` returns whether the position reached the end.
 
 ### Cursor::new
 
@@ -65,7 +66,7 @@ Returns whether the position reached the end.
 fn new source:$str -> Cursor
 ```
 
-Creates a cursor at position `0` over the borrowed source.
+`new` creates a cursor at position `0` over the borrowed source.
 
 ### Cursor::peek
 
@@ -73,7 +74,7 @@ Creates a cursor at position `0` over the borrowed source.
 fn peek self:$Cursor -> std::Option[char]
 ```
 
-Returns the current character without advancing the cursor.
+`peek` returns the current character without advancing the cursor.
 
 ### Cursor::peek_at
 
@@ -81,7 +82,8 @@ Returns the current character without advancing the cursor.
 fn peek_at self:$Cursor offset:u64 -> std::Option[char]
 ```
 
-Returns the character at a relative offset without advancing the cursor.
+`peek_at` returns the byte at `pos + offset` as `Some(char)` without advancing.
+An out-of-range offset returns `None`, including when the sum would overflow.
 
 ### Cursor::restore
 
@@ -89,7 +91,9 @@ Returns the character at a relative offset without advancing the cursor.
 fn restore self:mut$Cursor saved:u64
 ```
 
-Returns to a saved position.
+`restore` assigns the supplied byte position without a range check. Use a
+position from `save` for backtracking. At or past the byte length, the cursor
+reports EOF.
 
 ### Cursor::save
 
@@ -97,7 +101,7 @@ Returns to a saved position.
 fn save self:$Cursor -> u64
 ```
 
-Returns the current cursor position.
+`save` returns the current cursor position.
 
 ### Cursor::skip
 
@@ -105,7 +109,9 @@ Returns the current cursor position.
 fn skip self:mut$Cursor count:u64
 ```
 
-Advances by a count.
+`skip` adds `count` to the byte position without clamping to the source length.
+At or past the byte length, the cursor reports EOF. Integer overflow terminates
+the program.
 
 ### Cursor::skip_while
 
@@ -113,7 +119,8 @@ Advances by a count.
 fn skip_while self:mut$Cursor pred:fn[char -> bool]
 ```
 
-Advances while matching.
+`skip_while` advances while `pred` returns true for the current byte. The cursor
+stops before the first nonmatching byte or at EOF.
 
 ### Cursor::starts_with
 
@@ -121,7 +128,9 @@ Advances while matching.
 fn starts_with self:$Cursor prefix:$str -> bool
 ```
 
-Matches remaining text without advancing.
+`starts_with` matches the prefix at the current byte position without advancing.
+An empty prefix matches through EOF. The method returns false if the cursor is
+past EOF.
 
 ### Cursor::take_string
 
@@ -129,7 +138,7 @@ Matches remaining text without advancing.
 fn take_string self:mut$Cursor target:$str -> std::Result[str ParseError]
 ```
 
-Consumes exact text.
+`take_string` consumes exact text.
 
 ### Cursor::take_while
 
@@ -137,7 +146,7 @@ Consumes exact text.
 fn take_while self:mut$Cursor pred:fn[char -> bool] -> std::String
 ```
 
-Consumes and copies matching text.
+`take_while` consumes and copies matching text.
 
 ### Cursor example
 
@@ -171,9 +180,14 @@ integer and quoted-literal parsers restore their starting position on failure.
 `parse_escape` accepts `\n`, `\t`, `\r`, `\0`, `\\`, `\"`, `\'`, `\{`, and
 `\}`. It does not implement the compiler's `\xNN` and `\u{...}` escapes.
 
-`str_to_int` assumes decimal digits with an optional leading minus sign. It
-does not validate syntax or range and uses wrapping arithmetic. `parse_int`
-checks for digits, but its accumulation still wraps. Negating the resulting
-minimum `i64` value can terminate on overflow rather than return `ParseError`.
+`parse_int` accepts an optional minus sign followed by decimal digits in the
+complete `i64` range. It stops before the first non-digit. Missing digits and
+overflow return `ParseError` at the starting position and restore the cursor.
+
+`str_to_int` is a wrapping conversion for callers that already validated decimal
+syntax. It does not check range. The compiler uses it to retain integer-literal
+bits, including values above the `i64` maximum that can fit `u64`. Use
+`str.to_int` for a checked complete token or `parse_int` for a checked cursor
+prefix.
 
 See [examples/parser.casa](../examples/parser.casa) for a runnable parser.

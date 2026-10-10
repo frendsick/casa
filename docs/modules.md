@@ -43,8 +43,6 @@ std::List[i64]::new = values
 "name=42" parser::Cursor::new = cursor
 ```
 
-`std` follows the same rule. A full `std` import does not add unqualified names.
-
 Aliases and declarations cannot use the same source name. Importing two modules with one alias is also an error.
 
 ### Qualified names and module identity
@@ -106,7 +104,7 @@ impl Counter {
 }
 ```
 
-Private declarations remain available to code in the same module. Imports do not re-export their dependencies.
+Private declarations remain available to code in the same module.
 
 Struct patterns outside the defining module can bind only public fields.
 Code outside the defining module can construct a struct only when every field is public. A public struct with private fields must provide a public factory function or method.

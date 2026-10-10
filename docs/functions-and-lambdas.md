@@ -177,6 +177,8 @@ A bodyless `extern fn` declaration names a function provided by a native
 library. Casa calls it with the x86-64 System V C ABI:
 
 ```casa
+import "std"
+
 extern fn strlen text:$cstr -> u64
 
 "Casa".as_cstr.unwrap = text

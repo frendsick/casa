@@ -43,6 +43,8 @@ compiler state, so retained results cannot affect other requests.
 `Target::LinuxX86_64`. The caller writes and builds assembly and launches binaries.
 Native failures do not consume or change the report.
 
+## Native builds
+
 `compiler/build.casa` provides `NativeDriver::compile_binary`, which borrows an
 `AssemblySource`, an output path, and ordered native library names. The default
 driver is `/usr/bin/cc`. One invocation assembles and links with `-nostdlib`,
@@ -64,6 +66,8 @@ output path. The compiler creates no intermediate object file.
 
 The CLI passes the assembly product to the native driver and retains its report
 until diagnostics have been presented. It does not coordinate compiler phases.
+
+## Source construction and semantic checking
 
 `SourceProgram` owns declaration metadata and structured source bodies. Function
 records contain signatures, variables, captures, and linkage metadata. Source
@@ -119,6 +123,8 @@ match arm, and nested literal directly into its semantic node. Flat
 checked-operation views remain available through compatibility APIs used by
 tests.
 
+## Backend planning and emission
+
 Scalar and aggregate programs use one backend entry. Physical instructions,
 function plans, pools, selection, and spelling helpers are private to
 `backend.casa`. A deterministic worklist
@@ -145,6 +151,8 @@ completed function definitions and static pool references. Final rendering consu
 static array and struct payloads after reference validation.
 An invariant failure discards the private output. It never retries another backend.
 
+## Verified source facts
+
 Operation handlers record dependencies from the selected target and receiver
 used to check the stack. `semantic_body.casa` owns source occurrences with
 operation kinds, source payloads, and type hints. `document.casa` classifies
@@ -158,6 +166,8 @@ independent sibling branch, match arm, or function can still contribute verified
 facts. Match arms start from the established subject facts. A failed arm withholds
 facts after the join without suppressing independent sibling arms.
 A return-signature error rejects assembly without erasing established calls.
+
+## Ownership and callable summaries
 
 Ownership checking keeps typed places with a resolved binding name and field
 components. Origins distinguish access to a place from dependencies on an
@@ -195,6 +205,8 @@ body, and backend lowering reads the actions directly. Pending moves from stack 
 until it attaches them to their source operations. There is no ownership table
 in `SymbolStore`.
 
+## Editor queries
+
 `AnalysisSnapshot::get_index` borrows the source index. Point queries use a
 retained absolute file identity and byte offset. `find_semantic_tokens` takes
 only the file identity and returns tokens for the whole file. Hover and definition
@@ -213,10 +225,9 @@ An empty reference list can be complete. Invalid files and offsets are
 unavailable. Returned values own their text and locations and survive snapshot
 release. Convert locations with the originating report's retained sources.
 
-Projection records checker-verified source facts during construction and
-releases the compiler store and bodies before returning. Query execution reads
-source facts only. Named parameters retain their written name ranges from parsing,
-including method receivers. Type substitution preserves this attribution.
+Queries read retained source facts only. Named parameters retain their written
+name ranges from parsing, including method receivers. Type substitution preserves
+this attribution.
 Parameter queries use these retained ranges, and generated parameters have no
 source declaration. Established parameter declarations survive independent body
 errors. Semantic checking retains each local binding's declaration range,
@@ -245,6 +256,5 @@ The LSP stores `AnalysisSnapshot` values. Position-based queries convert through
 the snapshot's retained sources and return owned answers. The caller must check
 document versions before applying results to newer text.
 
-`tests/compiler/test_products.casa` checks independent overrides, release order,
-source rejection, syntax products, retained failure context, and native output
-from requested assembly. The private-field fixture checks the product boundary.
+See [the product tests](../tests/compiler/test_products.casa) for independent
+requests, source rejection, retained reports, and native output.
