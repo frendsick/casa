@@ -45,7 +45,7 @@ test_category() {
             echo compiler_integration
             ;;
         test/test_closure_ownership|test/test_copy_aggregates|test/test_copy_clone|test/test_returned_borrow_sources|\
-        test/test_for_owned_item|test/test_owned_contexts|test/test_scope)
+        test/test_for_owned_item|test/test_iterator_borrows|test/test_owned_contexts|test/test_scope)
             echo types_ownership
             ;;
         test/test_const_param|test/test_enum_variant_hint|\
@@ -70,7 +70,7 @@ test_category() {
             ;;
         test/test_argparse|test/test_bytes|test/test_collection_is_empty|\
         test/test_collection_reclamation|test/test_destruction|test/test_file|test/test_heap_allocator|\
-        test/test_iterator_combinators|test/test_json|test/test_list_contains|\
+        test/test_iterator_combinators|test/test_json|test/test_list_contains|test/test_list_iteration|\
         test/test_map_iter|test/test_parser_borrows|test/test_set_iter|\
         test/test_slice|test/test_sorting|test/test_storage_invariants|test/test_string_iteration|\
         test/test_string_utilities|runtime_error/*)
