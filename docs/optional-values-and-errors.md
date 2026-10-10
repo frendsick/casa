@@ -14,6 +14,11 @@ Reference tables abbreviate library type names and list inputs in consumption
 order. Source examples use qualified names. See [reference notation](notation.md)
 for signatures, fragments, and commands for running complete examples.
 
+`Option[T]` implements Copy when `T: Copy`. `Result[T E]` implements Copy when
+both `T` and `E` satisfy Copy. Owned callable payloads remain affine because
+they can own capture environments. Non-Copy instances move by default. Clone
+remains available when the payload types implement Clone.
+
 ## Option
 
 `Option[T]` represents a value that can be present or absent. It is defined as

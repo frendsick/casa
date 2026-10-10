@@ -97,9 +97,11 @@ Use `derives Eq`, `derives Ord`, or `derives Hashable` to opt in. Plain enums
 have no implicit comparison or hashing implementation. See the
 [derivation rules](traits.md#derive-standard-traits).
 
-Only payload-free enums can currently derive `Copy`. Payload enums use managed
-indirection and can derive `Clone` for explicit independent duplication. For
-custom Clone behavior, omit the derive and write an explicit implementation. See
+Enums can derive `Copy` when every owned payload field is Copy and all stored
+borrows are shared. Payload enums then copy the complete tag and payload into
+independent storage. Generic conformance follows the payload bounds. Enums with
+owned non-Copy payloads can derive `Clone` for explicit duplication. For custom
+Clone behavior, omit the derive and write an explicit implementation. See
 [Copy and Clone](traits.md#copy-and-clone).
 
 See [examples/enum.casa](../examples/enum.casa) for more runnable examples.

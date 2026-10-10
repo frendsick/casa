@@ -44,7 +44,7 @@ test_category() {
         test/test_lsp|test/test_workspace|test/test_module_identity|test/test_modules|test/test_qualified_import)
             echo compiler_integration
             ;;
-        test/test_closure_ownership|test/test_copy_clone|test/test_returned_borrow_sources|\
+        test/test_closure_ownership|test/test_copy_aggregates|test/test_copy_clone|test/test_returned_borrow_sources|\
         test/test_for_owned_item|test/test_owned_contexts|test/test_scope)
             echo types_ownership
             ;;

@@ -994,6 +994,23 @@ pub fn trait_impl_constraints_hold
     bindings:mut$std::Map[std::String common::Type]
     store:$common::SymbolStore
 -> bool {
+    if
+        common::STD_COPY_TRAIT trait_impl
+            .trait_bound
+            .name
+            .as_str ==
+    then
+        bindings trait_impl.receiver.substitute_t = receiver
+        if receiver.has_unresolved_type_var ! then
+            if receiver.clone common::Type::Generic(generic) is then
+                if generic.base store.structs.has generic.base store.enums.has || then
+                    if store receiver common::type_has_copy_layout ! then
+                        false return
+                    fi
+                fi
+            fi
+        fi
+    fi
     for
         type_variable in trait_impl
             .trait_bounds
@@ -1180,6 +1197,74 @@ pub fn type_has_satisfying_trait_impl
     false
 }
 
+# Resolve conditional aggregate conformance while its arguments are still symbolic.
+# The caller's bounds justify type variables. Concrete queries keep the usual path.
+pub fn type_has_satisfying_trait_impl_with_bounds
+    receiver:$common::Type
+    trait_type:$common::Type
+    bounds:$std::Map[std::String std::List[common::TraitBound]]
+    store:$common::SymbolStore
+-> bool {
+    if receiver.has_unresolved_type_var ! then
+        store trait_type receiver type_has_satisfying_trait_impl return
+    fi
+    if receiver common::Type::TypeVar(name) is then
+        if name bounds.get std::Option::Some(declared) is then
+            for bound in declared.iter do
+                if store trait_type bound common::trait_bound_to_type trait_type_implies then
+                    true return
+                fi
+            done
+        fi
+        false return
+    fi
+    if receiver.is_borrow then
+        false return
+    fi
+    if common::STD_COPY_TRAIT trait_type.match_base.as_str == then
+        if receiver.array_element_type std::Option::Some(element) is then
+            store bounds trait_type element type_has_satisfying_trait_impl_with_bounds return
+        fi
+    fi
+    for implementation in receiver store.get_trait_impl_candidates_for_receiver do
+        std::Map[std::String common::Type]::new = bindings
+        if bindings receiver implementation.receiver bind_trait_impl_type ! then
+            continue
+        fi
+        bindings implementation.trait_bound resolve_trait_impl_bound = implemented
+        if store trait_type implemented trait_type_implies ! then
+            continue
+        fi
+        if store bounds bindings implementation trait_constraints_hold_with_bounds then
+            true return
+        fi
+    done
+    false
+}
+
+fn trait_constraints_hold_with_bounds
+    implementation:$common::TraitImpl
+    bindings:mut$std::Map[std::String common::Type]
+    bounds:$std::Map[std::String std::List[common::TraitBound]]
+    store:$common::SymbolStore
+-> bool {
+    for entry in implementation.trait_bounds.iter do
+        if entry.first bindings.remove std::Option::Some(argument) is then
+            for bound in entry.second.iter do
+                bindings bound resolve_trait_impl_bound = required
+                if store bounds required argument type_has_satisfying_trait_impl_with_bounds ! then
+                    argument.clone entry.first.clone bindings.set
+                    false return
+                fi
+            done
+            argument.clone entry.first.clone bindings.set
+        else
+            false return
+        fi
+    done
+    true
+}
+
 pub fn find_implied_trait_type
     direct:$common::Type
     trait_name:$str
@@ -1314,6 +1399,41 @@ pub fn does_trait_bound_match_qualifier
     true
 }
 
+fn resolve_conditional_method_semantics
+    method_name:$str
+    receiver:$common::Type
+    qualifier:$common::Type
+    function:$common::Function
+    store:$common::SymbolStore
+-> std::Option[MethodSemantics] {
+    if receiver.has_unresolved_type_var ! then
+        std::Option[MethodSemantics]::None return
+    fi
+    if
+        store function.stack_effect.trait_bounds qualifier receiver type_has_satisfying_trait_impl_with_bounds !
+    then
+        std::Option[MethodSemantics]::None return
+    fi
+    qualifier match
+        common::Type::Generic(generic) => generic
+        _ => std::Option[MethodSemantics]::None return
+    end = generic
+    generic.base store.traits.get match
+        std::Option::Some(casa_trait) => casa_trait
+        _ => std::Option[MethodSemantics]::None return
+    end = casa_trait
+    store casa_trait method_name find_semantic_trait_method match
+        std::Option::Some(method) => method
+        _ => std::Option[MethodSemantics]::None return
+    end = method
+    generic.params.clone generic.base.clone common::TraitBound = bound
+    casa_trait bound make_bound_substitutions = substitutions
+    receiver method.stack_effect common::resolve_trait_stack_effect = effect
+    substitutions effect common::apply_type_subs_to_stack_effect = effect
+    effect method_name.to_str qualifier.clone std::Option::Some generic.base.clone std::String::new
+    MethodSemanticsKind::TraitBound make_method_semantics std::Option::Some
+}
+
 pub fn resolve_bound_method_semantics
     method_name:$str
     receiver:$common::Type
@@ -1321,6 +1441,12 @@ pub fn resolve_bound_method_semantics
     function:$common::Function
     store:$common::SymbolStore
 -> std::Option[MethodSemantics] {
+    if qualifier std::Option::Some(required) is then
+        store function required receiver method_name resolve_conditional_method_semantics = conditional
+        if conditional.is_some then
+            conditional return
+        fi
+    fi
     receiver.clone = receiver_pattern
     if receiver_pattern common::Type::TypeVar(type_variable) is then
         if
