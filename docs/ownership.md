@@ -68,8 +68,11 @@ fn replace_both left:mut$Person right:mut$Person { }
 
 ## Return a borrow
 
-A returned borrow keeps each compatible borrowed input loaned until its last
-use. The caller cannot know which input supplied an opaque result:
+A returned borrow keeps its possible source inputs loaned until its last use.
+Casa infers those sources from every returning path in the function body.
+Each output has its own source summary. An aggregate output keeps the union
+of the dependencies of its contents. In this example, either input can supply
+the result:
 
 ```casa
 struct Person {
@@ -91,6 +94,25 @@ selected.age print
 person drop
 other drop
 ```
+
+A function that always returns `first` keeps only that input loaned. The same
+summary applies to `&function = callback` followed by `callback exec`, including
+a function value moved to another binding. If a branch can select different
+functions, the result retains all their possible sources.
+
+An explicit type such as `= callback:fn[$Person $Person -> $Person]` uses a
+general contract. It keeps both compatible inputs loaned even when the selected
+function returns only the first. Function parameters and outputs with explicit
+`fn[...]` types have the same limit. Calls checked only against trait requirements
+also use conservative sources. A concrete implementation can use its checked
+summary. Recursive call cycles retain conservative sources.
+
+Inferred sources are part of the public borrowing contract. Adding a source in
+a function body can break callers without changing its written signature.
+Hovers show output sources by input position, with input 1 at the top of the
+stack. Calls still keep each selected source loaned as a complete owner.
+See [the lookup example](../examples/borrow_lookup.casa) for reuse of a temporary
+key while a returned value remains live.
 
 A function cannot return a borrow of a local owner. The diagnostic identifies
 the local owner that would escape.

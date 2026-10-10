@@ -394,7 +394,7 @@ _Avoid_: Release lint, tag lint
 - Float parsing is locale-independent and returns ordinary Option. Formatting emits shortest same-width round-trippable decimal text, preserves negative zero, and canonicalizes special-value spellings without preserving NaN payloads.
 - Custom destruction is the reserved inherent `drop` method, not a trait implementation. It is compiler-invoked, cannot be called directly, and makes the type non-`Copy`.
 - Borrow types use prefix sigils: `T` is owned, `$T` is shared, and `mut$T` is exclusive. Receivers use `self`, `$self`, and `mut$self` respectively.
-- A returned borrow is conservatively tied to every compatible borrowed input. Casa exposes no named lifetime syntax initially.
+- Each returned borrow uses the sources inferred for that output from the checked body. Named calls and inferred function values retain these summaries. Explicit `fn[...]` contracts and abstract trait requirements use all compatible inputs. Casa exposes no named lifetime syntax.
 - Only constrained type variables appear in the bounds prefix. Unbounded type variables that appear in stack types are not repeated there.
 - Unbounded type variables should not use a bracket prefix in **Stack effect** notation. Write `T -> T T`, not `[T] T -> T T`.
 - A **Function type** contains a **Stack effect** inside `fn[...]`. The whole `fn[...]` form is not called a signature.
