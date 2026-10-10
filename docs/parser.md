@@ -171,9 +171,14 @@ integer and quoted-literal parsers restore their starting position on failure.
 `parse_escape` accepts `\n`, `\t`, `\r`, `\0`, `\\`, `\"`, `\'`, `\{`, and
 `\}`. It does not implement the compiler's `\xNN` and `\u{...}` escapes.
 
-`str_to_int` assumes decimal digits with an optional leading minus sign. It
-does not validate syntax or range and uses wrapping arithmetic. `parse_int`
-checks for digits, but its accumulation still wraps. Negating the resulting
-minimum `i64` value can terminate on overflow rather than return `ParseError`.
+`parse_int` accepts an optional minus sign followed by decimal digits in the
+complete `i64` range. It stops before the first non-digit. Missing digits and
+overflow return `ParseError` at the starting position and restore the cursor.
+
+`str_to_int` is a wrapping conversion for callers that already validated decimal
+syntax. It does not check range. The compiler uses it to retain integer-literal
+bits, including values above the `i64` maximum that can fit `u64`. Use
+`str.to_int` for a checked complete token or `parse_int` for a checked cursor
+prefix.
 
 See [examples/parser.casa](../examples/parser.casa) for a runnable parser.

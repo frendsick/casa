@@ -69,7 +69,8 @@ After `import "std"`, these `i64` helpers are available:
 fn abs self:$i64 -> i64
 ```
 
-Returns the absolute value.
+Returns the absolute value. The minimum `i64` has no positive `i64`
+counterpart, so taking its absolute value terminates the program.
 
 ### i64::clamp
 
@@ -77,7 +78,10 @@ Returns the absolute value.
 fn clamp self:$i64 lo:i64 hi:i64 -> i64
 ```
 
-Returns the value limited to the inclusive range.
+Returns `lo` below the inclusive range, `hi` above it, and the input within it.
+Equal bounds are valid. `lo > hi` terminates the program.
+
+Call: `hi lo value.clamp`.
 
 ### i64::max
 
@@ -101,7 +105,11 @@ Returns the smaller value.
 fn pow self:$i64 exp:i64 -> i64
 ```
 
-Raises the integer to the given exponent.
+Raises the integer to a nonnegative exponent. A zero exponent returns `1`,
+including for a zero base. A negative exponent or arithmetic overflow
+terminates the program.
+
+Call: `exponent value.pow`.
 
 ### Arithmetic examples
 

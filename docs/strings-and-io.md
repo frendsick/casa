@@ -421,16 +421,15 @@ Parses a 64-bit decimal floating-point value.
 fn to_int self:$str -> Option[i64]
 ```
 
-Parses a signed decimal integer.
-
-Digit accumulation and negation use wrapping arithmetic. An out-of-range
-integer can return a wrapped value rather than `Option::None`.
+Parses decimal digits with an optional leading minus sign across the complete
+`i64` range, including `-9223372036854775808`. Empty, malformed, or out-of-range
+input returns `Option::None`. A leading plus sign and whitespace are rejected.
 
 ### Parsing example
 
-Malformed input returns `Option::None`. Integer parsing does not ignore
-whitespace, so call `trim` first when needed. Floating-point parsing accepts
-decimal exponents, signed zero, `inf`, `-inf`, and `NaN`. Finite decimal text
+Call `trim` before integer parsing when surrounding whitespace is allowed.
+Floating-point parsing accepts decimal exponents, signed zero, `inf`, `-inf`,
+and `NaN`. Finite decimal text
 rounds to the nearest value of the target width, with ties rounded to even.
 
 ```casa
