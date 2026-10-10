@@ -70,6 +70,11 @@ fn at s:$str index:u64 -> char
 ```
 
 Returns the byte at `index`, represented as `char`.
+The index must be less than the byte length. An out-of-range index terminates
+the program. This operation does not decode UTF-8: the two bytes of `ä` yield
+codepoints `195` and `164`. Use `iter` to read Unicode scalar values.
+
+Call: `index text.at`. `String.at` has the same bounds and byte semantics.
 
 ### str::concat
 
@@ -77,7 +82,7 @@ Returns the byte at `index`, represented as `char`.
 fn concat b:$str a:$str -> String
 ```
 
-Returns owned text containing both inputs.
+Copies `a`, then `b`, into owned text. Call: `first second str::concat`.
 
 ### str::contains
 
@@ -109,7 +114,8 @@ Compares text content for equality. `==` is the usual form.
 fn find needle:$str s:$str -> i64
 ```
 
-Returns the first matching byte index, or `-1` when no match exists.
+Returns the first matching byte index, or `-1` when no match exists. An empty
+needle matches at byte index `0`. Call: `text needle str::find`.
 
 ### str::is_empty
 
@@ -151,10 +157,12 @@ Call: `2 "abc".repeat`, producing `abcabc`.
 fn replace old:$str new_str:$str s:$str -> String
 ```
 
-Replaces all matches.
+Copies the input and replaces non-overlapping matches from left to right.
+Inserted text is not searched again. No match returns an unchanged copy.
+An empty search string terminates the program. An empty replacement removes
+matches.
 
-Current limitation: the implementation does not exit its loop when no match
-remains. `str::replace` does not terminate, including when the input has no matches.
+Call: `text replacement search str::replace`.
 
 ### str::reverse
 
@@ -174,8 +182,9 @@ Copies the parts separated by `delimiter` into a list of owned strings.
 
 Call: `"a,b,c" "," str::split`.
 
-The delimiter must be nonempty. An empty delimiter does not advance the scan,
-so the current implementation does not terminate.
+Leading, adjacent, and trailing delimiters produce empty parts. An empty input
+produces one empty part. A nonempty input with no match produces one part
+containing the complete input. An empty delimiter terminates the program.
 
 ### str::starts_with
 
