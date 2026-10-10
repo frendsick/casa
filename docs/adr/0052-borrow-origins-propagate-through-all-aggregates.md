@@ -1,5 +1,5 @@
 # Borrow origins propagate through all aggregates
-status: amended by [ADR-0158](0158-copy-requires-a-raw-value-representation.md)
+status: amended by [ADR-0158](0158-copy-requires-a-raw-value-representation.md) and [ADR-0175](0175-returned-borrow-sources-are-inferred-from-checked-bodies.md)
 
 Every struct and enum may contain shared or exclusive borrows. The compiler propagates the contained origin sets through construction, field access, patterns, calls, and returns. An aggregate cannot outlive any owner from which one of its borrows originates.
 
@@ -14,8 +14,15 @@ fn view_pair [T] first:$T second:$T -> View[T] {
 }
 ```
 
-The returned `View[T]` is conservatively tied to both compatible inputs. Returning an aggregate containing a borrow of a local owner is rejected. A contained exclusive borrow makes the aggregate non-`Copy`. Shared-borrow fields follow the ordinary structural `Copy` eligibility rules.
+The returned `View[T]` contains borrows from both inputs, so both remain loaned.
+For named calls, checked bodies determine the sources of returned aggregates
+under ADR-0175. General, explicitly written `fn[...]` contracts and trait
+requirements retain all compatible sources under ADR-0046. Returning an
+aggregate containing a borrow of a local owner is rejected. A contained
+exclusive borrow makes the aggregate non-`Copy`. Shared-borrow fields follow
+the ordinary structural `Copy` eligibility rules.
 
 `Option[$T]`, `Result[$T E]`, and user-defined aggregates use exactly the same mechanism. `Option` and `Result` remain ordinary library enums with no compiler-known ownership behavior. Because Map access returns `Option[$T]` and `Option[mut$T]`, restricting other aggregates would add a special case without removing the need for aggregate origin tracking.
 
-Function-local origin sets and the conservative returned-borrow rule require no named lifetime parameters.
+Function-local origin sets and returned-borrow source inference require no named
+lifetime parameters.

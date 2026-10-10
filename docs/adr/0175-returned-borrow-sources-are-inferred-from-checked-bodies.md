@@ -3,7 +3,10 @@
 Casa infers a source summary for each output from the checked function body.
 The summary includes every returning path, including early returns. An aggregate
 output keeps the union of the dependencies of its contents. Separate outputs
-have separate summaries. This amends [ADR-0046](0046-returned-borrows-use-all-compatible-inputs.md).
+have separate summaries. This amends
+[ADR-0013](0013-affine-ownership-with-automatic-storage.md),
+[ADR-0046](0046-returned-borrows-use-all-compatible-inputs.md), and
+[ADR-0052](0052-borrow-origins-propagate-through-all-aggregates.md).
 
 Named calls and function values with inferred types retain these summaries.
 Moving a function value or selecting between function values preserves every
