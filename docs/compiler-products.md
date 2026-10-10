@@ -47,9 +47,10 @@ Native failures do not consume or change the report.
 `AssemblySource`, an output path, and ordered native library names. The default
 driver is `/usr/bin/cc`. One invocation assembles and links with `-nostdlib`,
 `-no-pie`, `-Wl,-e,_start`, and `-Wl,-z,noexecstack`. Tool diagnostics inherit
-the caller's stderr. The adapter returns `Result[bool BuildFailure]` with `true`
-on success. Write, launch, wait, nonzero exit, and signal failures return to the
-caller. Only the forked child exits after an unsuccessful `execve`.
+the caller's stderr. The adapter returns `Result[std::Unit BuildFailure]` with
+`std::Unit::Value` on success. Write, launch, wait, nonzero exit, and signal
+failures return to the caller. Only the forked child exits after an unsuccessful
+`execve`.
 
 The fixed Linux runtime code and data are embedded from `compiler/runtime.casa`.
 Program-specific pools and bodies remain generated. Installed compilers need no

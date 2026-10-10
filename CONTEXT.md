@@ -4,6 +4,12 @@ Casa is a self-hosted programming language and compiler. Its glossary captures p
 
 ## Standard library
 
+**Unit**:
+A value with one possible state, constructed with `std::Unit::Value`. A
+`Result[std::Unit E]` represents a fallible operation without a success payload.
+Unit is an ordinary value and remains distinct from an empty output stack.
+_Avoid_: Void, empty result, zero-sized value
+
 **OS byte value**:
 An owned `Bytes` value from a Linux interface that does not guarantee UTF-8. It
 preserves the exact bytes until code validates them as text or borrows them as a

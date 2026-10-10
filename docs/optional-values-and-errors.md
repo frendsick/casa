@@ -282,6 +282,46 @@ its owner available. Every other method in the table consumes the result. A
 consuming call [moves](ownership.md#move-a-value) the owner and transfers or destroys each owned payload
 exactly once.
 
+## Unit success values
+
+`std::Unit` has one variant, `std::Unit::Value`, and derives `Eq` and `Copy`.
+Use `Result[std::Unit E]` when success has no meaningful payload. Construct a
+successful result with `std::Unit::Value std::Result::Ok`.
+
+Unit is an ordinary value. It can be a generic type argument or a callback
+result such as `fn[-> std::Unit]`. That callback produces one value. A callback
+with an empty output stack has type `fn` and cannot replace it.
+
+```casa
+import "std"
+import "os"
+
+fn write_note path:$cstr -> std::Result[std::Unit os::IoError] {
+    "note" std::Bytes::from_str path file::write_all ? drop
+    std::Unit::Value std::Result::Ok
+}
+
+"notes.txt".as_cstr.unwrap write_note match
+    std::Result::Ok(unit) => unit drop
+    std::Result::Error(error) => error.to_str print
+end
+```
+
+On success, `?` puts the Unit value on the stack. Use `? drop` to discard it
+and continue. On failure, `?` preserves the error and returns immediately.
+The existing Result ownership and cleanup rules apply to both paths.
+Use `.unwrap drop` when failure should terminate the program, or match `Ok(unit)`
+and discard `unit` when handling both outcomes explicitly. Use `Ok(_)` when the
+success arm does not need the value.
+
+Payload-free APIs that previously returned `Result[bool E]` with `Ok(true)`
+now return `Result[std::Unit E]` with `Ok(std::Unit::Value)`. This includes
+`dir::change`, `dir::create`, `dir::remove`, `file::remove`, `file::write_all`,
+and native compiler builds. Update explicit result types and replace checks of
+the unwrapped boolean with a success match or `.unwrap drop`. Calls that already
+use `? drop`, `.unwrap drop`, or `Ok(_)` need no change. Meaningful boolean
+results, such as JSON boolean parsing, still use `Result[bool E]`.
+
 ## Propagate with `?`
 
 Inside a function, `?` unwraps `Some` or `Ok`. On `None` or `Error`, it returns

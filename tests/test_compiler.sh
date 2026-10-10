@@ -65,7 +65,7 @@ test_category() {
             echo language_control_flow
             ;;
         test/test_argv|test/test_compare|test/test_enum|\
-        test/test_native_lowering|test/test_numeric_types|test/test_struct_literal|test/test_typeof)
+        test/test_native_lowering|test/test_numeric_types|test/test_struct_literal|test/test_typeof|test/test_unit)
             echo language_values
             ;;
         test/test_argparse|test/test_bytes|test/test_collection_is_empty|\
