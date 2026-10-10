@@ -20,7 +20,7 @@ Run complete examples from the repository root with
 | [Map](#maps) | Key-value lookup |
 | [RawBuffer](#raw-buffers) | Untyped allocation for low-level code |
 | [Set](#sets) | Unique values |
-| [Slice](#slices) | Borrowed list range |
+| [Slice](#slices) | Borrowed sequence range |
 | [String](strings-and-io.md#owned-strings) | Growable UTF-8 text |
 
 ## Arrays
@@ -38,12 +38,22 @@ import "std"
 
 | Method | Signature | Description |
 |---|---|---|
+| [as_slice](#arrayt-nas_slice) | `fn as_slice [T const N:u64] self:$array[T N] -> Slice[T]` | Borrowed view of the complete array |
 | [clone](#arrayt-nclone) | `fn clone self:$array[T N] -> array[T N]` | Independent array when `T: Clone` |
 | [contains](#arraystr-ncontains) | `fn contains [const N:u64] self:$array[str N] needle:$str -> bool` | Whether a string array contains `needle` |
 | [is_empty](#arrayt-nis_empty) | `fn is_empty [T const N:u64] self:$array[T N] -> bool` | Whether `N` is zero |
 | [iter](#arrayt-niter) | `fn iter [T const N:u64] self:$array[T N] -> Iter[$T]` | Iterator over borrows of the elements |
 | [length](#arrayt-nlength) | `fn length [T const N:u64] self:$array[T N] -> u64` | Number of elements, which is `N` |
 | [nth](#arrayt-nnth) | `fn nth [T const N:u64] self:$array[T N] index:u64 -> $T` | Borrow of the element at a zero-based index |
+| [slice](#arrayt-nslice) | `fn slice [T const N:u64] self:$array[T N] start:u64 stop:u64 -> Slice[T]` | Borrowed half-open range `[start, stop)` |
+
+### array[T N]::as_slice
+
+```text
+fn as_slice [T const N:u64] self:$array[T N] -> Slice[T]
+```
+
+Borrows the complete array as a [runtime-length view](#slices).
 
 ### array[T N]::clone
 
@@ -94,6 +104,15 @@ fn nth [T const N:u64] self:$array[T N] index:u64 -> $T
 Returns a [shared borrow](ownership.md#borrow-for-a-call) of the element at a zero-based index. An out-of-range index
 terminates the program. The source keeps ownership of the element.
 
+### array[T N]::slice
+
+```text
+fn slice [T const N:u64] self:$array[T N] start:u64 stop:u64 -> Slice[T]
+```
+
+Borrows `[start, stop)`. Requires `start <= stop <= N`. An invalid range terminates
+the program. Call: `stop start values.slice`.
+
 ### Array storage and ownership
 
 An array value is its element storage: it carries no length word, and `.length`
@@ -143,14 +162,26 @@ reserved `drop` method runs its hook once, when the array is destroyed. Use
 
 ## Slices
 
-`Slice[T]` is a borrowed runtime-length range over a `List[T]`:
+`Slice[T]` is a borrowed runtime-length view over contiguous elements. Arrays and
+lists supply `Slice[T]`, and `Bytes` supplies `Slice[u8]`. One function can process
+all sources of the same element type without copying elements or changing owners:
 
 ```casa
 import "std"
 
-[10, 20, 30, 40] std::List::from_array = numbers
+fn total values:$std::Slice[i64] -> i64 {
+    0 = sum
+    for value in values.iter do
+        value copy += sum
+    done
+    sum
+}
+
+[10, 20, 30, 40] = numbers
 4 1 numbers.slice = middle
-0 middle.nth print # 20
+middle total print # 90
+[10, 20, 30] std::List::from_array = list
+list.as_slice total print # 60
 ```
 
 | Method | Signature | Description |
@@ -159,6 +190,7 @@ import "std"
 | [iter](#slicetiter) | `fn iter self:$Slice[T] -> Iter[$T]` | Iterator over borrows of the elements |
 | [length](#slicetlength) | `fn length self:$Slice[T] -> u64` | Number of elements in the view |
 | [nth](#slicetnth) | `fn nth self:$Slice[T] index:u64 -> $T` | Borrow of the element at a zero-based index |
+| [slice](#slicetslice) | `fn slice self:$Slice[T] start:u64 stop:u64 -> Slice[T]` | Borrowed subrange `[start, stop)` |
 
 ### Slice[T]::is_empty
 
@@ -193,11 +225,45 @@ fn nth self:$Slice[T] index:u64 -> $T
 Returns a shared borrow of the element at a zero-based index. An out-of-range index
 terminates the program. The source keeps ownership of the element.
 
+### Slice[T]::slice
+
+```text
+fn slice self:$Slice[T] start:u64 stop:u64 -> Slice[T]
+```
+
+Borrows a subrange relative to this view. Requires `start <= stop <= self.length`.
+An invalid range terminates the program. Call: `stop start view.slice`. Equal
+bounds produce an empty view, including at the end of the source. Empty views
+have length zero and yield no elements. Indexing an empty view terminates.
+
 ### Slice ownership
 
-A slice contains a borrow of its source list. It does not own or destroy the
-elements. The list stays loaned until the slice's last use. `List::as_slice`
-returns a slice over the complete list.
+Construct views with `as_slice` or `slice` on an array, a list, or `Bytes`.
+Construction checks the range and retains a shared borrow of the source owner.
+A slice does not own, copy, or destroy elements. A source remains loaned through
+subranges, element borrows, iterators, and aggregates containing a returned view.
+This also applies to empty views. Safe code cannot mutate, move, or destroy a
+loaned source. The loan ends after the last use of its dependent values.
+
+`Slice[T]` is `Copy`, including when `T` is not `Copy`. Copies retain the source
+borrow and do not copy elements. View construction and subranges use automatic
+descriptor storage without allocation. A subrange borrows its parent view, so
+that view must also remain live. Moving a view into an owned aggregate field or closure capture
+can allocate storage for the descriptor, without copying the elements.
+
+Views expose shared access only. `Bytes.iter` still yields copied `u8` values,
+while `Bytes.as_slice.iter` yields `$u8`. Mutable and consuming traversal are
+not part of this API.
+
+### Migration from list-specific slices
+
+Existing `List.slice`, `List.as_slice`, `Slice.length`, `Slice.is_empty`,
+`Slice.nth`, and `Slice.iter` calls keep their behavior. The former public
+`source`, `start`, and `size` fields are removed. Use `length` instead of `size`,
+`view.slice` for relative subranges, and `nth` or `iter` for element access.
+Construct a view with `stop start owner.slice` instead of a `Slice` struct literal
+or positional constructor. Keep the original owner separately when it is needed
+after the view's last use.
 
 ## Lists
 
@@ -216,6 +282,7 @@ removed. The [List reference](lists.md) covers list operations, including
 |---|---|---|
 | [append](#bytesappend) | `fn append self:mut$Bytes source:$Bytes` | Copy the source bytes onto the end |
 | [as_cstr](#bytesas_cstr) | `fn as_cstr self:$Bytes -> Option[$cstr]` | Borrow a NUL-terminated view if no byte is NUL |
+| [as_slice](#bytesas_slice) | `fn as_slice self:$Bytes -> Slice[u8]` | Borrowed view of all initialized bytes |
 | [capacity](#bytescapacity) | `fn capacity self:$Bytes -> u64` | Number of bytes available before growth |
 | [clone](#bytesclone) | `fn clone self:$Bytes -> Bytes` | Independent byte buffer |
 | [from_str](#bytesfrom_str) | `fn from_str source:$str -> Bytes` | Copy the text's UTF-8 bytes |
@@ -224,6 +291,7 @@ removed. The [List reference](lists.md) covers list operations, including
 | [length](#byteslength) | `fn length self:$Bytes -> u64` | Number of initialized bytes |
 | [new](#bytesnew) | `fn new -> Bytes` | Empty byte buffer |
 | [push](#bytespush) | `fn push self:mut$Bytes byte:u8` | Add one byte |
+| [slice](#bytesslice) | `fn slice self:$Bytes start:u64 stop:u64 -> Slice[u8]` | Borrowed byte range `[start, stop)` |
 | [to_raw_buffer](#bytesto_raw_buffer) | `fn to_raw_buffer self:$Bytes -> RawBuffer` | Independent allocation containing exactly `length` initialized bytes |
 | [to_str](#bytesto_str) | `fn to_str self:$Bytes -> Result[String Utf8Error]` | Validate and copy UTF-8 text |
 
@@ -242,6 +310,15 @@ fn as_cstr self:$Bytes -> Option[$cstr]
 ```
 
 Borrows a NUL-terminated view if no byte is NUL.
+
+### Bytes::as_slice
+
+```text
+fn as_slice self:$Bytes -> Slice[u8]
+```
+
+Borrows all initialized bytes as a [sequence view](#slices). The trailing NUL
+slot is outside the view.
 
 ### Bytes::capacity
 
@@ -307,6 +384,15 @@ fn push self:mut$Bytes byte:u8
 ```
 
 Adds one byte.
+
+### Bytes::slice
+
+```text
+fn slice self:$Bytes start:u64 stop:u64 -> Slice[u8]
+```
+
+Borrows `[start, stop)`. Requires `start <= stop <= self.length`. An invalid range
+terminates the program. Call: `stop start bytes.slice`.
 
 ### Bytes::to_raw_buffer
 
