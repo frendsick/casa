@@ -114,7 +114,12 @@ zero-length array occupies one byte. Borrowed fields remain one pointer.
 An inline field belongs to its containing storage. Borrowed access and patterns
 refer to that field directly. Moving an affine field out can allocate a
 standalone owner. Copy values use independent automatic storage, including for
-function results. Other top-level ordinary struct values remain heap-indirect.
+function results. A directly bound ordinary struct can also use function-local
+storage without implementing Copy when its uses prove that the storage cannot
+escape. This placement preserves custom destruction and field cleanup. Each
+function has a 4 KiB budget for these aggregate bodies. Loop iterations reuse
+their storage after cleanup. Uncertain uses, including ownership transfers,
+raw-pointer operations, captures, and ordinary borrowed calls, retain heap storage.
 Physical compatibility with C does not make ordinary structs eligible for native
 calls or give them a stable ABI. See [the struct example](../examples/struct.casa).
 

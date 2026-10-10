@@ -1,0 +1,306 @@
+# Function-local placement of affine aggregates. This pass uses checked storage
+# identities and cleanup obligations. It does not change ownership or layout.
+import "std" as std
+import "common" as common
+import "semantic_body" as semantic_body
+import "typechecker" as typechecker
+
+pub struct Candidate {
+    pub assignment:   i64
+    pub construction: i64
+    pub name:         std::String
+    pub drops:        std::List[i64]
+    pub typ:          common::Type
+}
+
+struct Analysis {
+    candidates:  std::List[Candidate]
+    rejected:    std::Set[std::String]
+    assignments: std::Map[std::String i64]
+    drops:       std::Map[std::String std::List[i64]]
+    checked:     $typechecker::CheckedProgram
+}
+
+fn collect_cleanups facts:$semantic_body::OperationFacts names:mut$std::Set[std::String] {
+    if facts.effects std::Option::Some(effects) is then
+        for event in effects.cleanups.iter do
+            event.storage_name.clone names.add
+        done
+    fi
+}
+
+# Only unconditional cleanup on the loop's fallthrough path certifies reuse.
+# Continue and break already carry the checker's cleanup for these scoped owners.
+fn collect_loop_cleanups body:$semantic_body::Body names:mut$std::Set[std::String] {
+    for node in body.get_nodes.iter do
+        node match
+            semantic_body::Node::Leaf(leaf) => names leaf.facts collect_cleanups
+            semantic_body::Node::Region(region) => {
+                names region.entry collect_cleanups
+                names region.body collect_loop_cleanups
+                names region.exit collect_cleanups
+            }
+            semantic_body::Node::Group(group) => {
+                names group.facts collect_cleanups
+                names group.body collect_loop_cleanups
+            }
+            semantic_body::Node::Conditional(conditional) => names conditional.exit collect_cleanups
+            semantic_body::Node::Match(match_body) => names match_body.exit collect_cleanups
+            _ => {
+            }
+        end
+    done
+}
+
+fn get_drop_identity node:$semantic_body::Node -> std::Option[i64] {
+    if node semantic_body::Node::Leaf(leaf) is then
+        if leaf.action semantic_body::Action::Primitive(kind _) is then
+            if kind semantic_body::PrimitiveKind::Drop == then
+                leaf.facts.identity std::Option::Some return
+            fi
+        fi
+    fi
+    std::Option[i64]::None
+}
+
+impl Analysis {
+    fn consider_construction
+        self:mut$Analysis
+        leaf:$semantic_body::Leaf
+        next:$semantic_body::Node
+        loop_cleanups:$std::Option[std::Set[std::String]]
+    {
+        leaf.action match
+            semantic_body::Action::Struct(_ typ) => typ.clone
+            semantic_body::Action::StructFields(_ typ) => typ.clone
+            semantic_body::Action::Enum(_ typ) => typ.clone
+            _ => return
+        end = typ
+        if typ self.checked.is_copy_aggregate then
+            return
+        fi
+        if
+            self.checked.get_store typ common::type_value_representation.unwrap common::VALUE_REPR_INDIRECT !=
+        then
+            return
+        fi
+        next match
+            semantic_body::Node::Leaf(leaf_assignment) => leaf_assignment
+            _ => return
+        end = assignment
+        assignment.action match
+            semantic_body::Action::Binding(kind binding _) => {
+                if kind semantic_body::BindingKind::AssignVar != then
+                    return
+                fi
+                if loop_cleanups std::Option::Some(names) is then
+                    if binding.storage_name names.has ! then
+                        return
+                    fi
+                fi
+                typ std::List[i64]::new binding.storage_name.clone leaf.facts.identity assignment.facts.identity Candidate self.candidates.push
+            }
+            _ => {
+            }
+        end
+    }
+
+    fn permits_accessor self:$Analysis call:$semantic_body::Callable -> bool {
+        # Checked accessor bodies contain only the receiver address conversion
+        # and one field operation. Source declaration metadata is already gone.
+        call.name.as_str self.checked.find_body match
+            std::Option::Some(value) => value
+            std::Option::None => false return
+        end = body
+        body.get_nodes = nodes
+        if 1 nodes.length != then
+            false return
+        fi
+        0 nodes.get match
+            semantic_body::Node::Region(value) => value
+            _ => false return
+        end = region
+        region.body.get_nodes = operations
+        if 2 operations.length != then
+            false return
+        fi
+        if 1 operations.get semantic_body::Node::Leaf(leaf) is then
+            leaf.action match
+                semantic_body::Action::StructMemberStore(_) => true return
+                semantic_body::Action::StructMemberProject(_ typ) => typ.is_borrow ! return
+                _ => {
+                }
+            end
+        fi
+        false
+    }
+
+    fn permits_use self:$Analysis next:$semantic_body::Node -> bool {
+        if next semantic_body::Node::Leaf(leaf) is then
+            leaf.action match
+                semantic_body::Action::Call(call) => call self.permits_accessor return
+                semantic_body::Action::Primitive(kind _) => kind semantic_body::PrimitiveKind::Drop == return
+                semantic_body::Action::PatternTest(variant _) => {
+                    # Tag tests expose no payload address and do not consume the owner.
+                    variant.bindings.is_empty return
+                }
+                _ => {
+                }
+            end
+        fi
+        false
+    }
+
+    fn record_drop self:mut$Analysis name:$std::String identity:i64 {
+        if name self.drops.get_mut std::Option::Some(drops) is then
+            identity drops.push
+        else
+            std::List[i64]::new = drops
+            identity drops.push
+            drops name.clone self.drops.set
+        fi
+    }
+
+    fn inspect_use
+        self:mut$Analysis
+        binding:$common::BindingReference
+        facts:$semantic_body::OperationFacts
+        next:$std::Option[$semantic_body::Node]
+    {
+        if next std::Option::Some(node) is then
+            if node self.permits_use facts.moves_owner ! && then
+                return
+            fi
+            if node get_drop_identity std::Option::Some(identity) is then
+                identity binding.storage_name self.record_drop
+                return
+            fi
+        fi
+        binding.storage_name.clone self.rejected.add
+    }
+
+    fn inspect_leaf
+        self:mut$Analysis
+        leaf:$semantic_body::Leaf
+        next:$std::Option[$semantic_body::Node]
+    {
+        leaf.action match
+            semantic_body::Action::Binding(kind binding typ) => {
+                # Only named owned aggregates can be construction candidates.
+                # Scalar and function bindings need no placement bookkeeping.
+                if typ common::Type::Generic(_) is ! then
+                    return
+                fi
+                if kind semantic_body::BindingKind::PushVar == then
+                    next leaf.facts binding self.inspect_use
+                elif binding.storage_name self.assignments.has then
+                    binding.storage_name.clone self.rejected.add
+                else
+                    leaf.facts.identity binding.storage_name.clone self.assignments.set
+                fi
+            }
+            semantic_body::Action::Closure(call) => {
+                call.name.as_str self
+                    .checked
+                    .get_store
+                    .get_function
+                    .unwrap = function
+                for capture in function.captures.iter do
+                    capture.name.as_str leaf.facts.resolve_storage_name self.rejected.add
+                done
+            }
+            _ => {
+            }
+        end
+    }
+
+    fn inspect_body
+        self:mut$Analysis
+        body:$semantic_body::Body
+        loop_cleanups:$std::Option[std::Set[std::String]]
+    {
+        body.get_nodes = nodes
+        0 = index: u64
+        for node in nodes.iter do
+            std::Option[$semantic_body::Node]::None = next
+            if index 1 + nodes.length > then
+                index 1 + nodes.get std::Option::Some = next
+            fi
+            if node semantic_body::Node::Leaf(leaf) is then
+                if next std::Option::Some(following) is then
+                    loop_cleanups following leaf self.consider_construction
+                fi
+                next leaf self.inspect_leaf
+            else
+                loop_cleanups node self.inspect_children
+            fi
+            1 += index
+        done
+    }
+
+    fn inspect_children
+        self:mut$Analysis
+        node:$semantic_body::Node
+        loop_cleanups:$std::Option[std::Set[std::String]]
+    {
+        node match
+            semantic_body::Node::Conditional(conditional) => {
+                for branch in conditional.branches.iter do
+                    loop_cleanups branch.condition self.inspect_body
+                    loop_cleanups branch.consequent self.inspect_body
+                done
+                if conditional.alternative std::Option::Some(alternative) is then
+                    loop_cleanups alternative.body self.inspect_body
+                fi
+            }
+            semantic_body::Node::Loop(loop) => {
+                std::Set[std::String]::new = names
+                names loop.exit collect_cleanups
+                names loop.body collect_loop_cleanups
+                names std::Option::Some = cleanups
+                cleanups loop.condition self.inspect_body
+                cleanups loop.body self.inspect_body
+            }
+            semantic_body::Node::Match(body) => {
+                for arm in body.arms.iter do
+                    loop_cleanups arm.guard self.inspect_body
+                    loop_cleanups arm.body self.inspect_body
+                done
+            }
+            semantic_body::Node::Region(region) => loop_cleanups region.body self.inspect_body
+            semantic_body::Node::Group(group) => loop_cleanups group.body self.inspect_body
+            semantic_body::Node::Array(array) => loop_cleanups array.body self.inspect_body
+            _ => {
+            }
+        end
+    }
+}
+
+# Unknown consumers, moves, aliases, and multiple assignments retain heap storage.
+# Expand this whitelist only when a measured workload justifies more lifetime facts.
+pub fn find_candidates
+    body:$semantic_body::Body
+    checked:$typechecker::CheckedProgram
+-> std::List[Candidate] {
+    checked std::Map[std::String std::List[i64]]::new std::Map[std::String i64]::new std::Set[std::String]::new
+    std::List[Candidate]::new Analysis = analysis
+    std::Option[std::Set[std::String]]::None body analysis.inspect_body
+    std::List[Candidate]::new = result
+    analysis.candidates.reverse
+    while analysis.candidates.is_empty ! do
+        analysis.candidates.pop = candidate
+        if candidate.name analysis.rejected.has then
+            continue
+        fi
+        if candidate.name analysis.assignments.get_copy std::Option::Some(identity) is then
+            if candidate.assignment identity != then
+                continue
+            fi
+            if candidate.name analysis.drops.remove std::Option::Some(drops) is then
+                drops = candidate.drops
+            fi
+            candidate result.push
+        fi
+    done
+    result
+}

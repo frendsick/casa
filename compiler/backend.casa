@@ -6,6 +6,7 @@ import "semantic_body" as semantic_body
 import "error" as error
 import "typechecker" as typechecker
 import "runtime" as runtime
+import "local_storage" as local_storage
 
 pub struct BytecodeFailure {
     pub message: std::String
@@ -22,10 +23,28 @@ pub enum AssemblyError {
 
 const ENUM_DISPATCH_MIN_ARMS 4
 const SHORT_COPY_LIMIT 64
+const LOCAL_AGGREGATE_BYTES: u64 4096
+
+enum Reclamation derives std::Copy {
+    Heap
+    Local
+}
+
+struct LocalAggregates {
+    constructions: std::Map[i64 u64]
+    owners:        std::Set[std::String]
+    drops:         std::Set[i64]
+}
+
+impl LocalAggregates {
+    fn new -> LocalAggregates {
+        std::Set[i64]::new std::Set[std::String]::new std::Map[i64 u64]::new LocalAggregates
+    }
+}
 
 enum FunctionWork {
     Checked(std::String)
-    Destruction(std::String common::Type)
+    Destruction(std::String common::Type Reclamation)
     ClosureDestruction(std::String std::String)
 }
 
@@ -52,14 +71,15 @@ struct LoopTargets {
 }
 
 struct FunctionPlanner {
-    loop_targets:  std::List[LoopTargets]
-    function:      std::Option[$common::Function]
-    local_slots:   std::Map[std::String u64]
-    capture_slots: std::Map[std::String u64]
-    locals_count:  u64
-    state:         mut$BackendPlanner
-    owner_flags:   std::Map[std::String u64]
-    result_slot:   std::Option[u64]
+    loop_targets:     std::List[LoopTargets]
+    function:         std::Option[$common::Function]
+    local_slots:      std::Map[std::String u64]
+    capture_slots:    std::Map[std::String u64]
+    locals_count:     u64
+    state:            mut$BackendPlanner
+    owner_flags:      std::Map[std::String u64]
+    result_slot:      std::Option[u64]
+    local_aggregates: LocalAggregates
 }
 
 struct ResolvedStructField {
@@ -123,6 +143,7 @@ impl BackendPlanner {
 impl FunctionPlanner {
     fn new state:mut$BackendPlanner -> FunctionPlanner {
         state.layouts state.checked state.store.variables index_root_variable_map = locals_count = local_slots
+        LocalAggregates::new
         std::Option[u64]::None
         std::Map[std::String u64]::new
         state
@@ -136,6 +157,7 @@ impl FunctionPlanner {
 
     fn for_function state:mut$BackendPlanner function:$common::Function -> FunctionPlanner {
         state.layouts state.checked function.variables index_local_variable_list = locals_count = local_slots
+        LocalAggregates::new
         std::Option[u64]::None
         std::Map[std::String u64]::new
         state
@@ -474,6 +496,49 @@ impl FunctionPlanner {
             .is_copy_aggregate
     }
 
+    fn emit_reclamation
+        self:mut$FunctionPlanner
+        reclamation:Reclamation
+        bytecode:mut$std::List[InstValue]
+    {
+        reclamation match
+            Reclamation::Heap => InstValue::HeapFree bytecode.push
+            Reclamation::Local => InstValue::Drop bytecode.push
+        end
+    }
+
+    fn prepare_local_aggregates self:mut$FunctionPlanner body:$semantic_body::Body {
+        self.state.checked body local_storage::find_candidates = candidates
+        0 = used_bytes: u64
+        for candidate in candidates.iter do
+            candidate.typ self
+                .state
+                .layouts
+                .inline_size
+                .unwrap = size
+            common::WORD_SIZE u64::try_from.unwrap = word_size
+            size word_size 1 - + word_size / word_size * = aligned
+            if LOCAL_AGGREGATE_BYTES used_bytes aligned + > then
+                continue
+            fi
+            size self.allocate_value_storage candidate.construction self
+                .local_aggregates
+                .constructions
+                .set
+            candidate.name.clone self
+                .local_aggregates
+                .owners
+                .add
+            for identity in candidate.drops.iter do
+                identity copy self
+                    .local_aggregates
+                    .drops
+                    .add
+            done
+            aligned += used_bytes
+        done
+    }
+
     fn compile_drop_hook
         compiler:mut$FunctionPlanner
         typ:$common::Type
@@ -539,6 +604,7 @@ impl FunctionPlanner {
         casa_struct:$common::CasaStruct
         skipped:mut$std::List[std::String]
         bytecode:mut$std::List[InstValue]
+        reclamation:Reclamation
     {
         casa_struct.type_vars typ common::aggregate_type_bindings = substitutions
         casa_struct.members.length = member_index
@@ -567,7 +633,7 @@ impl FunctionPlanner {
             fi
             bytecode plan member_type compiler.compile_field_destruction
         done
-        InstValue::HeapFree bytecode.push
+        bytecode reclamation compiler.emit_reclamation
     }
 
     fn compile_enum_variant_fields
@@ -577,6 +643,7 @@ impl FunctionPlanner {
         variant_name:$str
         skipped_count:u64
         bytecode:mut$std::List[InstValue]
+        reclamation:Reclamation
     {
         casa_enum.type_vars typ common::aggregate_type_bindings = substitutions
         if variant_name casa_enum.variant_types.get_str std::Option::Some(payload_types) is then
@@ -603,7 +670,7 @@ impl FunctionPlanner {
                 bytecode plan payload_type compiler.compile_field_destruction
             done
         fi
-        InstValue::HeapFree bytecode.push
+        bytecode reclamation compiler.emit_reclamation
     }
 
     fn compile_enum_fields
@@ -611,6 +678,7 @@ impl FunctionPlanner {
         typ:$common::Type
         casa_enum:$common::CasaEnum
         bytecode:mut$std::List[InstValue]
+        reclamation:Reclamation
     {
         compiler.allocate_local = enum_local
         enum_local InstValue::LocalSet bytecode.push
@@ -626,7 +694,7 @@ impl FunctionPlanner {
         for variant_name in casa_enum.variants.iter do
             variant_index labels.get copy InstValue::Label bytecode.push
             enum_local InstValue::LocalGet bytecode.push
-            bytecode 0 variant_name.as_str casa_enum typ compiler.compile_enum_variant_fields
+            reclamation bytecode 0 variant_name.as_str casa_enum typ compiler.compile_enum_variant_fields
             end_label InstValue::Jump bytecode.push
             1 += variant_index
         done
@@ -637,6 +705,7 @@ impl FunctionPlanner {
         compiler:mut$FunctionPlanner
         typ:$common::Type
         bytecode:mut$std::List[InstValue]
+        reclamation:Reclamation
     {
         if
             typ compiler
@@ -645,7 +714,7 @@ impl FunctionPlanner {
                 .has_plain_storage
         then
             bytecode typ compiler.compile_drop_hook
-            InstValue::HeapFree bytecode.push
+            bytecode reclamation compiler.emit_reclamation
             return
         fi
         typ compiler
@@ -667,7 +736,7 @@ impl FunctionPlanner {
                 typ common::get_array_length_parameter.unwrap = length
                 typ.array_element_type.unwrap = element_type
                 bytecode length element_type compiler.compile_array_destruction
-                InstValue::HeapFree bytecode.push
+                bytecode reclamation compiler.emit_reclamation
             }
             typechecker::CheckedShape::Struct => {
                 typ.match_base = name
@@ -678,7 +747,7 @@ impl FunctionPlanner {
                     .get
                     .unwrap = struct_declaration
                 std::List[std::String]::new = skipped
-                bytecode skipped struct_declaration typ compiler.compile_struct_fields
+                reclamation bytecode skipped struct_declaration typ compiler.compile_struct_fields
             }
             typechecker::CheckedShape::Enum => {
                 typ.match_base = name
@@ -689,7 +758,7 @@ impl FunctionPlanner {
                     .get
                     .unwrap = enum_declaration
                 if enum_declaration common::has_inner_values then
-                    bytecode enum_declaration typ compiler.compile_enum_fields
+                    reclamation bytecode enum_declaration typ compiler.compile_enum_fields
                 else
                     InstValue::Drop bytecode.push
                 fi
@@ -705,9 +774,18 @@ impl FunctionPlanner {
             .needs_destruction
     }
 
-    fn ensure_destruction_function compiler:mut$FunctionPlanner typ:$common::Type -> std::String {
+    fn ensure_destruction_function
+        compiler:mut$FunctionPlanner
+        typ:$common::Type
+        reclamation:Reclamation
+    -> std::String {
         typ.format = type_name
-        f"__drop_{type_name}" = function_name
+        # A separator outside source identifiers keeps local_Value's heap
+        # destructor distinct from Value's local destructor.
+        reclamation match
+            Reclamation::Heap => f"__drop_{type_name}"
+            Reclamation::Local => f"__drop_local {type_name}"
+        end = function_name
         if
             function_name compiler
                 .state
@@ -721,7 +799,7 @@ impl FunctionPlanner {
             .state
             .program
             .register_function
-        typ.clone function_name.clone FunctionWork::Destruction compiler
+        reclamation typ.clone function_name.clone FunctionWork::Destruction compiler
             .state
             .pending
             .push
@@ -729,9 +807,18 @@ impl FunctionPlanner {
     }
 
     fn compile_destruction
+        self:mut$FunctionPlanner
+        typ:$common::Type
+        bytecode:mut$std::List[InstValue]
+    {
+        Reclamation::Heap bytecode typ self.compile_destruction_in_storage
+    }
+
+    fn compile_destruction_in_storage
         compiler:mut$FunctionPlanner
         typ:$common::Type
         bytecode:mut$std::List[InstValue]
+        reclamation:Reclamation
     {
         if typ compiler.destruction_needs_function ! then
             InstValue::Drop bytecode.push
@@ -744,10 +831,10 @@ impl FunctionPlanner {
                 .has_plain_storage
         then
             bytecode typ compiler.compile_drop_hook
-            InstValue::HeapFree bytecode.push
+            bytecode reclamation compiler.emit_reclamation
             return
         fi
-        typ compiler.ensure_destruction_function = function_name
+        reclamation typ compiler.ensure_destruction_function = function_name
         function_name InstValue::FnCall bytecode.push
     }
 
@@ -770,7 +857,7 @@ impl FunctionPlanner {
             if generic.base store.enums.get std::Option::Some(owned_enum) is then
                 if owned_enum common::has_inner_values then
                     variant.bindings.length = skipped_count
-                    bytecode skipped_count variant.variant_name.as_str owned_enum typ
+                    Reclamation::Heap bytecode skipped_count variant.variant_name.as_str owned_enum typ
                     compiler.compile_enum_variant_fields
                     return
                 fi
@@ -806,7 +893,7 @@ impl FunctionPlanner {
                 if pattern_value common::PatternValue::Struct(struct_pattern) is then
                     struct_pattern.bindings.keys = skipped
                 fi
-                bytecode skipped owned_struct typ compiler.compile_struct_fields
+                Reclamation::Heap bytecode skipped owned_struct typ compiler.compile_struct_fields
                 return
             fi
             if generic.base store.enums.get std::Option::Some(owned_enum) is then
@@ -814,7 +901,7 @@ impl FunctionPlanner {
                     InstValue::Drop bytecode.push return
                 fi
                 if pattern_value common::PatternValue::EnumVariant(variant) is then
-                    bytecode owned_enum typ compiler.compile_enum_fields
+                    Reclamation::Heap bytecode owned_enum typ compiler.compile_enum_fields
                     return
                 fi
             fi
@@ -866,7 +953,16 @@ impl FunctionPlanner {
             return
         fi
         variable_name compiler.resolve_local InstValue::LocalGet bytecode.push
-        bytecode typ compiler.compile_destruction
+        if
+            variable_name compiler
+                .local_aggregates
+                .owners
+                .has_str
+        then
+            Reclamation::Local bytecode typ compiler.compile_destruction_in_storage
+        else
+            bytecode typ compiler.compile_destruction
+        fi
     }
 
     fn compile_active_owner_cleanup
@@ -1317,15 +1413,16 @@ impl FunctionPlanner {
         casa_struct:$common::CasaStruct
         typ:$common::Type
         bytecode:mut$std::List[InstValue]
+        local_slot:std::Option[u64]
     {
         if casa_struct.type_vars.is_empty ! typ compiler.is_copy_aggregate && then
             casa_struct typ common::copy_storage_struct = concrete
-            bytecode typ concrete compiler.compile_struct_new
+            local_slot bytecode typ concrete compiler.compile_struct_new
             return
         fi
         casa_struct.type_vars typ common::aggregate_type_bindings = substitutions
         casa_struct common::CasaStruct::members.length = count
-        bytecode typ compiler.emit_value_storage
+        local_slot bytecode typ compiler.emit_value_storage
         0 = index: u64
         while index count > do
             InstValue::Swap bytecode.push
@@ -1351,14 +1448,15 @@ impl FunctionPlanner {
         casa_enum:$common::CasaEnum
         typ:$common::Type
         bytecode:mut$std::List[InstValue]
+        local_slot:std::Option[u64]
     {
         if casa_enum.type_vars.is_empty ! typ compiler.is_copy_aggregate && then
             casa_enum typ common::copy_storage_enum = concrete
-            bytecode typ concrete variant compiler.compile_enum_variant
+            local_slot bytecode typ concrete variant compiler.compile_enum_variant
             return
         fi
         casa_enum.type_vars typ common::aggregate_type_bindings = substitutions
-        bytecode typ compiler.emit_value_storage
+        local_slot bytecode typ compiler.emit_value_storage
         InstValue::Dup bytecode.push
         compiler variant require_variant_ordinal InstValue::Push bytecode.push
         InstValue::Swap bytecode.push
@@ -1483,6 +1581,7 @@ impl FunctionPlanner {
         literal:$common::StructLiteral
         typ:$common::Type
         bytecode:mut$std::List[InstValue]
+        local_slot:std::Option[u64]
     {
         literal.struct_name store.structs.get = casa_struct_opt
         if casa_struct_opt.is_none then
@@ -1510,7 +1609,7 @@ impl FunctionPlanner {
             local_index InstValue::LocalSet bytecode.push
         done
 
-        bytecode typ compiler.emit_value_storage
+        local_slot bytecode typ compiler.emit_value_storage
 
         # Store each field at its correct offset
         0 = member_index: u64
@@ -1590,7 +1689,7 @@ impl FunctionPlanner {
         if 0 byte_count == then
             1 = byte_count: u64
         fi
-        bytecode typ compiler.emit_value_storage
+        std::Option[u64]::None bytecode typ compiler.emit_value_storage
         byte_count array_index InstValue::PushStaticArray bytecode.push
     }
 }
@@ -1631,7 +1730,7 @@ impl FunctionPlanner {
         # An array stores only its elements (ADR-0152), so the allocation
         # is exactly the element storage.
         self.allocate_local = list_local
-        bytecode array.typ self.emit_value_storage
+        std::Option[u64]::None bytecode array.typ self.emit_value_storage
         list_local InstValue::LocalSet bytecode.push
 
         # Store elements starting at offset 0
@@ -2091,13 +2190,16 @@ impl FunctionPlanner {
         self:mut$FunctionPlanner
         typ:$common::Type
         bytecode:mut$std::List[InstValue]
+        local_slot:std::Option[u64]
     {
         typ self
             .state
             .layouts
             .inline_size
             .unwrap = size
-        if typ self.is_copy_aggregate then
+        if local_slot std::Option::Some(slot) is then
+            slot InstValue::LocalAddress bytecode.push
+        elif typ self.is_copy_aggregate then
             size self.allocate_value_storage InstValue::LocalAddress bytecode.push
         else
             size i64::try_from.unwrap InstValue::Push bytecode.push
@@ -2398,7 +2500,18 @@ impl FunctionPlanner {
     {
         bytecode leaf.facts self.compile_facts
         leaf.action match
-            semantic_body::Action::Primitive(kind typ) => bytecode leaf.facts typ kind self.compile_primitive
+            semantic_body::Action::Primitive(kind typ) => {
+                if
+                    leaf.facts.identity self
+                        .local_aggregates
+                        .drops
+                        .has
+                then
+                    Reclamation::Local bytecode typ self.compile_destruction_in_storage
+                else
+                    bytecode leaf.facts typ kind self.compile_primitive
+                fi
+            }
             semantic_body::Action::Intrinsic(kind) => bytecode kind self.compile_intrinsic
             semantic_body::Action::Execute(typ owned) => bytecode owned typ self.compile_execute
             semantic_body::Action::IntoRaw(typ) => {
@@ -2444,7 +2557,10 @@ impl FunctionPlanner {
                         .get std::Option::Some(declaration) is
                 then
                     if declaration common::has_inner_values then
-                        bytecode typ declaration variant self.compile_enum_variant
+                        leaf.facts.identity self
+                            .local_aggregates
+                            .constructions
+                            .get_copy bytecode typ declaration variant self.compile_enum_variant
                     else
                         self variant require_variant_ordinal InstValue::Push bytecode.push
                     fi
@@ -2453,8 +2569,14 @@ impl FunctionPlanner {
                 fi
             }
             semantic_body::Action::PatternTest(variant typ) => bytecode leaf.facts typ variant self.state.store self.compile_is_check
-            semantic_body::Action::Struct(shape typ) => bytecode typ shape self.compile_struct_new
-            semantic_body::Action::StructFields(literal typ) => bytecode typ literal self.state.store self.compile_struct_literal
+            semantic_body::Action::Struct(shape typ) => leaf.facts.identity self
+                .local_aggregates
+                .constructions
+                .get_copy bytecode typ shape self.compile_struct_new
+            semantic_body::Action::StructFields(literal typ) => leaf.facts.identity self
+                .local_aggregates
+                .constructions
+                .get_copy bytecode typ literal self.state.store self.compile_struct_literal
             semantic_body::Action::ConstrainedCall(_) => "Deferred dispatch reached target planning" self.record_failure
             semantic_body::Action::ConstrainedClosure(_) => "Deferred dispatch reached target planning" self.record_failure
             semantic_body::Action::SizeOf(typ) => {
@@ -2491,7 +2613,7 @@ impl FunctionPlanner {
             semantic_body::Action::StructMemberStore(member typ) => bytecode typ member self.compile_member_store
             semantic_body::Action::DestructionFn(typ) => {
                 if typ self.destruction_needs_function then
-                    typ self.ensure_destruction_function InstValue::DropFn bytecode.push
+                    Reclamation::Heap typ self.ensure_destruction_function InstValue::DropFn bytecode.push
                 else
                     0 InstValue::Push bytecode.push
                 fi
@@ -2916,16 +3038,17 @@ fn plan_function
                 .unwrap = function
             name.as_str checked.find_body.unwrap = body
             function state FunctionPlanner::for_function = compiler
+            body compiler.prepare_local_aggregates
             compiler.new_label InstValue::Label output.push
             output compiler.begin_results
             output body compiler.compile_body
             output compiler.finish_results
             function.captures.length false compiler.owner_flags compiler.locals_count output finalize_frame FunctionPlan::new
         }
-        FunctionWork::Destruction(name typ) => {
+        FunctionWork::Destruction(name typ reclamation) => {
             common::empty_location name.clone common::Function::new = function
             function state FunctionPlanner::for_function = compiler
-            output typ compiler.compile_destruction_body
+            reclamation copy output typ compiler.compile_destruction_body
             0 false compiler.owner_flags compiler.locals_count output finalize_frame FunctionPlan::new
         }
         FunctionWork::ClosureDestruction(name lambda_name) => {
@@ -3164,6 +3287,7 @@ pub fn compile_checked
     done
     std::List[InstValue]::new = instructions
     state FunctionPlanner::new = compiler
+    checked.get_root compiler.prepare_local_aggregates
     compiler.new_label InstValue::Label instructions.push
     instructions checked.get_root compiler.compile_body
     true compiler.owner_flags compiler.locals_count instructions finalize_frame = root
@@ -3192,7 +3316,7 @@ pub fn compile_checked
         fi
         index state.pending.get match
             FunctionWork::Checked(value) => value.clone FunctionWork::Checked
-            FunctionWork::Destruction(value typ) => typ.clone value.clone FunctionWork::Destruction
+            FunctionWork::Destruction(value typ reclamation) => reclamation copy typ.clone value.clone FunctionWork::Destruction
             FunctionWork::ClosureDestruction(value lambda) => lambda.clone value.clone FunctionWork::ClosureDestruction
         end = current
         current state checked plan_function = body
