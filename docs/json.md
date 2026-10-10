@@ -44,7 +44,7 @@ implements an enum as a JSON string and rejects unknown variant names.
 | `Deserialize.from_json value:$JsonValue -> Result[self Error]` | Validate a borrowed tree and return an owned value. |
 | `serialize [T:Serialize] value:$T -> Result[String Error]` | Convert a value and emit compact JSON text. |
 | `deserialize [T:Deserialize] text:$str -> Result[T Error]` | Parse one complete document and convert its tree. |
-| `JsonValue.require_field self:$JsonValue key:$str -> Result[$JsonValue Error]` | Borrow a required object member or report its absence. |
+| `JsonValue.require_field self:$JsonValue key:$str -> Result[$JsonValue Error]` | Borrow a required object member or report its absence. The returned borrow depends on `self`, so the lookup key can be reused. |
 
 The signatures above use `std::Result` and `std::String`. Implement either trait
 or both. Neither conversion consumes its input. Deserialized strings and

@@ -1,30 +1,21 @@
 # Returned borrows use all compatible inputs
 
-When a function returns a borrow that may originate from more than one borrowed input, Casa permits the function without named lifetime syntax. The returned borrow is conservatively tied to every compatible borrowed input in the function contract.
+status: amended by [ADR-0175](0175-returned-borrow-sources-are-inferred-from-checked-bodies.md)
 
-```casa
-fn choose [T] condition:bool left:$T right:$T -> $T {
-    if condition then
-        left
-    else
-        right
-    fi
-}
-```
+General, explicitly written `fn[...]` contracts and calls checked only against
+trait requirements tie returned borrows to every compatible input. Shared
+results can use shared or exclusive inputs. Exclusive results require
+exclusive sources. Borrowed payloads carried by owned inputs and callable
+capture dependencies also remain live when the result can depend on them.
 
-At a call, every possible source owner must remain alive and cannot be mutably accessed until the returned shared borrow's last use. A mutable returned borrow similarly keeps every possible source exclusively loaned.
-
-## Considered options
-
-- Rejecting multiple possible sources keeps origin inference trivial, but forbids ordinary functions such as choosing the minimum of two borrowed values.
-- Named lifetime parameters express precise relationships, but add syntax and a lifetime-level generic system before conservative inference proves insufficient.
-- Inferring the exact returned source for each function implementation improves precision, but function values would need extra origin metadata and indirect calls would still need a conservative contract.
-- Tying the output to every compatible borrowed input is safe, syntax-free, and works uniformly for direct and indirect calls.
+Passing a callable through an explicit function type deliberately erases its
+inferred source precision. A known target or optimization cannot recover it.
+Ordinary named calls and function values with inferred types use the checked
+summaries defined in ADR-0175.
 
 ## Consequences
 
-- A returned borrow with one compatible input is tied to that input.
-- With multiple compatible inputs, all are considered possible sources even when a particular implementation always returns only one.
+- Abstract contracts need no source annotations or named lifetime parameters.
+- Each possible source must remain alive until the result's last use.
 - Returning a borrow derived from a local owner remains a compile-time error.
-- Function values use the same type-based conservative relationship and need no additional lifetime metadata.
-- More precise source annotations remain deferred until real code demonstrates that the conservative loans are too restrictive.
+- The complete-owner rule in [ADR-0108](0108-opaque-returned-borrows-keep-the-complete-input-loaned.md) still applies.

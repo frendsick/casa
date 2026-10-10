@@ -334,7 +334,9 @@ A plain `T` parameter consumes a value. `$T` requests shared access and
 automatically when the parameter requires it.
 
 See [Ownership and Borrows](ownership.md) for moves, reborrowing, returned
-borrows, and disjoint field borrows. [Closures](#lambdas-and-closures) below
+borrows, inferred return sources, and disjoint field borrows. An explicit
+`fn[...]` contract uses conservative return sources, including when a precise
+named function is assigned to it. [Closures](#lambdas-and-closures) below
 explain how captured values are owned.
 
 ## Lambdas and closures
