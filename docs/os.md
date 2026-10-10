@@ -19,6 +19,10 @@ for signatures, fragments, and commands for running complete examples.
 High-level file and directory operations return
 [Result[T IoError]](optional-values-and-errors.md#result).
 
+Operations without a success payload return `Ok(std::Unit::Value)`. See
+[Unit success values](optional-values-and-errors.md#unit-success-values) for
+propagation, matching, and migration from `Result[bool IoError]`.
+
 | Variant | Meaning |
 |---|---|
 | `IoError::AlreadyExists` | Target already exists |
@@ -41,9 +45,9 @@ Prefer the high-level functions:
 |---|---|
 | `file::exists path:$cstr -> bool` | Whether `stat` can find the path |
 | `file::read_all path:$cstr -> Result[Bytes IoError]` | Entire file contents |
-| `file::remove path:$cstr -> Result[bool IoError]` | Remove a file |
+| `file::remove path:$cstr -> Result[Unit IoError]` | Remove a file |
 | `file::stat path:$cstr -> Result[FileStat IoError]` | File metadata |
-| `file::write_all path:$cstr content:$Bytes -> Result[bool IoError]` | Create or replace a file |
+| `file::write_all path:$cstr content:$Bytes -> Result[Unit IoError]` | Create or replace a file |
 
 Handle the operation result directly. A separate existence check can become
 stale before the next file operation:
@@ -128,12 +132,12 @@ and removes a file and directory.
 
 | Function | Result |
 |---|---|
-| `dir::change path:$cstr -> Result[bool IoError]` | Change working directory |
-| `dir::create path:$cstr mode:i64 -> Result[bool IoError]` | Create a directory |
+| `dir::change path:$cstr -> Result[Unit IoError]` | Change working directory |
+| `dir::create path:$cstr mode:i64 -> Result[Unit IoError]` | Create a directory |
 | `dir::current -> Result[Bytes IoError]` | Current working directory |
 | `dir::exists path:$cstr -> bool` | Whether the path is a directory |
 | `dir::list path:$cstr -> Result[List[Bytes] IoError]` | Entry names without `.` or `..` |
-| `dir::remove path:$cstr -> Result[bool IoError]` | Remove an empty directory |
+| `dir::remove path:$cstr -> Result[Unit IoError]` | Remove an empty directory |
 
 The mode is a Linux permission value. For example, `493` is octal `0755`.
 
