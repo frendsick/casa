@@ -1,5 +1,7 @@
 # Constants use bounded target-independent expressions
 
+status: amended by [ADR-0177](0177-binary-symbolic-operators-use-source-operand-order.md)
+
 related issue: [Choose the compile-time evaluation surface](https://github.com/frendsick/casa/issues/657).
 
 Bounded constant expressions retain value relationships without executing user
@@ -61,9 +63,10 @@ trait implementation. There are no implicit integer/float or width conversions.
 String and character values support references and stack manipulation, but no
 comparison, concatenation, arithmetic, or conversion inside constant blocks.
 
-Arithmetic retains left-to-right operand order: `10 3 -` is `10 - 3`.
-Comparisons retain the topmost value as their first operand: `0 1 >` is
-`1 > 0`. Shifts consume the topmost value as the count: `8 1 >>` is `8 >> 1`.
+Binary symbolic operators use source operand order under
+[ADR-0177](0177-binary-symbolic-operators-use-source-operand-order.md):
+`10 3 -` is `10 - 3`, and `0 1 <` is `0 < 1`. Shifts consume the topmost
+value as the count: `8 1 >>` is `8 >> 1`.
 Boolean operators are eager. With stack contents written bottom to top, `rot`
 maps `a b c` to `b c a`. The other four stack intrinsics retain their ordinary
 effects. All permitted constant values are Copy, and these intrinsics execute

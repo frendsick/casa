@@ -64,7 +64,7 @@ test_category() {
         test/test_match_underflow|test/test_question)
             echo language_control_flow
             ;;
-        test/test_argv|test/test_compare|test/test_enum|\
+        test/test_argv|test/test_compare|test/test_enum|test/test_operator_order|\
         test/test_native_lowering|test/test_numeric_types|test/test_struct_literal|test/test_typeof|test/test_unit)
             echo language_values
             ;;

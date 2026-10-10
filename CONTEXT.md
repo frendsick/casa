@@ -177,7 +177,7 @@ The project-specific vocabulary in this file for concepts whose names must stay 
 _Avoid_: Language keyword reference, complete syntax catalog
 
 **Operand order**:
-The Casa rule that maps consumed stack values to operation operands: the topmost stack value is the first argument, with arithmetic operators as the explicit exception.
+The Casa rule that maps consumed stack values to operation operands. Binary symbolic operators use source order, with the topmost value as the right operand. Named functions and receiver methods take their first argument from the top.
 _Avoid_: Evaluation order, precedence
 
 **Stack effect**:
@@ -407,8 +407,8 @@ _Avoid_: Release lint, tag lint
 - Lambda docs should use **Function type** for the lambda's type and **Stack effect** for what the lambda consumes and produces.
 - Existing diagnostic names such as `SIGNATURE_MISMATCH` may remain until an internal rename, but explanatory prose should describe declared and inferred **Stack effects**.
 - In normal calls, the topmost stack value maps to the first argument. Avoid describing this as "rightmost" because stack values may have existed before the immediate call expression.
-- Arithmetic operators use the same **Stack effect** notation as other operations, but their **Operand order** maps the topmost consumed value to the right operand instead of the first/left operand.
-- Comparison operators follow normal **Operand order**. For `a b <`, `b` is topmost and therefore the left operand, so the expression means `b < a`.
+- Binary symbolic operators use the same **Stack effect** notation as other operations. Their **Operand order** maps the topmost consumed value to the right operand. `a b <` means `a < b`, and `a b -` means `a - b`.
+- Comparison operators dispatch with the left operand as the receiver. `a b <` calls `lt` with `a` as `self` and `b` as `other`. Named method calls retain topmost-first parameter consumption.
 - A **Function signature** excludes the body. A **Function definition** includes the body.
 - A **Method signature** excludes the body. A **Method definition** includes the body.
 - A **Trait method requirement** is satisfied by a matching method name and **Stack effect** on a type that explicitly implements the trait.

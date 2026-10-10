@@ -19,11 +19,11 @@ and `right` receives `3`.
 |---|---|---|
 | `3 10 subtract` | `subtract(10, 3)` | `7` |
 | `10 3 -` | `10 - 3` | `7` |
-| `0 1 >` | `1 > 0` | `true` |
+| `0 1 <` | `0 < 1` | `true` |
 
-Functions and comparisons use the topmost value as their first operand.
-Arithmetic is the exception. Source evaluation proceeds left to right in each
-case.
+Named functions and receiver methods use the topmost value as their first
+argument. Binary symbolic operators use the topmost value as their right
+operand. Source evaluation proceeds left to right in each case.
 
 A method signature also describes the receiver. For example, this excerpt
 from `impl List` omits the body:
@@ -60,7 +60,9 @@ Immediately before `subtract` runs above, the snapshot is `[3, 10]`.
 
 `i64 i64 -> i64` states that two integers are consumed and one is produced.
 It does not identify subtraction's left and right operands. Use the named
-parameters and concrete call to determine their roles.
+parameters and concrete call to determine their roles. For binary symbolic
+operators, inputs still use consumption order: right operand, then left operand.
+For example, `<<: u64 T -> T` describes `value count <<`, where `count` is `u64`.
 
 ## Function types
 

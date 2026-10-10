@@ -15,20 +15,26 @@ Stack-effect inputs use consumption order. Outputs use push order. See
 
 ## Operand order
 
-Arithmetic reads from left to right:
+All binary symbolic operators read operands from left to right:
 
 ```casa
 10 3 - print # 7, because this means 10 - 3
 ```
 
-Functions and comparisons use the topmost value as the first operand:
+Comparisons use the same order:
 
 ```casa
-0 1 > print # true, because this means 1 > 0
+0 1 < print # true, because this means 0 < 1
 ```
 
-For example, `90 score >=` means
-`score >= 90`.
+For example, `score 90 >=` means `score >= 90`. The topmost consumed value
+is the right operand. This applies to arithmetic, shifts, bitwise operations,
+comparisons, and eager boolean operations, including constant blocks.
+
+Named functions and receiver methods keep their topmost-first parameter order.
+Both operand expressions run from left to right before the operator runs.
+See [migrating existing source](operator-migration.md) for code written with
+the former comparison rule.
 
 ## Arithmetic
 
@@ -143,6 +149,11 @@ The operands must have the same type. Strings support `==` and `!=`, which
 compare their contents. Floating-point values implement only the partial
 comparison traits. Their operators follow IEEE behavior, so ordered
 comparisons with NaN are false.
+
+For user-defined types, the left operand is the receiver of `eq`, `ne`, `lt`,
+`le`, `gt`, or `ge`. For already evaluated values, `a b <` corresponds to
+`b a.lt`. The operator does not reorder evaluation of the expressions that
+produce `a` and `b`. `!=` calls `ne` directly.
 
 See [Traits](traits.md) for comparisons on user-defined types.
 

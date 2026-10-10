@@ -165,8 +165,8 @@ fn consume values:array[u8 BUFFER_BYTES] { values drop }
 Blocks accept literals, earlier visible constants, integer and float arithmetic,
 integer bitwise and shift operations, comparisons, eager boolean operations,
 and `dup`, `drop`, `swap`, `over`, and `rot`. They must leave exactly one value.
-Arithmetic reads left to right, so `10 3 -` is `7`. Comparisons use the top
-value as the first operand, so `0 1 >` is `true`. Function calls, conversions,
+Binary symbolic operators use source operand order, so `10 3 -` is `7`
+and `0 1 <` is `true`. Function calls, conversions,
 control flow, and target layout queries such as `size_of` are not allowed.
 
 Unannotated numeric literals and aliases of contextual literals remain contextual

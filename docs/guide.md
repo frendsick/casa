@@ -42,17 +42,14 @@ dup:   [T: Copy] T -> T T
 `None` means that the corresponding side of the stack effect is empty. It is
 not the `Option::None` value.
 
-Most functions use the topmost value as their first argument. Arithmetic is the
-explicit exception: `10 3 -` means `10 - 3`.
-
-Comparison follows normal function operand order. The topmost value is the left
-operand:
+Named functions use the topmost value as their first argument. Binary symbolic
+operators use source order: `10 3 -` means `10 - 3`, and `0 1 <` means `0 < 1`:
 
 ```casa
-0 1 > print
+0 1 < print
 ```
 
-This prints `true` because the expression means `1 > 0`. A stack snapshot
+This prints `true` because the expression means `0 < 1`. A stack snapshot
 shows the top on the right, while effect inputs start at the top. See
 [Reference notation](notation.md) for signatures, effects, and function types.
 
@@ -126,9 +123,9 @@ branch must leave the same stack effect.
 
 ```casa
 fn rating score:i64 -> str {
-    if 90 score >= then
+    if score 90 >= then
         "excellent"
-    elif 75 score >= then
+    elif score 75 >= then
         "good"
     else
         "keep practicing"
@@ -137,8 +134,7 @@ fn rating score:i64 -> str {
 82 rating print
 ```
 
-Remember that comparison uses the topmost value as its left operand. Therefore,
-`90 score >=` means `score >= 90`.
+`score 90 >=` means `score >= 90`.
 
 ## Try a complete program
 
@@ -151,9 +147,9 @@ This program adds an [array iterator](collections.md#arrays), a
 import "std"
 
 fn rating score:i64 -> str {
-    if 90 score >= then
+    if score 90 >= then
         "excellent"
-    elif 75 score >= then
+    elif score 75 >= then
         "good"
     else
         "keep practicing"

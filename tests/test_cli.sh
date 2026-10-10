@@ -185,6 +185,12 @@ if matches_filter native_assembly "$@"; then
     python3 tests/test_native_assembly.py "$COMPILER"
 fi
 
+if matches_filter operator_migration "$@"; then
+    matched=true
+    "$COMPILER" -L lib tools/migrate_operators.casa -o "$CLI_TMP/migrate-operators"
+    python3 tests/test_operator_migration.py "$CLI_TMP/migrate-operators" "$COMPILER"
+fi
+
 if matches_filter lsp_workspace "$@"; then
     matched=true
     "$COMPILER" -L lib lsp.casa -o "$CLI_TMP/lsp"

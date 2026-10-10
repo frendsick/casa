@@ -1,5 +1,7 @@
 # Ordering uses inherited operator methods
 
+status: amended by [ADR-0177](0177-binary-symbolic-operators-use-source-operand-order.md)
+
 PartialOrd owns the four boolean ordering methods used directly by operators and the partial three-way comparison primitive. Ord refines it with total equality and total three-way comparison:
 
 ```casa
@@ -19,6 +21,12 @@ trait Ord: PartialOrd + Eq {
     }
 }
 ```
+
+[ADR-0177](0177-binary-symbolic-operators-use-source-operand-order.md) defines
+operator operand order. For already evaluated values, `left right <` calls
+`right left.lt`. The operator evaluates its operand expressions from left to
+right before arranging the method arguments. Named method calls still consume
+the receiver first.
 
 The standard boolean defaults interpret `partial_cmp`. Ord fills that inherited requirement by wrapping `cmp`. Implementations may override the boolean operator methods while preserving the same ordering semantics. `<`, `<=`, `>`, and `>=` lower to `lt`, `le`, `gt`, and `ge` respectively. The compiler validates effective inherited shape, so Ord exposes all four operator methods plus `partial_cmp` and `cmp` even though most are inherited or defaulted.
 
