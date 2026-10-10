@@ -51,6 +51,67 @@ fn test_storage_plans {
     "Copy array storage needs no heap allocation" 0 generated.as_str "call heap_alloc" str::find < test::assert_true
 }
 
+fn assert_local_aggregate code:$str {
+    code check bytecode::compile_checked.unwrap helpers::generated_assembly = generated
+    "local aggregate has no backing allocation" generated.as_str "call heap_alloc" str::contains ! test::assert_true
+    "local aggregate has no backing free" generated.as_str "call heap_free" str::contains ! test::assert_true
+}
+
+fn test_local_aggregate_placement {
+    "function-local aggregate storage" test::test_start
+    "struct Pair { pub x:i64 pub y:i64 } fn sum value:i64 -> i64 { value value Pair = pair pair.x pair.y + } 21 sum print"
+    assert_local_aggregate
+    "struct Pair { pub x:i64 pub y:i64 } fn sum -> i64 { Pair { x: 20 y: 22 } = pair 21 = pair.x pair.x pair.y + } sum print"
+    assert_local_aggregate
+    "struct Value { pub x:i64 } fn run { 42 Value = value value drop } run"
+    assert_local_aggregate
+    "enum Value { Some(i64) None } fn run -> bool { 42 Value::Some = value value Value::Some is } run print"
+    assert_local_aggregate
+    "struct Value { pub x:i64 } fn run { 0 = i while 5 i < do i Value = value if 2 i == then 1 += i continue fi if 4 i == then break fi value.x print 1 += i done } run"
+    assert_local_aggregate
+    "struct Value { pub x:i64 } fn run flag:bool -> i64 { 42 Value = value if flag then value.x return fi value.x } true run print"
+    assert_local_aggregate
+}
+
+fn test_local_aggregate_escapes {
+    "uncertain aggregate storage remains on the heap" test::test_start
+    for
+        code in [
+            "struct Value { pub x:i64 } fn make -> Value { 42 Value = value value } make drop",
+            "struct Value { pub x:i64 } fn take value:Value { value.x print } 42 Value = value value take",
+            "struct Value { pub x:i64 } fn read value:$Value -> i64 { value.x } 42 Value = value value read print",
+            "struct Value { pub x:i64 } struct Box { pub value:Value } 42 Value = value value Box drop",
+            "struct Value { pub x:i64 } 42 Value = value value = moved moved.x print",
+            "struct Value { pub x:i64 } 42 Value = value 43 Value = value value.x print",
+            "struct Value { pub x:i64 } 42 Value = value move { value.x } = callback callback exec print",
+            "struct Value { pub x:i64 } unsafe { 42 Value = value value ptr::into_raw ptr::from_raw[Value] drop }",
+            "struct Value { pub x:i64 } unsafe { 42 Value = value value ptr::from_ref load64 print }",
+        ].iter
+    do
+        code check bytecode::compile_checked.unwrap helpers::generated_assembly = generated
+        "escaping aggregate keeps backing allocation" generated.as_str "call heap_alloc" str::contains test::assert_true
+    done
+}
+
+fn test_local_aggregate_frame_bound {
+    "aggregate placement has a per-function frame bound" test::test_start
+    std::String::new = source
+    "struct Pair { pub x:i64 pub y:i64 } fn run { " source.append
+    0 = index: u64
+    while 257 index < do
+        f"1 2 Pair = value{index} " source.append_string
+        1 += index
+        if 256 index == then
+            source.clone = at_limit
+            "} run" at_limit.append
+            at_limit.as_str assert_local_aggregate
+        fi
+    done
+    "} run" source.append
+    source.as_str check bytecode::compile_checked.unwrap helpers::generated_assembly = generated
+    "aggregate beyond 4096 bytes keeps heap storage" generated.as_str "call heap_alloc" str::contains test::assert_true
+}
+
 fn test_string_literal_pool {
     "string literal pool" test::test_start
     "\"zeta\" drop \"\" drop \"ä猫\" drop \"a\\0b\" drop \"alpha\" drop \"i64\" drop 42 typeof drop [\"alpha\", \"\", \"ä猫\", \"zeta\", \"a\\0b\", \"i64\"] drop fn repeat { \"zeta\" drop \"\" drop \"ä猫\" drop \"a\\0b\" drop \"alpha\" drop } repeat"
@@ -113,6 +174,9 @@ fn test_rejected_source_stops_before_selection {
 test_reachable_functions_and_repeatability
 test_structured_aggregate_control_flow
 test_storage_plans
+test_local_aggregate_placement
+test_local_aggregate_escapes
+test_local_aggregate_frame_bound
 test_rejected_source_stops_before_selection
 test_slice_construction_does_not_allocate
 test_string_literal_pool

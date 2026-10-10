@@ -54,6 +54,11 @@ An empty generic variant often needs context:
 Option::None = result: Option[i64]
 ```
 
+A directly bound payload enum can use function-local storage without implementing
+Copy when its uses prove that the storage cannot escape. Tag tests and local
+destruction qualify. Payload bindings and uncertain uses retain heap storage.
+Structs and enums share the [function-local storage budget](structs-and-methods.md).
+
 ## Process an enum
 
 Use `is` for one conditional variant check. Use `match` when each variant needs
