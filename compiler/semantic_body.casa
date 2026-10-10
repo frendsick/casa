@@ -320,7 +320,6 @@ pub enum IntrinsicKind derives std::Copy std::Eq {
     Store32
     Store64
     PtrFromRef
-    PtrIntoRaw
     PtrNull
     Syscall0
     Syscall1
@@ -332,8 +331,6 @@ pub enum IntrinsicKind derives std::Copy std::Eq {
     And
     Or
     Not
-    FnExec
-    FnExecOwned
     FnReturn
     Panic
     OwnerCleanup
@@ -359,6 +356,8 @@ pub enum BindingKind derives std::Copy std::Eq {
 pub enum Action derives std::Clone {
     Primitive(PrimitiveKind common::Type)
     Intrinsic(IntrinsicKind)
+    Execute(common::Type bool)
+    IntoRaw(common::Type)
     Integer(common::IntegerLiteral common::Type)
     Float(std::String common::Type)
     Boolean(i64)
@@ -742,7 +741,7 @@ fn select_action
         common::OpValue::Store32 => IntrinsicKind::Store32 Action::Intrinsic
         common::OpValue::Store64 => IntrinsicKind::Store64 Action::Intrinsic
         common::OpValue::PtrFromRef => IntrinsicKind::PtrFromRef Action::Intrinsic
-        common::OpValue::PtrIntoRaw => IntrinsicKind::PtrIntoRaw Action::Intrinsic
+        common::OpValue::PtrIntoRaw => facts.origin hint require_type ? Action::IntoRaw
         common::OpValue::PtrNull => IntrinsicKind::PtrNull Action::Intrinsic
         common::OpValue::Syscall0 => IntrinsicKind::Syscall0 Action::Intrinsic
         common::OpValue::Syscall1 => IntrinsicKind::Syscall1 Action::Intrinsic
@@ -754,8 +753,8 @@ fn select_action
         common::OpValue::And => IntrinsicKind::And Action::Intrinsic
         common::OpValue::Or => IntrinsicKind::Or Action::Intrinsic
         common::OpValue::Not => IntrinsicKind::Not Action::Intrinsic
-        common::OpValue::FnExec => IntrinsicKind::FnExec Action::Intrinsic
-        common::OpValue::FnExecOwned => IntrinsicKind::FnExecOwned Action::Intrinsic
+        common::OpValue::FnExec => facts.origin hint require_type ? false swap Action::Execute
+        common::OpValue::FnExecOwned => facts.origin hint require_type ? true swap Action::Execute
         common::OpValue::FnReturn => IntrinsicKind::FnReturn Action::Intrinsic
         common::OpValue::Panic => IntrinsicKind::Panic Action::Intrinsic
         common::OpValue::OwnerCleanup => IntrinsicKind::OwnerCleanup Action::Intrinsic
@@ -896,7 +895,6 @@ impl IntrinsicKind {
             IntrinsicKind::Store32 => common::OpValue::Store32
             IntrinsicKind::Store64 => common::OpValue::Store64
             IntrinsicKind::PtrFromRef => common::OpValue::PtrFromRef
-            IntrinsicKind::PtrIntoRaw => common::OpValue::PtrIntoRaw
             IntrinsicKind::PtrNull => common::OpValue::PtrNull
             IntrinsicKind::Syscall0 => common::OpValue::Syscall0
             IntrinsicKind::Syscall1 => common::OpValue::Syscall1
@@ -908,8 +906,6 @@ impl IntrinsicKind {
             IntrinsicKind::And => common::OpValue::And
             IntrinsicKind::Or => common::OpValue::Or
             IntrinsicKind::Not => common::OpValue::Not
-            IntrinsicKind::FnExec => common::OpValue::FnExec
-            IntrinsicKind::FnExecOwned => common::OpValue::FnExecOwned
             IntrinsicKind::FnReturn => common::OpValue::FnReturn
             IntrinsicKind::Panic => common::OpValue::Panic
             IntrinsicKind::OwnerCleanup => common::OpValue::OwnerCleanup
@@ -946,6 +942,17 @@ impl Leaf {
                 typ.clone std::Option::Some = hint kind.lower
             }
             Action::Intrinsic(kind) => kind.lower
+            Action::Execute(typ owned) => {
+                typ.clone std::Option::Some = hint
+                if owned then
+                    common::OpValue::FnExecOwned
+                else
+                    common::OpValue::FnExec
+                fi
+            }
+            Action::IntoRaw(typ) => {
+                typ.clone std::Option::Some = hint common::OpValue::PtrIntoRaw
+            }
             Action::Integer(value typ) => {
                 typ.clone std::Option::Some = hint value.clone common::OpValue::PushInt
             }
@@ -1386,6 +1393,8 @@ impl Leaf {
                     typ.clone drops.push
                 fi
             }
+            Action::Execute(typ _) => typ validate_type ? drop
+            Action::IntoRaw(typ) => typ validate_type ? drop
             Action::Integer(_ typ) => typ validate_type ? drop
             Action::Float(_ typ) => typ validate_type ? drop
             Action::Binding(kind binding typ) => {
@@ -1745,6 +1754,8 @@ impl Action {
     -> std::Option[Action] {
         self match
             Action::Primitive(kind typ) => bindings typ.substitute_t kind copy Action::Primitive
+            Action::Execute(typ owned) => owned bindings typ.substitute_t Action::Execute
+            Action::IntoRaw(typ) => bindings typ.substitute_t Action::IntoRaw
             Action::Integer(value typ) => bindings typ.substitute_t value.clone Action::Integer
             Action::Float(value typ) => bindings typ.substitute_t value.clone Action::Float
             Action::Call(call) => {
@@ -2047,6 +2058,24 @@ impl OperationFacts {
 }
 
 impl Body {
+    pub fn is_field_projection self:$Body -> bool {
+        for node in self.nodes.iter do
+            node match
+                Node::Leaf(leaf) => {
+                    if leaf.action Action::StructMemberProject is then true return fi
+                }
+                Node::Region(region) => {
+                    if region.body.is_field_projection then true return fi
+                }
+                _ => {
+                }
+            end
+        done
+        false
+    }
+}
+
+impl Body {
     pub fn visit_types self:$Body visitor:$fn[$common::Type] {
         for node in self.nodes.iter do
             visitor node.visit_types
@@ -2063,6 +2092,8 @@ impl Node {
                 visitor leaf.facts.visit_types
                 leaf.action match
                     Action::Primitive(_ typ) => typ visitor exec
+                    Action::Execute(typ _) => typ visitor exec
+                    Action::IntoRaw(typ) => typ visitor exec
                     Action::Integer(_ typ) => typ visitor exec
                     Action::Float(_ typ) => typ visitor exec
                     Action::Binding(kind binding typ) => typ visitor exec
@@ -2217,7 +2248,6 @@ impl IntrinsicKind {
             IntrinsicKind::Store32 => OccurrenceValue::Store32
             IntrinsicKind::Store64 => OccurrenceValue::Store64
             IntrinsicKind::PtrFromRef => OccurrenceValue::PtrFromRef
-            IntrinsicKind::PtrIntoRaw => OccurrenceValue::PtrIntoRaw
             IntrinsicKind::PtrNull => OccurrenceValue::PtrNull
             IntrinsicKind::Syscall0 => OccurrenceValue::Syscall0
             IntrinsicKind::Syscall1 => OccurrenceValue::Syscall1
@@ -2229,8 +2259,6 @@ impl IntrinsicKind {
             IntrinsicKind::And => OccurrenceValue::And
             IntrinsicKind::Or => OccurrenceValue::Or
             IntrinsicKind::Not => OccurrenceValue::Not
-            IntrinsicKind::FnExec => OccurrenceValue::FnExec
-            IntrinsicKind::FnExecOwned => OccurrenceValue::FnExecOwned
             IntrinsicKind::FnReturn => OccurrenceValue::FnReturn
             IntrinsicKind::WhileBreak => OccurrenceValue::WhileBreak
             IntrinsicKind::WhileContinue => OccurrenceValue::WhileContinue
@@ -2259,6 +2287,17 @@ impl Leaf {
                 typ.clone std::Option::Some = hint kind.to_occurrence
             }
             Action::Intrinsic(kind) => kind.to_occurrence
+            Action::Execute(typ owned) => {
+                typ.clone std::Option::Some = hint
+                if owned then
+                    OccurrenceValue::FnExecOwned
+                else
+                    OccurrenceValue::FnExec
+                fi
+            }
+            Action::IntoRaw(typ) => {
+                typ.clone std::Option::Some = hint OccurrenceValue::PtrIntoRaw
+            }
             Action::Integer(value typ) => {
                 typ.clone std::Option::Some = hint value.raw.clone OccurrenceValue::PushInt
             }

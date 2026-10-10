@@ -136,6 +136,9 @@ address without running its destructor. `ptr::from_raw[T]` performs the reverse
 operation. Its caller must provide the complete live allocation for a
 heap-indirect `T`, and no other owner may retain responsibility for it. The
 caller must reconstruct an owner or destroy its contents and call `free`.
+For a Copy aggregate, `ptr::into_raw` allocates independent owned storage and
+`ptr::from_raw[T]` copies the value into automatic storage and frees the supplied
+allocation. The same single-owner rule applies to that raw allocation.
 
 `0 alloc` returns null, and `free` does nothing when given null. A positive
 allocation is non-null. Double free, use after free, and freeing an interior or

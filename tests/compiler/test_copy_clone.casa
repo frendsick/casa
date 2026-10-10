@@ -606,23 +606,84 @@ pub fn test_stack_reordering_preserves_owner_identity {
     diagnostics "swap rot and over preserve owner" helpers::assert_no_errors
 }
 
-pub fn test_copy_derivation_rejects_indirect_aggregates {
-    "copy_derivation_rejects_indirect_aggregates" test::test_start
+pub fn test_copy_derivation_accepts_value_aggregates {
+    "copy_derivation_accepts_value_aggregates" test::test_start
     error::Diagnostics::new = struct_diagnostics
     COPY_TRAITS "struct Point derives __casa_std__Copy { value: i64 }" str::concat
     struct_diagnostics check_source
-    struct_diagnostics "indirect struct" "cannot implement `Copy`" helpers::assert_error_contains
+    struct_diagnostics "ordinary value struct" helpers::assert_no_errors
 
     error::Diagnostics::new = payload_enum_diagnostics
     COPY_TRAITS "enum Value derives __casa_std__Copy { Some(i64) }" str::concat
     payload_enum_diagnostics check_source
-    payload_enum_diagnostics "indirect payload enum" "cannot implement `Copy`"
-    helpers::assert_error_contains
+    payload_enum_diagnostics "value payload enum" helpers::assert_no_errors
 
     error::Diagnostics::new = fieldless_enum_diagnostics
     COPY_TRAITS "enum Flag derives __casa_std__Copy { Off On } Flag::On dup drop drop" str::concat
     fieldless_enum_diagnostics check_source
     fieldless_enum_diagnostics "raw fieldless enum" helpers::assert_no_errors
+}
+
+pub fn test_copy_derivation_rejects_owned_indirection {
+    "copy_derivation_rejects_owned_indirection" test::test_start
+    error::Diagnostics::new = diagnostics
+    COPY_TRAITS "struct Point derives __casa_std__Copy { value: OwnedText } enum Recursive derives __casa_std__Copy { End More(Recursive) } struct Exclusive derives __casa_std__Copy { value: mut$i64 } struct Dropped derives __casa_std__Copy { value: i64 } impl Dropped { fn drop self:mut$Dropped { } }"
+    str::concat diagnostics check_source
+    diagnostics "owned field" "Type `Point` cannot implement `Copy`" helpers::assert_error_contains
+    diagnostics "recursive owner" "Type `Recursive` cannot implement `Copy`" helpers::assert_error_contains
+    diagnostics "exclusive field" "Type `Exclusive` cannot implement `Copy`" helpers::assert_error_contains
+    diagnostics "custom destruction" "Type `Dropped` cannot implement `Copy`" helpers::assert_error_contains
+}
+
+pub fn test_copy_aggregate_borrow_origins {
+    "copy_aggregate_borrow_origins" test::test_start
+    error::Diagnostics::new = diagnostics
+    COPY_TRAITS "struct View derives __casa_std__Copy { value: $OwnedText } fn escape -> View { \"text\" OwnedText = local local View copy }"
+    str::concat diagnostics check_source
+    diagnostics "Copy retains field origins" "local" helpers::assert_error_contains
+
+    error::Diagnostics::new = generic_diagnostics
+    COPY_TRAITS "fn escape[T] value:$T -> T { value = local local }"
+    str::concat generic_diagnostics check_source
+    generic_diagnostics "generic borrowed binding stays borrowed" "borrowed value as owned" helpers::assert_error_contains
+
+    error::Diagnostics::new = clone_diagnostics
+    COPY_TRAITS "struct View derives __casa_std__Clone { value: $OwnedText } fn cloned[T:__casa_std__Clone] value:$T -> T { value.clone = owned owned } fn escape -> View { \"text\" OwnedText = local local View cloned }"
+    str::concat clone_diagnostics check_source
+    clone_diagnostics "generic Clone retains stored origins" "local" helpers::assert_error_contains
+}
+
+pub fn test_copy_aggregate_operations_do_not_allocate {
+    "copy_aggregate_operations_do_not_allocate" test::test_start
+    error::Diagnostics::new = diagnostics
+    COPY_TRAITS "struct Point derives __casa_std__Copy { x: i64 y: i64 } enum Value[T] derives __casa_std__Copy { None Some(T) } fn make -> Point { 2 1 Point } fn duplicate[T:__casa_std__Copy] value:$T -> T T { value copy dup } make Value::Some duplicate drop drop [make, make] dup drop drop"
+    str::concat = source
+    diagnostics source.as_str helpers::compile_test_source helpers::generated_assembly = assembly
+    diagnostics "Copy value program" helpers::assert_no_errors
+    "Copy constructors, calls and duplication allocate no backing storage"
+    -1 assembly.as_str "call heap_alloc" str::find test::assert_eq
+}
+
+pub fn test_copy_aggregate_rejects_owned_callable_fields {
+    "copy_aggregate_rejects_owned_callable_fields" test::test_start
+    error::Diagnostics::new = diagnostics
+    COPY_TRAITS "struct Callable[T] derives __casa_std__Copy { value: T } fn identity value:i64 -> i64 { value } &identity Callable copy drop"
+    str::concat diagnostics check_source
+    diagnostics "callable field cannot promise allocation-free Copy" "does not satisfy trait `Copy`" helpers::assert_error_contains
+}
+
+pub fn test_copy_layout_distinguishes_nesting_from_recursion {
+    "copy_layout_distinguishes_nesting_from_recursion" test::test_start
+    error::Diagnostics::new = finite_diagnostics
+    COPY_TRAITS "struct Box[T] derives __casa_std__Copy { value:T } struct Nested[T] derives __casa_std__Copy { value:Box[Box[T]] } struct LongLeaf derives __casa_std__Copy { value:i64 } struct A derives __casa_std__Copy { value:Box[LongLeaf] } struct Root derives __casa_std__Copy { value:Box[A] } 1 Box Box Nested dup drop drop 2 LongLeaf Box A Box Root dup drop drop"
+    str::concat finite_diagnostics check_source
+    finite_diagnostics "finite concrete and symbolic nesting" helpers::assert_no_errors
+
+    error::Diagnostics::new = recursive_diagnostics
+    COPY_TRAITS "struct Box[T] derives __casa_std__Copy { value:T } enum Recursive[T] derives __casa_std__Copy { End More(Recursive[Box[T]]) }"
+    str::concat = recursive_source
+    recursive_diagnostics recursive_source.as_str helpers::parse_resolve_test_source drop
+    recursive_diagnostics "argument-growing ownership recursion" "cannot implement `Copy`" helpers::assert_error_contains
 }
 
 pub fn test_explicit_copy_implementation_is_validated {
@@ -636,7 +697,7 @@ pub fn test_explicit_copy_implementation_is_validated {
     error::Diagnostics::new = indirect_diagnostics
     COPY_TRAITS "struct Good { value: i64 } impl Good: __casa_std__Copy { } 1 Good dup drop drop"
     str::concat indirect_diagnostics check_source
-    indirect_diagnostics "indirect explicit implementation" "cannot implement `Copy`"
+    indirect_diagnostics "explicit Copy requires derivation" "requires `derives Copy`"
     helpers::assert_error_contains
 }
 
@@ -719,7 +780,12 @@ test_loop_back_edges_and_exits_track_ownership
 test_control_flow_joins_merge_possible_loans
 test_field_sensitive_borrows_and_patterns
 test_stack_reordering_preserves_owner_identity
-test_copy_derivation_rejects_indirect_aggregates
+test_copy_derivation_accepts_value_aggregates
+test_copy_derivation_rejects_owned_indirection
+test_copy_aggregate_borrow_origins
+test_copy_aggregate_operations_do_not_allocate
+test_copy_aggregate_rejects_owned_callable_fields
+test_copy_layout_distinguishes_nesting_from_recursion
 test_explicit_copy_implementation_is_validated
 test_copy_bound_and_clone_supertrait
 test_borrows_do_not_satisfy_copy_or_clone

@@ -205,7 +205,7 @@ dynamic collections are not.
 duplicated with `dup` and `over`, but they do not implement or satisfy `Copy`.
 An exclusive `mut$T` borrow cannot be duplicated.
 
-Payload-free enums can opt in with `derives Copy`:
+Structs and enums can opt in with `derives Copy`:
 
 ```casa
 import "std"
@@ -220,13 +220,21 @@ enum Direction derives std::Copy {
 `Copy: Clone` relationship. User-defined structs and enums cannot use an
 explicit `impl Type: Copy` block or combine derived Copy with custom Clone.
 
-Ordinary structs and payload enums use heap-indirect value storage. They cannot
-implement `Copy`, even when every field is Copy, because duplicating their
-handle would alias one allocation. Extern structs and fixed arrays have fixed
-inline bodies and can implement `Copy` when their fields or elements are Copy.
-Arrays with non-Copy elements remain affine. Use `Clone` for explicit
-independent duplication. When `T` implements Clone, calling `.clone` on `$T` or
-`mut$T` calls the borrowed value's implementation and returns an owned `T`.
+Ordinary structs and payload enums can derive Copy when every owned field is
+Copy and every stored borrow is shared. Their complete values are copied into
+independent destination storage. Generic conformance is conditional on the
+fields, so `std::Option[i64]` and `std::Result[i64 bool]` are Copy while
+`std::Option[std::String]` is not. Exclusive borrows, custom destruction, and
+ownership-bearing recursive fields prevent Copy derivation.
+
+Owned callable fields remain affine because a function value can own a capture
+environment. A shared borrow of a callable can be stored in a Copy aggregate.
+
+Extern structs and fixed arrays use the same allocation-free copy operation.
+Only extern structs have a C ABI layout guarantee. Arrays with non-Copy elements
+remain affine. Use `Clone` for explicit independent duplication. When `T`
+implements Clone, calling `.clone` on `$T` or `mut$T` calls the borrowed value's
+implementation and returns an owned `T`.
 
 Clone operations are always explicit and can allocate or run user code. A type
 can derive the implementation:

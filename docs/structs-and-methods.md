@@ -106,16 +106,17 @@ be nonempty, nongeneric, and nonrecursive. It can contain supported C scalars,
 nonempty fixed arrays, and other eligible structs. A compiler-called cleanup
 method, borrowed field, or resource that requires destruction prevents inlining.
 
-Generic declarations retain their declaration-time layout, including after
-specialization. Empty structs and structs containing zero-length arrays remain
-indirect as nested fields. Fixed-array fields still use direct storage, and a
-zero-length array still occupies one byte. Borrowed fields remain one pointer.
+Affine generic declarations retain their declaration-time layout after
+specialization. A concrete Copy instance uses its complete field layouts,
+including nested Copy aggregates. Fixed-array fields use direct storage, and a
+zero-length array occupies one byte. Borrowed fields remain one pointer.
 
-An inline field belongs to its containing allocation. Borrowed access and
-patterns refer to that field directly. Moving it out can allocate a standalone
-owner. Top-level ordinary struct values remain heap-indirect and non-`Copy`.
-Physical compatibility with C does not make them eligible for native calls or
-give them a stable ABI. See [the struct example](../examples/struct.casa).
+An inline field belongs to its containing storage. Borrowed access and patterns
+refer to that field directly. Moving an affine field out can allocate a
+standalone owner. Copy values use independent automatic storage, including for
+function results. Other top-level ordinary struct values remain heap-indirect.
+Physical compatibility with C does not make ordinary structs eligible for native
+calls or give them a stable ABI. See [the struct example](../examples/struct.casa).
 
 ## Receiver access and stored borrows
 
@@ -150,13 +151,13 @@ responsibility and preserves the loan.
 
 ## Copy and Clone
 
-Ordinary struct values use heap-indirect storage, so they cannot implement
-[Copy](traits.md#copy-and-clone). Derive `Clone` when fieldwise independent duplication is suitable:
+Derive [Copy](traits.md#copy-and-clone) when every owned field is Copy and all
+stored borrows are shared:
 
 ```casa
 import "std"
 
-struct Point derives std::Clone {
+struct Point derives std::Copy {
     x: i64
     y: i64
 }
@@ -181,12 +182,16 @@ Structs can also derive `Eq`, `Ord`, and `Hashable`. Generated methods process
 fields in declaration order and add the required bounds for generic fields.
 See [Derive standard traits](traits.md#derive-standard-traits).
 
-An extern struct can implement `Copy` when each field implements `Copy`. Its
-fixed C-layout body uses the same direct-copy storage model as a fixed array.
-Payload-free enums use a raw representation and can derive `Copy`. Payload
-enums and ordinary structs remain non-Copy until their value representation can
-be duplicated without allocation or aliasing. Fixed arrays are `Copy` when
-their elements are `Copy`. See [Copy and Clone](traits.md#copy-and-clone).
+Copy duplicates the complete value without allocation or user code. The copies
+can be changed independently. Derivation also supplies structural Clone.
+`derives Clone` without Copy supports owned fields that require explicit cloning.
+
+Extern structs, payload enums, and fixed arrays can also be Copy when their
+owned fields or elements satisfy Copy. Custom destruction and ownership-bearing
+recursive fields prevent Copy. See [Copy and Clone](traits.md#copy-and-clone).
+
+Owned callable fields remain affine because a function value can own a capture
+environment. A shared borrow of a callable can be stored in a Copy aggregate.
 
 ## Custom destruction
 

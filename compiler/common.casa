@@ -194,7 +194,6 @@ impl ExternAbiType {
 pub enum NativeAction {
     Instruction(std::String)
     Allocate(u64)
-    ReleaseArgument(u64)
 }
 
 pub struct NativeCallPlan {
@@ -3204,10 +3203,8 @@ impl SymbolStore {
                         drop_function drop_name store.functions.set
                     fi
                     if name.as_str structs.remove_str std::Option::Some(shape) is then
-                        std::List[std::String]::new = shape.derived_traits
                         shape name.clone store.structs.set
                     elif name.as_str enums.remove_str std::Option::Some(shape) is then
-                        std::List[std::String]::new = shape.derived_traits
                         shape name.clone store.enums.set
                     fi
                 done
@@ -3579,9 +3576,8 @@ fn make_field_storage_plan
     stores_inline aligned_offset layout.alignment layout.size FieldStoragePlan std::Option::Some
 }
 
-# Fixed arrays use their complete direct layout in aggregate fields. Other
-# nested aggregates keep the language's one-word indirect representation.
-# Generic fields also use one word because their layout is not yet concrete.
+# Fixed arrays and Copy aggregates store their complete value in concrete fields.
+# Affine aggregates and unresolved generic fields keep one-word indirection.
 fn plan_aggregate_field_storage
     typ:$Type
     offset:u64
@@ -3592,7 +3588,7 @@ fn plan_aggregate_field_storage
         WORD_SIZE WORD_SIZE TypeLayout = layout
         false offset layout make_field_storage_plan return
     fi
-    if typ get_concrete_array_length.is_some then
+    if typ get_concrete_array_length.is_some store typ type_has_copy_layout || then
         if visiting store typ type_layout std::Option::Some(layout) is then
             true offset layout make_field_storage_plan
         else
@@ -3611,6 +3607,191 @@ fn plan_aggregate_field_storage
     else
         std::Option[FieldStoragePlan]::None
     fi
+}
+
+# Copy declarations select a body containing the complete value. This query
+# determines storage only. Trait validation separately checks conformance and bounds.
+# Check concrete arguments before entering a declaration. Its own fields are
+# then checked without substitution. This permits finite Box[Box[T]] nesting
+# while detecting recursive declarations even when their arguments grow.
+fn has_copy_field_arguments
+    field:$Type
+    substitutions:$std::Map[std::String Type]
+    store:$SymbolStore
+    visiting:mut$std::Set[std::String]
+-> bool {
+    if field.is_shared_borrow then
+        true return
+    fi
+    for binding in substitutions.iter do
+        if binding.first.as_str field.type_contains_var then
+            if binding.second.is_borrow then
+                false return
+            fi
+            if visiting store binding.second has_copy_layout ! then
+                false return
+            fi
+        fi
+    done
+    true
+}
+
+fn has_copy_struct_layout
+    typ:$Type
+    shape:$CasaStruct
+    store:$SymbolStore
+    visiting:mut$std::Set[std::String]
+-> bool {
+    if STD_COPY_TRAIT shape.derived_traits string_list_contains ! then
+        false return
+    fi
+    shape.type_vars typ aggregate_type_bindings = substitutions
+    for member in shape.members.iter do
+        if visiting store substitutions member.typ has_copy_field_arguments ! then
+            false return
+        fi
+    done
+    if shape.name visiting.has then
+        false return
+    fi
+    shape.name.clone visiting.add
+    true = eligible
+    for member in shape.members.iter do
+        if visiting store member.typ has_copy_layout ! then
+            false = eligible break
+        fi
+    done
+    shape.name visiting.remove
+    eligible
+}
+
+fn has_copy_enum_layout
+    typ:$Type
+    shape:$CasaEnum
+    store:$SymbolStore
+    visiting:mut$std::Set[std::String]
+-> bool {
+    if STD_COPY_TRAIT shape.derived_traits string_list_contains ! then
+        false return
+    fi
+    shape.type_vars typ aggregate_type_bindings = substitutions
+    for variant in shape.variant_types.iter do
+        for member in variant.second.iter do
+            if visiting store substitutions member has_copy_field_arguments ! then
+                false return
+            fi
+        done
+    done
+    if shape.name visiting.has then
+        false return
+    fi
+    shape.name.clone visiting.add
+    true = eligible
+    for variant in shape.variant_types.iter do
+        for member in variant.second.iter do
+            if visiting store member has_copy_layout ! then
+                false = eligible
+            fi
+        done
+    done
+    shape.name visiting.remove
+    eligible
+}
+
+fn has_copy_layout typ:$Type store:$SymbolStore visiting:mut$std::Set[std::String] -> bool {
+    if typ.is_shared_borrow then
+        true return
+    fi
+    if typ.is_exclusive_borrow then
+        false return
+    fi
+    typ match
+        Type::Builtin(builtin) => builtin BuiltinType::Cstr !=
+        Type::Function(_) => false
+        Type::TypeVar(_) => true
+        Type::Generic(generic) => {
+            if ARRAY_TYPE generic.base.as_str == then
+                0 generic.params.get = element
+                if element.is_borrow then
+                    false return
+                fi
+                visiting store element has_copy_layout return
+            fi
+            if store typ find_drop_function_name.is_some then
+                false return
+            fi
+            if generic.base store.structs.get std::Option::Some(shape) is then
+                visiting store shape typ has_copy_struct_layout return
+            fi
+            if generic.base store.enums.get std::Option::Some(shape) is then
+                visiting store shape typ has_copy_enum_layout return
+            fi
+            false
+        }
+        _ => false
+    end
+}
+
+# Symbolic arguments stand for Copy-constrained fields. Source checking must
+# validate those bounds before selecting this representation for a value.
+pub fn type_has_copy_layout typ:$Type store:$SymbolStore -> bool {
+    if typ.is_shared_borrow then
+        true return
+    fi
+    if typ.is_exclusive_borrow then
+        false return
+    fi
+    if typ Type::Builtin(builtin) is then
+        builtin BuiltinType::Cstr != return
+    fi
+    if typ Type::Generic(generic) is then
+        if ARRAY_TYPE generic.base.as_str != then
+            false = declared_copy
+            if generic.base store.structs.get std::Option::Some(shape) is then
+                STD_COPY_TRAIT shape.derived_traits string_list_contains = declared_copy
+            elif generic.base store.enums.get std::Option::Some(shape) is then
+                STD_COPY_TRAIT shape.derived_traits string_list_contains = declared_copy
+            fi
+            if declared_copy ! then
+                false return
+            fi
+        fi
+    else
+        false return
+    fi
+    std::Set[std::String]::new = visiting
+    visiting store typ has_copy_layout
+}
+
+# Specialize only value bodies. Affine generic owners retain their existing
+# indirect field contract, including the cut points of recursive ownership.
+pub fn copy_storage_struct typ:$Type shape:$CasaStruct -> CasaStruct {
+    shape.type_vars typ aggregate_type_bindings = substitutions
+    shape.clone = concrete
+    typ.format = concrete.name
+    std::List[std::String]::new = concrete.type_vars
+    0 = index: u64
+    while index concrete.members.length > do
+        index concrete.members.get_mut = member
+        substitutions member.typ.substitute_t = member.typ
+        1 += index
+    done
+    concrete
+}
+
+pub fn copy_storage_enum typ:$Type shape:$CasaEnum -> CasaEnum {
+    shape.type_vars typ aggregate_type_bindings = substitutions
+    shape.clone = concrete
+    typ.format = concrete.name
+    std::List[std::String]::new = concrete.type_vars
+    for variant in shape.variant_types.iter do
+        std::List[Type]::new = payload
+        for member in variant.second.iter do
+            substitutions member.substitute_t payload.push
+        done
+        payload variant.first.clone concrete.variant_types.set
+    done
+    concrete
 }
 
 pub fn type_is_extern_struct typ:$Type store:$SymbolStore -> bool {
@@ -3756,8 +3937,8 @@ fn plan_struct_field_storage
     store:$SymbolStore
     visiting:mut$std::Set[std::String]
 -> std::Option[FieldStoragePlan] {
-    # Generic declarations retain their original placement even after their
-    # accessors specialize. Revisit this only with specialized aggregate layouts.
+    # Affine generic fields retain declaration-time placement. Copy declarations
+    # are specialized before this shared field planner runs.
     if
         casa_struct.is_extern
         casa_struct.type_vars.is_empty store typ type_has_trivial_c_field_layout && ||
@@ -3992,9 +4173,19 @@ pub fn type_layout
             type_name.clone visiting.add
             std::Option[TypeLayout]::None = result
             if generic.base store.structs.get std::Option::Some(casa_struct) is then
-                visiting store casa_struct typ struct_type_layout = result
+                if store typ type_has_copy_layout then
+                    casa_struct typ copy_storage_struct = concrete
+                    visiting store concrete typ struct_type_layout = result
+                else
+                    visiting store casa_struct typ struct_type_layout = result
+                fi
             elif generic.base store.enums.get std::Option::Some(casa_enum) is then
-                visiting store casa_enum typ enum_type_layout = result
+                if store typ type_has_copy_layout then
+                    casa_enum typ copy_storage_enum = concrete
+                    visiting store concrete typ enum_type_layout = result
+                else
+                    visiting store casa_enum typ enum_type_layout = result
+                fi
             fi
             type_name visiting.remove
             result
