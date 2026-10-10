@@ -18,10 +18,17 @@ See [README.md](./README.md) for basic info, language docs, and examples.
 
 ### CRITICAL: Reverse polish notation
 
-- `z y x foo` equals to `foo(x, y, z)` in traditional language (top = first arg)
-- **Comparison** operators follow function convention: `a b <` equals `b < a` (top = left operand)
-- **Arithmetic** operators use Forth convention: `a b -` equals `a - b` (left-to-right reading)
-- When troubleshooting, first check if the related function call sites are using the correct argument order
+- Named functions and receiver methods consume their first argument from the
+  top of the stack. `z y x foo` corresponds to `foo(x, y, z)`.
+- Binary symbolic operators use source operand order. `a b <` means `a < b`,
+  and `a b -` means `a - b`.
+- Comparison operators use the left operand as the receiver. `a b <`
+  corresponds to `b a.lt`.
+- When troubleshooting, check symbolic operand order and named-call argument
+  order first.
+
+See [ADR-0177](./docs/adr/0177-binary-symbolic-operators-use-source-operand-order.md)
+for the operator rules.
 
 ### Import paths
 
