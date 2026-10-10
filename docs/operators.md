@@ -61,30 +61,30 @@ After `import "std"`, these `i64` helpers are available:
 
 | Method | Signature | Description |
 |---|---|---|
-| [abs](#i64abs) | `fn abs self:$i64 -> i64` | Absolute value |
-| [clamp](#i64clamp) | `fn clamp self:$i64 lo:i64 hi:i64 -> i64` | Value limited to the inclusive range |
+| [abs](#i64abs) | `fn abs self:$i64 -> Option[i64]` | Absolute value |
+| [clamp](#i64clamp) | `fn clamp self:$i64 lo:i64 hi:i64 -> Option[i64]` | Value limited to the inclusive range |
 | [max](#i64max) | `fn max self:$i64 other:i64 -> i64` | Larger value |
 | [min](#i64min) | `fn min self:$i64 other:i64 -> i64` | Smaller value |
-| [pow](#i64pow) | `fn pow self:$i64 exp:i64 -> i64` | Integer exponentiation |
+| [pow](#i64pow) | `fn pow self:$i64 exp:i64 -> Option[i64]` | Integer exponentiation |
 
 ### i64::abs
 
 ```text
-fn abs self:$i64 -> i64
+fn abs self:$i64 -> Option[i64]
 ```
 
-`abs` returns the absolute value. The minimum `i64` has no positive `i64`
-counterpart, so taking its absolute value terminates the program.
+`abs` returns `Some` containing the absolute value. The minimum `i64` has no
+positive `i64` counterpart, so it returns `None` for that input.
 
 ### i64::clamp
 
 ```text
-fn clamp self:$i64 lo:i64 hi:i64 -> i64
+fn clamp self:$i64 lo:i64 hi:i64 -> Option[i64]
 ```
 
-`clamp` returns `lo` if the input is below the inclusive range, `hi` if it is
-above the range, and the input itself if it is within the range. Equal bounds
-are valid. The program terminates if `lo > hi`.
+`clamp` returns `Some` containing `lo` if the input is below the inclusive
+range, `hi` if it is above the range, and the input itself if it is within the
+range. Equal bounds are valid. It returns `None` if `lo > hi`.
 
 Call `hi lo value.clamp`.
 
@@ -107,18 +107,27 @@ fn min self:$i64 other:i64 -> i64
 ### i64::pow
 
 ```text
-fn pow self:$i64 exp:i64 -> i64
+fn pow self:$i64 exp:i64 -> Option[i64]
 ```
 
-`pow` raises the integer to a nonnegative exponent. A zero exponent returns `1`,
-including for a zero base. A negative exponent or arithmetic overflow
-terminates the program.
+`pow` returns `Some` containing the integer raised to a nonnegative exponent.
+A zero exponent returns `Some(1)`, including for a zero base. A negative
+exponent or arithmetic overflow returns `None`.
 
 Call `exponent value.pow`.
 
 ### Arithmetic examples
 
-`f32` and `f64` also provide `abs`.
+```casa
+import "std"
+
+-7.abs.unwrap print # 7
+7 3 9.clamp.unwrap print # 7
+3 2.pow.unwrap print # 8
+63 2.pow.is_none print # true
+```
+
+`f32` and `f64` also provide `abs`, returning the same floating-point type.
 
 `+` and `-` also apply `u64` byte offsets to pointers without element scaling:
 
