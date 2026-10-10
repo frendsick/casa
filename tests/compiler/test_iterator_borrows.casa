@@ -1,0 +1,102 @@
+import "std" as std
+import "../../compiler/error.casa" as error
+import "../../lib/test.casa" as test
+import "helpers.casa" as helpers
+
+const PRELUDE "import \"lib/std.casa\" as std struct Item { value:i64 } impl Item { fn drop self:mut$Item { } } fn inspect item:$Item { } fn change item:mut$Item { 9 = item.value } struct Holder { values:mut$std::List[Item] } fn direct holder:mut$Holder -> mut$Item { 0 holder.values.get_mut } fn wrapped holder:mut$Holder -> std::Option[mut$Item] { holder direct std::Option::Some } fn grow holder:mut$Holder { Item { value:3 } holder.values.push } "
+
+fn check source:$str expected:$str {
+    error::Diagnostics::new = diagnostics
+    PRELUDE source str::concat = code
+    diagnostics code.as_str helpers::typecheck_test_source = checked
+    checked.get_diagnostics.clone diagnostics.merge
+    if expected.is_empty then
+        diagnostics.has_errors !
+    else
+        expected diagnostics helpers::diagnostics_error_contains
+    fi = passed
+    if passed ! then
+        for entry in diagnostics.entries.iter do
+            if entry error::Diagnostic::Error(failure) is then
+                failure.message.as_str std::println
+            fi
+        done
+    fi
+    source passed test::assert_true
+}
+
+fn accepts source:$str { "" source check }
+
+fn rejects source:$str expected:$str { expected source check }
+
+"iterator borrow contracts" test::test_start
+"fn use values:std::List[Item] { values.iter_mut = cursor cursor.next.unwrap change cursor.next.unwrap change cursor drop values drop }" accepts
+"fn use values:std::List[Item] { values.iter_mut.next.unwrap change values drop }" accepts
+"fn use values:std::List[Item] { for element in values.iter_mut do element change done values drop }" accepts
+"fn use values:std::List[Item] { values.iter_mut = cursor cursor.next.unwrap = first cursor.next.unwrap = second first change second change }"
+"Cannot borrow `cursor` exclusively while it is borrowed" swap rejects
+"fn use values:std::List[Item] { values.iter_mut = cursor cursor.next.unwrap = first cursor drop first change }"
+"Cannot move owner `cursor` while it is borrowed" swap rejects
+"fn use values:std::List[Item] { values.iter_mut = cursor cursor.next.unwrap = first cursor = moved first change moved.count drop }"
+"Cannot move owner `cursor` while it is borrowed" swap rejects
+"fn use values:std::List[Item] { values.iter_mut = cursor values.length drop cursor.next drop }"
+"Cannot borrow `values` while it is borrowed" swap rejects
+"fn use values:std::List[Item] { values.iter_mut = cursor Item { value:3 } values.push cursor.next drop }"
+"Cannot borrow `values` exclusively while it is borrowed" swap rejects
+"fn use values:std::List[Item] { values.iter_mut = cursor cursor.next.unwrap = first values drop first change }"
+"Cannot move owner `values` while it is borrowed" swap rejects
+"fn use values:std::List[Item] { values.iter_mut = cursor { = item:$Item true } cursor.find.unwrap = found cursor.next drop found change }"
+"Cannot borrow `cursor` exclusively while it is borrowed" swap rejects
+"fn invalid -> mut$Item { [Item { value:1 }] std::List::from_array.iter_mut.next.unwrap }"
+"Borrowed return escapes local owner" swap rejects
+"fn forward[T] cursor:mut$std::ListIterMut[T] -> std::Option[mut$T] { cursor.next } fn use values:std::List[Item] { values.iter_mut = cursor cursor forward.unwrap = first cursor forward.unwrap = second first change second change }"
+"Cannot borrow `cursor` exclusively while it is borrowed" swap rejects
+"fn use values:std::List[Item] { values Holder = holder holder direct = first holder direct = second first change second change }"
+"Cannot borrow `holder` exclusively while it is borrowed" swap rejects
+"fn use values:std::List[Item] { values Holder = holder holder wrapped.unwrap = first holder wrapped.unwrap = second first change second change }"
+"Cannot borrow `holder` exclusively while it is borrowed" swap rejects
+"fn use values:std::List[Item] { values Holder = holder holder wrapped.unwrap = first holder grow first change }"
+"Cannot borrow `holder` exclusively while it is borrowed" swap rejects
+"fn use values:std::List[Item] { values Holder = holder &wrapped = callback:fn[mut$Holder -> std::Option[mut$Item]] holder callback exec.unwrap = first holder callback exec.unwrap = second first change second change }"
+"Cannot borrow `holder` exclusively while it is borrowed" swap rejects
+"trait Cursor { fn next self:mut$self -> std::Option[mut$Item] } impl Holder:Cursor { fn next self:mut$Holder -> std::Option[mut$Item] { self wrapped } } fn forward[T:Cursor] cursor:mut$T -> std::Option[mut$Item] { cursor.next } fn use values:std::List[Item] { values Holder = holder holder forward.unwrap = first holder grow first change }"
+"Cannot borrow `holder` exclusively while it is borrowed" swap rejects
+
+# Shared payloads and owned payload transfers do not lend the wrapper.
+"struct Shared { value:$Item } fn get holder:$Shared -> $Item { holder.value } fn use item:Item { item Shared = holder holder get = view holder drop view inspect }" accepts
+"fn use values:std::List[Item] { values.iter = cursor cursor.next.unwrap = first cursor.next.unwrap = second cursor drop first inspect second inspect }" accepts
+"fn use values:std::List[Item] { values.into_iter = cursor cursor.next.unwrap = first cursor.next.unwrap = second cursor drop first inspect second inspect }" accepts
+"fn take[T] values:mut$std::List[T] -> T { values.pop } fn use first:Item second:Item { std::List[mut$Item]::new = values first values.push second values.push values take = one values take = two values drop one change two change }" accepts
+"fn use item:Item { { = value:mut$Item value } = callback item callback exec change item callback exec change }" accepts
+"fn make values:mut$std::List[Item] -> fn[-> mut$Item] { move { 0 values.get_mut } }"
+"Repeatable closure cannot return a borrow through exclusive capture" swap rejects
+"fn make values:mut$std::List[Item] -> std::Iter[mut$Item] { move { 0 values.get_mut std::Option::Some } std::Iter }"
+"Repeatable closure cannot return a borrow through exclusive capture" swap rejects
+"fn make value:mut$Item -> fn[-> $Item] { move { 1 += value.value value } }"
+"Repeatable closure cannot return a borrow through exclusive capture" swap rejects
+"fn make[T] values:mut$std::List[T] -> fn[-> std::Option[mut$T]] { move { 0 values.get_mut std::Option::Some } }"
+"Repeatable closure cannot return a borrow through exclusive capture" swap rejects
+"fn use first:Item second:Item { std::List[mut$Item]::new = values first values.push second values.push values.into_iter = cursor cursor.next.unwrap = one cursor.next.unwrap = two cursor drop one change two change }" accepts
+"impl Holder:std::Iterable[mut$Item] { fn next self:mut$Holder -> std::Option[mut$Item] { self wrapped } }"
+"hides a storage borrow in a return type parameter" swap rejects
+"trait Source[T] { fn read self:mut$self -> T } trait Child[T]:Source[T] { } impl Holder:Child[mut$Item] { fn read source:mut$Holder -> mut$Item { source direct } }"
+"hides a storage borrow in a return type parameter" swap rejects
+"trait Source[T] { fn next self:mut$self -> T } impl[T] std::List[T]:Source[T] { fn next self:mut$std::List[T] -> T { self.pop } }" accepts
+"fn get item:mut$Item -> mut$Item { item } fn twice[T,I] item:mut$I callback:fn[mut$I -> T] -> std::Pair[T T] { item callback exec = first item callback exec first std::Pair } fn use item:Item { &get item &twice[mut$Item Item] exec drop }"
+"hides a borrowed result in a type parameter" swap rejects
+"struct CallbackBox[I T] { callback:fn[mut$I -> T] } fn get item:mut$Item -> mut$Item { item } fn use { &get CallbackBox drop }"
+"hides a borrowed result in a type parameter" swap rejects
+"struct CallbackBox[I T] { callback:fn[mut$I -> T] } fn get item:mut$Item -> mut$Item { item } fn use { CallbackBox { callback:&get } = box:CallbackBox[Item mut$Item] box drop }"
+"hides a borrowed result in a type parameter" swap rejects
+"fn keep[T] value:T callback:fn[T -> T] -> T { value callback exec } fn same item:mut$Item -> mut$Item { item } fn use item:Item { &same item &keep[mut$Item] exec change }" accepts
+"fn use values:std::List[Item] { std::Option[mut$Item]::None = saved for element in values.iter_mut do element std::Option::Some = saved done saved.unwrap change }"
+"Loop back-edge changes loans" swap rejects
+"fn use values:std::List[Item] { std::Option[mut$Item]::None = saved for element in values.iter_mut do element std::Option::Some = saved break done saved.unwrap change }"
+"Cannot move owner" swap rejects
+"trait Factory[I T] { fn getter self:$self -> fn[mut$I -> T] } fn get item:mut$Item -> mut$Item { item } impl Item:Factory[Item mut$Item] { fn getter self:$Item -> fn[mut$Item -> mut$Item] { &get } }"
+"hides a storage borrow in a return type parameter" swap rejects
+"fn lend item:mut$Item -> mut$Item { item } fn share item:$Item -> $Item { item } struct Owners { left:Item right:Item } trait Source[T] { fn get self:mut$self -> std::Pair[$Item T] } impl Owners:Source[mut$Item] { fn get self:mut$Owners -> std::Pair[$Item mut$Item] { self.right lend self.left share std::Pair } }"
+"hides a storage borrow in a return type parameter" swap rejects
+"fn make item:mut$Item -> fn[-> i64] { move { 1 += item.value item.value } } fn apply[T,I] item:mut$I callback:fn[mut$I -> T] -> T { item callback exec } fn use item:Item { &make item &apply[fn[-> i64] Item] exec drop }"
+"hides a borrowed result in a type parameter" swap rejects
+test::test_summary

@@ -51,8 +51,10 @@ names. Call forms below assume a list binding named `numbers`.
 | [get_mut](#listtget_mut) | `fn get_mut [T] self:mut$List[T] n:u64 -> mut$T` | Exclusive borrow of an element |
 | [get_ref](#listtget_ref) | `fn get_ref [T] self:$List[T] n:u64 -> $T` | Borrow of the element at a zero-based index |
 | [insert](#listtinsert) | `fn insert [T] self:mut$List[T] item:T index:u64` | Insert before `index` |
+| [into_iter](#listtinto_iter) | `fn into_iter self:List[T] -> Iter[T]` | Transfer elements in index order |
 | [is_empty](#listtis_empty) | `fn is_empty self:$List -> bool` | Whether the list has no elements |
 | [iter](#listtiter) | `fn iter self:$List[T] -> Iter[$T]` | Iterator over borrows of the elements |
+| [iter_mut](#listtiter_mut) | `fn iter_mut self:mut$List[T] -> ListIterMut[T]` | Lend one mutable element at a time |
 | [join](#liststrjoin) | `fn join self:$List[str] separator:$str -> String` | Join a string-view list |
 | [join_strings](#liststringjoin_strings) | `fn join_strings self:$List[String] separator:$str -> String` | Join owned strings |
 | [length](#listtlength) | `fn length self:$List -> u64` | Number of elements |
@@ -182,6 +184,25 @@ into it. The item is consumed before the index, unlike [set](#listtset).
 
 Call: `index item numbers.insert`.
 
+### List[T]::into_iter
+
+```text
+fn into_iter self:List[T] -> Iter[T]
+```
+
+Consumes the list and yields each element exactly once in original index order.
+The iterator owns the unconsumed elements. Dropping it destroys those elements.
+A yielded owner can outlive the iterator. Neither `Copy` nor `Clone` is required.
+Empty and exhausted iterators keep returning `None`.
+
+Construction reverses the owned list in linear time. Each `next` removes the last
+element in constant time. This reuses the list's element allocation and creates
+an ordinary closure. The returned `Iter[T]` supports all existing iterator
+operations. Terminals that borrow a named iterator leave unvisited elements
+available for subsequent calls.
+
+Call: `numbers.into_iter`.
+
 ### List[T]::is_empty
 
 ```text
@@ -200,6 +221,40 @@ Returns an iterator over shared element borrows. The list keeps ownership and re
 loaned while those borrows are in use.
 
 Call: `numbers.iter`.
+
+### List[T]::iter_mut
+
+```text
+fn iter_mut self:mut$List[T] -> ListIterMut[T]
+```
+
+Returns a mutable cursor in index order. The list remains the element owner and
+is borrowed exclusively while the cursor or a yielded borrow is live. The
+cursor neither removes elements nor reallocates storage. It requires neither
+`Copy` nor `Clone`.
+
+`next` lends one element. Finish using that borrow before advancing, moving, or
+dropping the cursor. Empty and exhausted cursors keep returning `None`. A `for`
+loop follows the same rule: each element borrow must end before the next
+iteration.
+
+| Method | Signature | Behavior |
+|---|---|---|
+| `all` | `fn all self:mut$ListIterMut[T] predicate:fn[$T -> bool] -> bool` | Stop at the first false result, or return true on exhaustion |
+| `any` | `fn any self:mut$ListIterMut[T] predicate:fn[$T -> bool] -> bool` | Stop at the first true result, or return false on exhaustion |
+| `count` | `fn count self:mut$ListIterMut[T] -> u64` | Return the remaining count and exhaust the cursor |
+| `find` | `fn find self:mut$ListIterMut[T] predicate:fn[$T -> bool] -> Option[mut$T]` | Lend the first match, or return `None` on exhaustion |
+| `next` | `fn next self:mut$ListIterMut[T] -> Option[mut$T]` | Lend the next element |
+
+Predicates receive shared element borrows. `all`, `any`, and `find` leave the
+cursor positioned after the last element examined. A live `find` result keeps
+the cursor exclusively borrowed. `count` uses constant time and does not destroy
+elements.
+
+`ListIterMut[T]` has its own methods and supports `for`. It does not implement
+`Iterable[mut$T]`, whose defaults can retain earlier yields while advancing.
+
+Call: `numbers.iter_mut`. See [the list iteration example](../examples/list_iteration.casa).
 
 ### List[str]::join
 
@@ -380,9 +435,10 @@ unchanged.
 
 Call: `second first numbers.swap_at`.
 
- ## Element ownership
+## Element ownership
 
-`get`, `get_ref`, and `iter` keep the list as the element owner. Use `copy` for a `Copy`
+`get`, `get_ref`, `get_mut`, `iter`, and `iter_mut` keep the list as the element owner. Use `copy` for a `Copy`
 element or `.clone` for a `Clone` element when an independent value is needed. `set`
 destroys the replaced element. `replace`, `remove`, and `pop` transfer the removed value
-to the caller. See [Ownership and Borrows](ownership.md).
+to the caller. `into_iter` transfers each yielded element to its caller and owns
+the remainder. See [Ownership and Borrows](ownership.md).

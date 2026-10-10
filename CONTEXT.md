@@ -4,6 +4,12 @@ Casa is a self-hosted programming language and compiler. Its glossary captures p
 
 ## Standard library
 
+**Borrowed sequence view**:
+A `Slice[T]` that provides shared access to a checked runtime-length range of
+contiguous elements. Arrays and lists provide `Slice[T]`, and `Bytes` provides
+`Slice[u8]`. The view retains the source owner's lifetime and owns no elements.
+_Avoid_: List slice, owned slice
+
 **Unit**:
 A value with one possible state, constructed with `std::Unit::Value`. A
 `Result[std::Unit E]` represents a fallible operation without a success payload.

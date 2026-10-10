@@ -132,7 +132,8 @@ Arrays with non-`Copy` elements move by default.
 The annotation gives an empty array its element type. Use `Bytes` for compact
 binary data. It stores one `u8` per byte and has no byte-literal syntax. Every
 evaluation of an array literal produces an independent owned array that takes
-ownership of its elements. `Slice[T]` borrows a runtime-length range from a `List[T]`. See
+ownership of its elements. `Slice[T]` borrows a runtime-length range from an array or a list.
+`Bytes` provides the same view with `u8` elements. See
 [Collections](collections.md),
 [Optional Values and Errors](optional-values-and-errors.md),
 [Functions and Lambdas](functions-and-lambdas.md), [Structs and
