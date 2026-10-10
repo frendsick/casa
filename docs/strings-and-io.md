@@ -43,7 +43,7 @@ text.as_str print_length
 
 | Method | Signature | Description |
 |---|---|---|
-| [at](#strat) | `fn at s:$str index:u64 -> char` | Byte at `index`, represented as `char` |
+| [at](#strat) | `fn at s:$str index:u64 -> Option[char]` | Byte at `index`, represented as `char` |
 | [concat](#strconcat) | `fn concat b:$str a:$str -> String` | Concatenated owned text |
 | [contains](#strcontains) | `fn contains needle:$str s:$str -> bool` | Whether text contains a substring |
 | [ends_with](#strends_with) | `fn ends_with suffix:$str s:$str -> bool` | Whether text ends with a suffix |
@@ -53,9 +53,9 @@ text.as_str print_length
 | [iter](#striter) | `fn iter self:$str -> Iter[char]` | Iterator over Unicode scalar values |
 | [length](#strlength) | `fn length s:$str -> u64` | Length in bytes |
 | [repeat](#strrepeat) | `fn repeat self:$str n:u64 -> String` | Repeat text |
-| [replace](#strreplace) | `fn replace old:$str new_str:$str s:$str -> String` | Replace all matches |
+| [replace](#strreplace) | `fn replace old:$str new_str:$str s:$str -> Option[String]` | Replace all matches |
 | [reverse](#strreverse) | `fn reverse self:$str -> String` | Reverse Unicode scalar values |
-| [split](#strsplit) | `fn split delimiter:$str s:$str -> List[String]` | Copy split parts |
+| [split](#strsplit) | `fn split delimiter:$str s:$str -> Option[List[String]]` | Copy split parts |
 | [starts_with](#strstarts_with) | `fn starts_with prefix:$str s:$str -> bool` | Whether text starts with a prefix |
 | [substring](#strsubstring) | `fn substring len:u64 start:u64 s:$str -> String` | Copy a byte range on UTF-8 boundaries |
 | [to_lower](#strto_lower) | `fn to_lower self:$str -> String` | Copy with ASCII letters lowercased |
@@ -66,15 +66,26 @@ text.as_str print_length
 ### str::at
 
 ```text
-fn at s:$str index:u64 -> char
+fn at s:$str index:u64 -> Option[char]
 ```
 
-`at` returns the byte at `index`, represented as `char`.
-The index must be less than the byte length. An out-of-range index terminates
-the program. This operation does not decode UTF-8: the two bytes of `ä` yield
-codepoints `195` and `164`. Use `iter` to read Unicode scalar values.
+`at` returns `Some` containing the byte at `index`, represented as `char`.
+It returns `None` when the index is at or beyond the byte length, including
+for empty text. This operation does not decode UTF-8: the two bytes of `ä`
+yield codepoints `195` and `164`. Use `iter` to read Unicode scalar values.
 
-Call `index text.at`. `String.at` has the same bounds and byte semantics.
+Call `index text.at`. Use `unwrap` only when the index is known to be in range.
+`String.at` has the same return type, bounds, and byte semantics.
+
+```casa
+import "std"
+
+0 "ä".at.unwrap.codepoint print # 195
+3 "abc".at match
+    std::Option::Some(byte) => byte print
+    std::Option::None => "index out of range" print
+end
+```
 
 ### str::concat
 
@@ -154,13 +165,13 @@ Call `2 "abc".repeat`, producing `abcabc`.
 ### str::replace
 
 ```text
-fn replace old:$str new_str:$str s:$str -> String
+fn replace old:$str new_str:$str s:$str -> Option[String]
 ```
 
-`replace` copies the input and replaces non-overlapping matches from left to
-right. The method does not search the inserted text again. If there are no
-matches, it returns an unchanged copy. The program terminates if the search
-string is empty. An empty replacement removes matches.
+`replace` returns `Some` containing an owned copy with non-overlapping matches
+replaced from left to right. The method does not search the inserted text
+again. If there are no matches, `Some` contains an unchanged copy. An empty
+search string returns `None`. An empty replacement removes matches.
 
 Call `text replacement search str::replace`.
 
@@ -175,16 +186,17 @@ fn reverse self:$str -> String
 ### str::split
 
 ```text
-fn split delimiter:$str s:$str -> List[String]
+fn split delimiter:$str s:$str -> Option[List[String]]
 ```
 
-`split` copies the parts separated by `delimiter` into a list of owned strings.
+`split` returns `Some` containing the parts separated by `delimiter` as a list
+of owned strings.
 
 Call `"a,b,c" "," str::split`.
 
 Leading, adjacent, and trailing delimiters produce empty parts. An empty input
 produces one empty part. A nonempty input with no match produces one part
-containing the complete input. An empty delimiter terminates the program.
+containing the complete input. An empty delimiter returns `None`.
 
 ### str::starts_with
 
@@ -247,7 +259,7 @@ names:
 import "std"
 
 "hello" 1 3 str::substring print # ell
-"a,b,c" "," str::split = parts
+"a,b,c" "," str::split.unwrap = parts
 ```
 
 `List[String]::join_strings` joins owned parts:
@@ -255,7 +267,7 @@ import "std"
 ```casa
 import "std"
 
-"a,b,c" "," str::split = parts
+"a,b,c" "," str::split.unwrap = parts
 ", " parts.join_strings print # a, b, c
 ```
 
@@ -273,6 +285,7 @@ independent owner. `as_str` returns a [borrowed view](ownership.md#return-a-borr
 | [append](#stringappend) | `fn append self:mut$String text:$str` | Append a borrowed view |
 | [append_string](#stringappend_string) | `fn append_string self:mut$String text:String` | Append and consume owned text |
 | [as_str](#stringas_str) | `fn as_str self:$String -> $str` | Borrow the current text without allocation |
+| [at](#stringat) | `fn at self:$String index:u64 -> Option[char]` | Optional byte at `index`, represented as `char` |
 | [capacity](#stringcapacity) | `fn capacity self:$String -> u64` | Byte capacity |
 | [clear](#stringclear) | `fn clear self:mut$String` | Remove all text and retain capacity |
 | [clone](#stringclone) | `fn clone self:$String -> String` | Allocate an independent owner |
@@ -306,6 +319,16 @@ fn as_str self:$String -> $str
 ```
 
 `as_str` borrows the current text without allocation.
+
+### String::at
+
+```text
+fn at self:$String index:u64 -> Option[char]
+```
+
+`at` delegates to [str::at](#strat) without consuming or changing the string.
+It returns `Some` containing the byte as `char`, or `None` when the index is at
+or beyond the byte length.
 
 ### String::capacity
 
