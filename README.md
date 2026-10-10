@@ -100,7 +100,6 @@ introductory to advanced.
 - [Formatter usage and rules](docs/FORMAT.md)
 - [Language server](docs/language-server.md)
 - [Line counts with cloc](cloc-lang-def.txt)
-- [Operator migration](docs/operator-migration.md)
 
 ## Build from source
 

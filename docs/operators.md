@@ -33,8 +33,6 @@ comparisons, and eager boolean operations, including constant blocks.
 
 Named functions and receiver methods keep their topmost-first parameter order.
 Both operand expressions run from left to right before the operator runs.
-See [migrating existing source](operator-migration.md) for code written with
-the former comparison rule.
 
 ## Arithmetic
 

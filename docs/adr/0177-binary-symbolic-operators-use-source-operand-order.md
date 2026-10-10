@@ -21,10 +21,3 @@ operand roles, and stack-effect notation are separate rules.
 The former split between arithmetic and comparisons made mixed expressions
 easy to misread. Using one operand rule for binary symbolic operators removes
 that split while retaining the existing call convention.
-
-This change requires explicit source migration because old comparisons can
-typecheck under both rules. The [migration tool](../operator-migration.md)
-inserts `swap` before each comparison. It preserves operand evaluation,
-receiver order, and the chosen method, including asymmetric or effectful
-equality implementations. Primitive comparisons can then be simplified using
-their known semantics.
