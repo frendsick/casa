@@ -36,6 +36,7 @@ struct BackendPlanner {
     pending:       std::List[FunctionWork]
     failure:       std::Option[BytecodeFailure]
     label_counter: u64
+    layouts:       common::LayoutPlanner
 }
 
 struct EnumDispatch {
@@ -69,11 +70,12 @@ fn resolve_struct_field
     member:$common::StructMemberAccess
     store:$common::SymbolStore
     typ:$common::Type
+    layouts:mut$common::LayoutPlanner
 -> std::Option[ResolvedStructField] {
     if member.struct_name store.structs.get std::Option::Some(casa_struct) is then
         if member.member_index casa_struct.members.length > then
             if
-                store member.member_index casa_struct common::plan_struct_member_storage
+                member.member_index casa_struct layouts.plan_struct_member
                 std::Option::Some(storage) is
             then
                 typ.clone storage.clone ResolvedStructField std::Option::Some return
@@ -86,6 +88,7 @@ fn resolve_struct_field
 impl BackendPlanner {
     fn new checked:$typechecker::CheckedProgram -> BackendPlanner {
         checked.get_store = store
+        store common::LayoutPlanner::new
         0
         std::Option[BytecodeFailure]::None
         std::List[FunctionWork]::new
@@ -112,7 +115,7 @@ impl BackendPlanner {
 
 impl FunctionPlanner {
     fn new state:mut$BackendPlanner -> FunctionPlanner {
-        state.checked state.store.variables index_root_variable_map = locals_count = local_slots
+        state.layouts state.checked state.store.variables index_root_variable_map = locals_count = local_slots
         std::Map[std::String u64]::new
         state
         locals_count
@@ -124,7 +127,7 @@ impl FunctionPlanner {
     }
 
     fn for_function state:mut$BackendPlanner function:$common::Function -> FunctionPlanner {
-        state.checked function.variables index_local_variable_list = locals_count = local_slots
+        state.layouts state.checked function.variables index_local_variable_list = locals_count = local_slots
         std::Map[std::String u64]::new
         state
         locals_count
@@ -226,7 +229,10 @@ impl FunctionPlanner {
         member_index:u64
     -> common::FieldStoragePlan {
         if
-            compiler.state.store member_index casa_struct common::plan_struct_member_storage
+            member_index casa_struct compiler
+                .state
+                .layouts
+                .plan_struct_member
             std::Option::Some(plan) is
         then
             plan.clone return
@@ -238,7 +244,12 @@ impl FunctionPlanner {
 
     fn struct_size compiler:mut$FunctionPlanner casa_struct:$common::CasaStruct -> u64 {
         casa_struct.name.clone common::GenericType::new common::Type::Generic = struct_type
-        if compiler.state.store struct_type common::type_inline_size std::Option::Some(size) is then
+        if
+            struct_type compiler
+                .state
+                .layouts
+                .inline_size std::Option::Some(size) is
+        then
             size return
         fi
         f"Cannot determine layout of struct `{casa_struct.name}`" compiler.record_failure_string
@@ -252,8 +263,11 @@ impl FunctionPlanner {
         payload_index:u64
     -> common::FieldStoragePlan {
         if
-            compiler.state.store payload_index variant_name casa_enum
-            common::plan_enum_payload_storage std::Option::Some(plan) is
+            payload_index variant_name casa_enum
+            compiler
+                .state
+                .layouts
+                .plan_enum_payload std::Option::Some(plan) is
         then
             plan.clone return
         fi
@@ -264,7 +278,12 @@ impl FunctionPlanner {
 
     fn enum_size compiler:mut$FunctionPlanner casa_enum:$common::CasaEnum -> u64 {
         casa_enum.name.clone common::GenericType::new common::Type::Generic = enum_type
-        if compiler.state.store enum_type common::type_inline_size std::Option::Some(size) is then
+        if
+            enum_type compiler
+                .state
+                .layouts
+                .inline_size std::Option::Some(size) is
+        then
             size return
         fi
         f"Cannot determine layout of enum `{casa_enum.name}`" compiler.record_failure_string
@@ -315,9 +334,10 @@ fn uses_inline_local_storage typ:$common::Type checked:$typechecker::CheckedProg
 fn local_variable_slot_width
     variable:$common::Variable
     checked:$typechecker::CheckedProgram
+    layouts:mut$common::LayoutPlanner
 -> u64 {
     if checked variable.typ uses_inline_local_storage then
-        if checked.get_store variable.typ common::type_inline_size std::Option::Some(size) is then
+        if variable.typ layouts.inline_size std::Option::Some(size) is then
             size common::WORD_SIZE u64::try_from.unwrap 1 - +
             common::WORD_SIZE u64::try_from.unwrap / return
         fi
@@ -328,12 +348,13 @@ fn local_variable_slot_width
 fn index_local_variable_list
     variables:$std::List[common::Variable]
     checked:$typechecker::CheckedProgram
+    layouts:mut$common::LayoutPlanner
 -> std::Map[std::String u64] u64 {
     std::Map[std::String u64]::new = slots
     0 = next_slot: u64
     for variable in variables.iter do
         if variable.name slots.has ! then
-            checked variable local_variable_slot_width = width
+            layouts checked variable local_variable_slot_width = width
             next_slot width + 1 - variable.name.clone slots.set
             width += next_slot
         fi
@@ -344,13 +365,14 @@ fn index_local_variable_list
 fn index_root_variable_map
     variables:$std::Map[std::String common::Variable]
     checked:$typechecker::CheckedProgram
+    layouts:mut$common::LayoutPlanner
 -> std::Map[std::String u64] u64 {
     std::Map[std::String u64]::new = slots
     variables.keys = names
     0 = next_slot: u64
     for name in names.iter do
         if name.as_str variables.get_str std::Option::Some(variable) is then
-            checked variable local_variable_slot_width = width
+            layouts checked variable local_variable_slot_width = width
             next_slot width + 1 - name.clone slots.set
             width += next_slot
         fi
@@ -1517,7 +1539,11 @@ impl FunctionPlanner {
             .typ
             .array_element_type
             .unwrap = element_type
-        self.state.store element_type common::type_inline_size.unwrap = element_size
+        element_type self
+            .state
+            .layouts
+            .inline_size
+            .unwrap = element_size
         # Static elements occupy one raw word. Aggregates use the dynamic path
         # even when their inline storage is one word (ADR-0152).
         if length 0 != common::WORD_SIZE element_size == && then
@@ -1737,7 +1763,12 @@ impl FunctionPlanner {
         target:$common::Type
         bytecode:mut$std::List[InstValue]
     {
-        if compiler.state.store target common::type_inline_size std::Option::Some(size) is then
+        if
+            target compiler
+                .state
+                .layouts
+                .inline_size std::Option::Some(size) is
+        then
             size i64::try_from.unwrap InstValue::Push bytecode.push
         else
             f"Cannot determine inline size of `{target.format}`" compiler.record_failure_string
@@ -1753,11 +1784,20 @@ impl FunctionPlanner {
             compiler.state.store target common::type_value_representation std::Option::Some(representation) is
         then
             if common::VALUE_REPR_INDIRECT representation == then
-                compiler.state.store target common::type_inline_size.unwrap
+                target compiler
+                    .state
+                    .layouts
+                    .inline_size
+                    .unwrap
                 InstValue::ReadIndirect bytecode.push
                 return
             fi
-            if compiler.state.store target common::type_inline_size std::Option::Some(size) is then
+            if
+                target compiler
+                    .state
+                    .layouts
+                    .inline_size std::Option::Some(size) is
+            then
                 if 1 size == then
                     InstValue::Load8 bytecode.push
                 elif 2 size == then
@@ -1828,7 +1868,11 @@ impl FunctionPlanner {
         target:$common::Type
         bytecode:mut$std::List[InstValue]
     {
-        self.state.store target common::type_inline_size.unwrap = size
+        target self
+            .state
+            .layouts
+            .inline_size
+            .unwrap = size
         size common::WORD_SIZE u64::try_from.unwrap 1 - +
         common::WORD_SIZE u64::try_from.unwrap / = width
         0 = copy_local: u64
@@ -1863,7 +1907,12 @@ impl FunctionPlanner {
         if
             compiler.state.store target common::type_value_representation std::Option::Some(representation) is
         then
-            if compiler.state.store target common::type_inline_size std::Option::Some(size) is then
+            if
+                target compiler
+                    .state
+                    .layouts
+                    .inline_size std::Option::Some(size) is
+            then
                 if common::VALUE_REPR_INDIRECT representation == then
                     target compiler
                         .state
@@ -2169,7 +2218,12 @@ impl FunctionPlanner {
             semantic_body::Action::ConstrainedCall(_) => "Deferred dispatch reached target planning" self.record_failure
             semantic_body::Action::ConstrainedClosure(_) => "Deferred dispatch reached target planning" self.record_failure
             semantic_body::Action::SizeOf(typ) => {
-                if self.state.store typ common::type_inline_size std::Option::Some(size) is then
+                if
+                    typ self
+                        .state
+                        .layouts
+                        .inline_size std::Option::Some(size) is
+                then
                     if size i64::try_from std::Option::Some(signed_size) is then
                         signed_size InstValue::Push bytecode.push
                     else
@@ -2245,7 +2299,8 @@ impl FunctionPlanner {
         typ:$common::Type
         bytecode:mut$std::List[InstValue]
     -> std::Option[ResolvedStructField] {
-        if typ self.state.store member resolve_struct_field std::Option::Some(field) is then
+        self.state = state
+        if state.layouts typ state.store member resolve_struct_field std::Option::Some(field) is then
             if 0 field.storage.offset != then
                 field.storage.offset i64::try_from.unwrap InstValue::Push bytecode.push
                 InstValue::Add bytecode.push
@@ -2778,7 +2833,9 @@ pub fn compile_checked
             .get_externs
             .get
             .unwrap = signature
-        if diagnostics state.store signature abi::plan_checked_extern std::Option::Some(plan) is then
+        if
+            diagnostics state.layouts state.store signature abi::plan_checked_extern std::Option::Some(plan) is
+        then
             plan name.clone state
                 .program
                 .native_calls

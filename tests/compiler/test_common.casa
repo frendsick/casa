@@ -1,4 +1,5 @@
 import "std" as std
+import "helpers.casa" as helpers
 import "../../compiler/common.casa" as common
 import "../../compiler/shared.casa" as shared
 import "../../compiler/error.casa" as error
@@ -348,6 +349,180 @@ fn test_shared_backing_lifetimes {
         .format
         .as_str test::assert_str_eq
 }
+
+fn test_layout_planner_queries {
+    "layout planner queries" test::test_start
+    error::Diagnostics::new = diagnostics
+    diagnostics
+    "struct Inner { value:u16 flag:bool } struct Packet { tag:u8 inner:Inner samples:array[u16 3] tail:u64 } struct Generic[T] { tag:u8 inner:Inner value:T } enum Link { End More(Node) } struct Node { value:u8 next:Link } enum Choice { Empty Small(u8) Fields(u8 array[u16 3] u64) } struct Huge { first:u8 values:array[u64 2305843009213693952] last:u64 } enum TooLarge { Fields(u8 array[u64 2305843009213693952] u64) } enum Branch { Empty Children(array[Branch 2]) }"
+    helpers::parse_resolve_test_source = source
+    diagnostics "layout declarations parse" helpers::assert_no_errors
+    source.store common::LayoutPlanner::new = layouts
+    "Packet" source
+        .store
+        .structs
+        .get_str
+        .unwrap = packet
+    "Generic" source
+        .store
+        .structs
+        .get_str
+        .unwrap = generic
+    "Node" source
+        .store
+        .structs
+        .get_str
+        .unwrap = node
+    "Choice" source
+        .store
+        .enums
+        .get_str
+        .unwrap = choice
+    "Huge" source
+        .store
+        .structs
+        .get_str
+        .unwrap = huge
+    "TooLarge" source
+        .store
+        .enums
+        .get_str
+        .unwrap = too_large
+    0 = pass
+    while pass 2 > do
+        # Request the last field first, then revisit earlier offsets.
+        "last struct field" 16 3 packet layouts
+            .plan_struct_member
+            .unwrap
+            .offset test::assert_eq
+        "inline nested struct" 1 packet layouts
+            .plan_struct_member
+            .unwrap
+            .stores_inline test::assert_true
+        "nested struct offset" 2 1 packet layouts
+            .plan_struct_member
+            .unwrap
+            .offset test::assert_eq
+        "array offset" 6 2 packet layouts
+            .plan_struct_member
+            .unwrap
+            .offset test::assert_eq
+        "array field size" 6 2 packet layouts
+            .plan_struct_member
+            .unwrap
+            .size test::assert_eq
+        "field alignment" 8 3 packet layouts
+            .plan_struct_member
+            .unwrap
+            .alignment test::assert_eq
+        "first struct field" 0 0 packet layouts
+            .plan_struct_member
+            .unwrap
+            .offset test::assert_eq
+        "missing struct field" 4 packet layouts.plan_struct_member.is_none test::assert_true
+        "struct size" 24 "Packet" common::parse_type_str layouts.inline_size.unwrap test::assert_eq
+        "array length two" 48 "array[Packet 2]" common::parse_type_str layouts.inline_size.unwrap test::assert_eq
+        "array length three" 72 "array[Packet 3]" common::parse_type_str layouts.inline_size.unwrap test::assert_eq
+        "empty array" 1 "array[Packet 0]" common::parse_type_str layouts.inline_size.unwrap test::assert_eq
+        "borrow size" 8 "$Packet" common::parse_type_str layouts.inline_size.unwrap test::assert_eq
+        "generic field stays indirect" 1 generic layouts
+            .plan_struct_member
+            .unwrap
+            .stores_inline ! test::assert_true
+        "generic value offset" 16 2 generic layouts
+            .plan_struct_member
+            .unwrap
+            .offset test::assert_eq
+        "first generic specialization" 24 "Generic[u8]" common::parse_type_str layouts.inline_size.unwrap test::assert_eq
+        "second generic specialization" 24 "Generic[Packet]" common::parse_type_str layouts.inline_size.unwrap test::assert_eq
+        "recursive struct size" 16 "Node" common::parse_type_str layouts.inline_size.unwrap test::assert_eq
+        "recursive enum size" 16 "Link" common::parse_type_str layouts.inline_size.unwrap test::assert_eq
+        "recursive array at its own root" 48 "array[Branch 2]" common::parse_type_str layouts.inline_size.unwrap test::assert_eq
+        "nested recursion does not cache a cut point" 24 "Branch" common::parse_type_str layouts.inline_size.unwrap test::assert_eq
+        "recursive field offset" 8 1 node layouts
+            .plan_struct_member
+            .unwrap
+            .offset test::assert_eq
+        "recursive field stays indirect" 1 node layouts
+            .plan_struct_member
+            .unwrap
+            .stores_inline ! test::assert_true
+        "last enum payload" 16 2 "Fields" choice layouts
+            .plan_enum_payload
+            .unwrap
+            .offset test::assert_eq
+        "enum array offset" 10 1 "Fields" choice layouts
+            .plan_enum_payload
+            .unwrap
+            .offset test::assert_eq
+        "enum array stays inline" 1 "Fields" choice layouts
+            .plan_enum_payload
+            .unwrap
+            .stores_inline test::assert_true
+        "enum first payload" 8 0 "Fields" choice layouts
+            .plan_enum_payload
+            .unwrap
+            .offset test::assert_eq
+        "another variant" 8 0 "Small" choice layouts
+            .plan_enum_payload
+            .unwrap
+            .offset test::assert_eq
+        "empty variant" 0 "Empty" choice layouts.plan_enum_payload.is_none test::assert_true
+        "unknown variant" 0 "Missing" choice layouts.plan_enum_payload.is_none test::assert_true
+        "missing payload" 3 "Fields" choice layouts.plan_enum_payload.is_none test::assert_true
+        "enum size" 24 "Choice" common::parse_type_str layouts.inline_size.unwrap test::assert_eq
+        "overflowed struct size" "Huge" common::parse_type_str layouts.inline_size.is_none test::assert_true
+        "overflowed struct field" 1 huge layouts.plan_struct_member.is_none test::assert_true
+        "field after overflow" 2 huge layouts.plan_struct_member.is_none test::assert_true
+        "valid struct prefix" 0 0 huge layouts
+            .plan_struct_member
+            .unwrap
+            .offset test::assert_eq
+        "overflowed enum size" "TooLarge" common::parse_type_str layouts.inline_size.is_none test::assert_true
+        "overflowed enum field" 1 "Fields" too_large layouts.plan_enum_payload.is_none test::assert_true
+        "payload after overflow" 2 "Fields" too_large layouts.plan_enum_payload.is_none test::assert_true
+        "valid enum prefix" 8 0 "Fields" too_large layouts
+            .plan_enum_payload
+            .unwrap
+            .offset test::assert_eq
+        1 += pass
+    done
+}
+
+fn test_layout_planner_request_isolation {
+    "layout planner request isolation" test::test_start
+    error::Diagnostics::new = diagnostics
+    diagnostics "struct Item { value:u8 tail:u8 }" helpers::parse_resolve_test_source = narrow
+    diagnostics "struct Item { value:u64 tail:u64 }" helpers::parse_resolve_test_source = wide
+    diagnostics "independent declarations parse" helpers::assert_no_errors
+    narrow.store common::LayoutPlanner::new = narrow_layouts
+    wide.store common::LayoutPlanner::new = wide_layouts
+    "Item" common::parse_type_str = typ
+    "Item" narrow
+        .store
+        .structs
+        .get_str
+        .unwrap = narrow_item
+    "Item" wide
+        .store
+        .structs
+        .get_str
+        .unwrap = wide_item
+    0 = pass
+    while pass 2 > do
+        "narrow request size" 2 typ narrow_layouts.inline_size.unwrap test::assert_eq
+        "wide request size" 16 typ wide_layouts.inline_size.unwrap test::assert_eq
+        "narrow request offset" 1 1 narrow_item narrow_layouts
+            .plan_struct_member
+            .unwrap
+            .offset test::assert_eq
+        "wide request offset" 8 1 wide_item wide_layouts
+            .plan_struct_member
+            .unwrap
+            .offset test::assert_eq
+        1 += pass
+    done
+}
 test_type_base
 test_type_params
 test_split_type_tokens
@@ -367,4 +542,6 @@ test_derived_clone_preserves_op_metadata
 test_typecheck_store_clone_preserves_source_names
 test_source_name_lookup_precedence_and_snapshot
 test_shared_backing_lifetimes
+test_layout_planner_queries
+test_layout_planner_request_isolation
 test::test_summary
