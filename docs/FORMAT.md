@@ -34,7 +34,7 @@ LF and ends with exactly one newline.
 The sections below define layout rules and author conventions. `casafmt`
 enforces structural layout, but preserves freeform composition lines and
 comment text. It does not choose names, remove redundant comments, or rewrite
-string construction. Rules are MUST unless noted otherwise.
+string construction. Authors MUST follow these rules unless noted otherwise.
 
 See [STYLE.md](./STYLE.md) for naming conventions and idiomatic patterns.
 
@@ -529,7 +529,8 @@ end
 
 ## f-strings vs string concatenation
 
-Author convention. `casafmt` does not rewrite concatenation or interpolation.
+`casafmt` does not rewrite concatenation or interpolation. Apply this convention
+when writing source code.
 
 Prefer f-strings whenever embedding one or more values into a string literal:
 

@@ -69,12 +69,12 @@ text.as_str print_length
 fn at s:$str index:u64 -> char
 ```
 
-Returns the byte at `index`, represented as `char`.
+`at` returns the byte at `index`, represented as `char`.
 The index must be less than the byte length. An out-of-range index terminates
 the program. This operation does not decode UTF-8: the two bytes of `ä` yield
 codepoints `195` and `164`. Use `iter` to read Unicode scalar values.
 
-Call: `index text.at`. `String.at` has the same bounds and byte semantics.
+Call `index text.at`. `String.at` has the same bounds and byte semantics.
 
 ### str::concat
 
@@ -82,7 +82,7 @@ Call: `index text.at`. `String.at` has the same bounds and byte semantics.
 fn concat b:$str a:$str -> String
 ```
 
-Copies `a`, then `b`, into owned text. Call: `first second str::concat`.
+`concat` copies `a`, then `b`, into owned text. Call `first second str::concat`.
 
 ### str::contains
 
@@ -90,7 +90,7 @@ Copies `a`, then `b`, into owned text. Call: `first second str::concat`.
 fn contains needle:$str s:$str -> bool
 ```
 
-Returns whether text contains a substring.
+`contains` returns whether text contains a substring.
 
 ### str::ends_with
 
@@ -98,7 +98,7 @@ Returns whether text contains a substring.
 fn ends_with suffix:$str s:$str -> bool
 ```
 
-Returns whether text ends with a suffix.
+`ends_with` returns whether text ends with a suffix.
 
 ### str::eq
 
@@ -106,7 +106,7 @@ Returns whether text ends with a suffix.
 fn eq b:$str a:$str -> bool
 ```
 
-Compares text content for equality. `==` is the usual form.
+`eq` compares text content for equality. `==` is the usual form.
 
 ### str::find
 
@@ -114,8 +114,8 @@ Compares text content for equality. `==` is the usual form.
 fn find needle:$str s:$str -> i64
 ```
 
-Returns the first matching byte index, or `-1` when no match exists. An empty
-needle matches at byte index `0`. Call: `text needle str::find`.
+`find` returns the first matching byte index, or `-1` when no match exists. An
+empty needle matches at byte index `0`. Call `text needle str::find`.
 
 ### str::is_empty
 
@@ -123,7 +123,7 @@ needle matches at byte index `0`. Call: `text needle str::find`.
 fn is_empty self:$str -> bool
 ```
 
-Returns whether the string has no bytes.
+`is_empty` returns whether the string has no bytes.
 
 ### str::iter
 
@@ -131,7 +131,7 @@ Returns whether the string has no bytes.
 fn iter self:$str -> Iter[char]
 ```
 
-Returns an iterator over Unicode scalar values.
+`iter` returns an iterator over Unicode scalar values.
 
 ### str::length
 
@@ -139,7 +139,7 @@ Returns an iterator over Unicode scalar values.
 fn length s:$str -> u64
 ```
 
-Returns the length in bytes.
+`length` returns the length in bytes.
 
 ### str::repeat
 
@@ -147,9 +147,9 @@ Returns the length in bytes.
 fn repeat self:$str n:u64 -> String
 ```
 
-Returns owned text containing `n` repetitions of the input.
+`repeat` returns owned text containing `n` repetitions of the input.
 
-Call: `2 "abc".repeat`, producing `abcabc`.
+Call `2 "abc".repeat`, producing `abcabc`.
 
 ### str::replace
 
@@ -157,12 +157,12 @@ Call: `2 "abc".repeat`, producing `abcabc`.
 fn replace old:$str new_str:$str s:$str -> String
 ```
 
-Copies the input and replaces non-overlapping matches from left to right.
-Inserted text is not searched again. No match returns an unchanged copy.
-An empty search string terminates the program. An empty replacement removes
-matches.
+`replace` copies the input and replaces non-overlapping matches from left to
+right. The method does not search the inserted text again. If there are no
+matches, it returns an unchanged copy. The program terminates if the search
+string is empty. An empty replacement removes matches.
 
-Call: `text replacement search str::replace`.
+Call `text replacement search str::replace`.
 
 ### str::reverse
 
@@ -170,7 +170,7 @@ Call: `text replacement search str::replace`.
 fn reverse self:$str -> String
 ```
 
-Reverses Unicode scalar values.
+`reverse` reverses Unicode scalar values.
 
 ### str::split
 
@@ -178,9 +178,9 @@ Reverses Unicode scalar values.
 fn split delimiter:$str s:$str -> List[String]
 ```
 
-Copies the parts separated by `delimiter` into a list of owned strings.
+`split` copies the parts separated by `delimiter` into a list of owned strings.
 
-Call: `"a,b,c" "," str::split`.
+Call `"a,b,c" "," str::split`.
 
 Leading, adjacent, and trailing delimiters produce empty parts. An empty input
 produces one empty part. A nonempty input with no match produces one part
@@ -192,7 +192,7 @@ containing the complete input. An empty delimiter terminates the program.
 fn starts_with prefix:$str s:$str -> bool
 ```
 
-Returns whether text starts with a prefix.
+`starts_with` returns whether text starts with a prefix.
 
 ### str::substring
 
@@ -200,11 +200,11 @@ Returns whether text starts with a prefix.
 fn substring len:u64 start:u64 s:$str -> String
 ```
 
-Copies `len` bytes starting at byte offset `start` into owned text. Both range
-boundaries must be UTF-8 boundaries, and the range must fit within the input. An invalid
-range terminates the program.
+`substring` copies `len` bytes starting at byte offset `start` into owned text.
+Both range boundaries must be UTF-8 boundaries, and the range must fit within
+the input. An invalid range terminates the program.
 
-Call: `"hello" 1 3 str::substring`, producing `ell`.
+Call `"hello" 1 3 str::substring`, producing `ell`.
 
 ### str::to_lower
 
@@ -212,7 +212,7 @@ Call: `"hello" 1 3 str::substring`, producing `ell`.
 fn to_lower self:$str -> String
 ```
 
-Copies with ASCII letters lowercased.
+`to_lower` returns a copy of the text with ASCII letters lowercased.
 
 ### str::to_str
 
@@ -220,7 +220,7 @@ Copies with ASCII letters lowercased.
 fn to_str self:$str -> String
 ```
 
-Allocates an independent owner.
+`to_str` allocates an independent owner.
 
 ### str::to_upper
 
@@ -228,7 +228,7 @@ Allocates an independent owner.
 fn to_upper self:$str -> String
 ```
 
-Copies with ASCII letters uppercased.
+`to_upper` returns a copy of the text with ASCII letters uppercased.
 
 ### str::trim
 
@@ -236,7 +236,7 @@ Copies with ASCII letters uppercased.
 fn trim s:$str -> String
 ```
 
-Copies without surrounding ASCII whitespace.
+`trim` returns a copy of the text without surrounding ASCII whitespace.
 
 ### Text call examples
 
@@ -289,7 +289,7 @@ independent owner. `as_str` returns a [borrowed view](ownership.md#return-a-borr
 fn append self:mut$String text:$str
 ```
 
-Appends a borrowed view.
+`append` appends a borrowed view.
 
 ### String::append_string
 
@@ -297,7 +297,7 @@ Appends a borrowed view.
 fn append_string self:mut$String text:String
 ```
 
-Appends and consumes owned text.
+`append_string` appends and consumes owned text.
 
 ### String::as_str
 
@@ -305,7 +305,7 @@ Appends and consumes owned text.
 fn as_str self:$String -> $str
 ```
 
-Borrows the current text without allocation.
+`as_str` borrows the current text without allocation.
 
 ### String::capacity
 
@@ -313,7 +313,7 @@ Borrows the current text without allocation.
 fn capacity self:$String -> u64
 ```
 
-Returns the byte capacity.
+`capacity` returns the byte capacity.
 
 ### String::clear
 
@@ -321,7 +321,7 @@ Returns the byte capacity.
 fn clear self:mut$String
 ```
 
-Removes all text and retains capacity.
+`clear` removes all text and retains capacity.
 
 ### String::clone
 
@@ -329,7 +329,7 @@ Removes all text and retains capacity.
 fn clone self:$String -> String
 ```
 
-Allocates an independent owner.
+`clone` allocates an independent owner.
 
 ### String::from_str
 
@@ -337,7 +337,7 @@ Allocates an independent owner.
 fn from_str text:$str -> String
 ```
 
-Copies a view into owned storage.
+`from_str` copies a view into owned storage.
 
 ### String::length
 
@@ -345,7 +345,7 @@ Copies a view into owned storage.
 fn length self:$String -> u64
 ```
 
-Returns the length in bytes.
+`length` returns the length in bytes.
 
 ### String::new
 
@@ -353,7 +353,7 @@ Returns the length in bytes.
 fn new -> String
 ```
 
-Creates empty owned text.
+`new` creates empty owned text.
 
 ### String::push
 
@@ -361,7 +361,7 @@ Creates empty owned text.
 fn push self:mut$String character:char
 ```
 
-Appends one Unicode scalar value.
+`push` appends one Unicode scalar value.
 
 ### String::reserve
 
@@ -369,7 +369,7 @@ Appends one Unicode scalar value.
 fn reserve self:mut$String additional:u64
 ```
 
-Reserves space after the current text.
+`reserve` reserves space after the current text.
 
 ### String::with_capacity
 
@@ -377,7 +377,7 @@ Reserves space after the current text.
 fn with_capacity capacity:u64 -> String
 ```
 
-Creates empty text with reserved byte capacity.
+`with_capacity` creates empty text with reserved byte capacity.
 
 ### String example
 
@@ -405,7 +405,7 @@ message.as_str print
 fn to_f32 self:$str -> Option[f32]
 ```
 
-Parses a 32-bit decimal floating-point value.
+`to_f32` parses a 32-bit decimal floating-point value.
 
 ### str::to_f64
 
@@ -413,7 +413,7 @@ Parses a 32-bit decimal floating-point value.
 fn to_f64 self:$str -> Option[f64]
 ```
 
-Parses a 64-bit decimal floating-point value.
+`to_f64` parses a 64-bit decimal floating-point value.
 
 ### str::to_int
 
@@ -421,16 +421,17 @@ Parses a 64-bit decimal floating-point value.
 fn to_int self:$str -> Option[i64]
 ```
 
-Parses decimal digits with an optional leading minus sign across the complete
-`i64` range, including `-9223372036854775808`. Empty, malformed, or out-of-range
-input returns `Option::None`. A leading plus sign and whitespace are rejected.
+`to_int` parses decimal digits with an optional leading minus sign across the
+complete `i64` range, including `-9223372036854775808`. Empty, malformed, or
+out-of-range input returns `Option::None`. A leading plus sign and whitespace
+are rejected.
 
 ### Parsing example
 
 Call `trim` before integer parsing when surrounding whitespace is allowed.
 Floating-point parsing accepts decimal exponents, signed zero, `inf`, `-inf`,
-and `NaN`. Finite decimal text
-rounds to the nearest value of the target width, with ties rounded to even.
+and `NaN`. Finite decimal text rounds to the nearest value of the target width,
+with ties rounded to even.
 
 ```casa
 import "std"
@@ -487,7 +488,7 @@ data loss.
 fn codepoint self:char -> u32
 ```
 
-Returns the Unicode scalar value as `u32`.
+`codepoint` returns the Unicode scalar value as `u32`.
 
 ### char::eq
 
@@ -495,7 +496,7 @@ Returns the Unicode scalar value as `u32`.
 fn eq self:$char other:$char -> bool
 ```
 
-Compares characters for equality.
+`eq` compares characters for equality.
 
 ### char::from_codepoint
 
@@ -503,8 +504,8 @@ Compares characters for equality.
 fn from_codepoint codepoint:u32 -> Option[char]
 ```
 
-Returns a character if the codepoint is a valid Unicode scalar value. Otherwise, returns
-`Option::None`.
+`from_codepoint` returns a character if the codepoint is a valid Unicode scalar
+value. Otherwise, it returns `Option::None`.
 
 ### char::from_codepoint_unchecked
 
@@ -512,8 +513,8 @@ Returns a character if the codepoint is a valid Unicode scalar value. Otherwise,
 unsafe fn from_codepoint_unchecked value:u32 -> char
 ```
 
-Creates a character without validating the codepoint. The caller must supply a valid
-Unicode scalar value.
+`from_codepoint_unchecked` creates a character without validating the codepoint.
+The caller must supply a valid Unicode scalar value.
 
 ### char::is_alpha
 
@@ -521,7 +522,7 @@ Unicode scalar value.
 fn is_alpha c:char -> bool
 ```
 
-Returns whether the character is an ASCII letter.
+`is_alpha` returns whether the character is an ASCII letter.
 
 ### char::is_digit
 
@@ -529,7 +530,7 @@ Returns whether the character is an ASCII letter.
 fn is_digit c:char -> bool
 ```
 
-Returns whether the character is an ASCII digit.
+`is_digit` returns whether the character is an ASCII digit.
 
 ### char::is_lower
 
@@ -537,7 +538,7 @@ Returns whether the character is an ASCII digit.
 fn is_lower c:char -> bool
 ```
 
-Returns whether the character is an ASCII lowercase letter.
+`is_lower` returns whether the character is an ASCII lowercase letter.
 
 ### char::is_space
 
@@ -545,7 +546,8 @@ Returns whether the character is an ASCII lowercase letter.
 fn is_space c:char -> bool
 ```
 
-Returns whether the character is an ASCII space, tab, newline, or carriage return.
+`is_space` returns whether the character is an ASCII space, tab, newline, or
+carriage return.
 
 ### char::is_upper
 
@@ -553,7 +555,7 @@ Returns whether the character is an ASCII space, tab, newline, or carriage retur
 fn is_upper c:char -> bool
 ```
 
-Returns whether the character is an ASCII uppercase letter.
+`is_upper` returns whether the character is an ASCII uppercase letter.
 
 ### char::lt
 
@@ -561,7 +563,7 @@ Returns whether the character is an ASCII uppercase letter.
 fn lt self:$char other:$char -> bool
 ```
 
-Compares characters by codepoint.
+`lt` compares characters by codepoint.
 
 ### Character conversion
 
@@ -631,8 +633,8 @@ provides this view for a byte buffer.
 fn as_cstr s:$str -> Option[$cstr]
 ```
 
-Checks for interior NUL and returns an optional borrowed NUL-terminated byte
-view. The view keeps its source loaned until its last use.
+`as_cstr` checks for interior NUL and returns an optional borrowed
+NUL-terminated byte view. The view keeps its source loaned until its last use.
 
 ### cstr::to_bytes
 
@@ -640,8 +642,8 @@ view. The view keeps its source loaned until its last use.
 fn to_bytes self:$cstr -> Bytes
 ```
 
-Copies the bytes before the NUL terminator into an independent byte buffer.
-Use this method when the bytes do not have a text guarantee.
+`to_bytes` copies the bytes before the NUL terminator into an independent byte
+buffer. Use this method when the bytes do not have a text guarantee.
 
 ### cstr::to_str
 
@@ -649,8 +651,8 @@ Use this method when the bytes do not have a text guarantee.
 fn to_str self:$cstr -> Result[String Utf8Error]
 ```
 
-Validates UTF-8 and copies the bytes into owned Casa text. Invalid UTF-8 returns
-`Utf8Error`.
+`to_str` validates UTF-8 and copies the bytes into owned Casa text. Invalid
+UTF-8 returns `Utf8Error`.
 
 ### Conversion example
 

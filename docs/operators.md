@@ -48,10 +48,11 @@ Operands must have the same numeric type. Integer division truncates toward
 zero. Floating-point arithmetic preserves the operand width.
 
 Integer arithmetic terminates the program on overflow, division by zero, or
-an invalid shift. Integer remainder has the dividend's sign. `/` and `%` also
-terminate on signed minimum divided by `-1`. Floating-point division by zero
-follows IEEE behavior and can produce infinity or NaN. The standard library
-provides `try_add`, `try_sub`, `try_mul`, `try_div`, and `try_mod` when failure
+an invalid shift. Integer remainder has the dividend's sign. Both `/` and `%`
+terminate the program when the left operand is the signed minimum and the
+right operand is `-1`. Floating-point division by zero follows IEEE behavior
+and can produce infinity or NaN. The standard library provides `try_add`,
+`try_sub`, `try_mul`, `try_div`, and `try_mod` when failure
 must produce an `Option`.
 It also provides `wrapping_add`, `wrapping_sub`, and `wrapping_mul` for
 deliberate modulo arithmetic.
@@ -72,7 +73,7 @@ After `import "std"`, these `i64` helpers are available:
 fn abs self:$i64 -> i64
 ```
 
-Returns the absolute value. The minimum `i64` has no positive `i64`
+`abs` returns the absolute value. The minimum `i64` has no positive `i64`
 counterpart, so taking its absolute value terminates the program.
 
 ### i64::clamp
@@ -81,10 +82,11 @@ counterpart, so taking its absolute value terminates the program.
 fn clamp self:$i64 lo:i64 hi:i64 -> i64
 ```
 
-Returns `lo` below the inclusive range, `hi` above it, and the input within it.
-Equal bounds are valid. `lo > hi` terminates the program.
+`clamp` returns `lo` if the input is below the inclusive range, `hi` if it is
+above the range, and the input itself if it is within the range. Equal bounds
+are valid. The program terminates if `lo > hi`.
 
-Call: `hi lo value.clamp`.
+Call `hi lo value.clamp`.
 
 ### i64::max
 
@@ -92,7 +94,7 @@ Call: `hi lo value.clamp`.
 fn max self:$i64 other:i64 -> i64
 ```
 
-Returns the larger value.
+`max` returns the larger value.
 
 ### i64::min
 
@@ -100,7 +102,7 @@ Returns the larger value.
 fn min self:$i64 other:i64 -> i64
 ```
 
-Returns the smaller value.
+`min` returns the smaller value.
 
 ### i64::pow
 
@@ -108,11 +110,11 @@ Returns the smaller value.
 fn pow self:$i64 exp:i64 -> i64
 ```
 
-Raises the integer to a nonnegative exponent. A zero exponent returns `1`,
+`pow` raises the integer to a nonnegative exponent. A zero exponent returns `1`,
 including for a zero base. A negative exponent or arithmetic overflow
 terminates the program.
 
-Call: `exponent value.pow`.
+Call `exponent value.pow`.
 
 ### Arithmetic examples
 

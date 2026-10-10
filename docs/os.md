@@ -68,9 +68,10 @@ end
 fn read_all path:$cstr -> Result[Bytes IoError]
 ```
 
-Opens `path` for reading and collects bytes until EOF. It accepts non-seekable
-files and virtual files whose metadata reports zero size. Open and read errors
-return `Error`. The function closes its file descriptor on success or error.
+`read_all` opens `path` for reading and collects bytes until EOF. It accepts
+non-seekable files and virtual files whose metadata reports zero size. If
+opening or reading fails, the function returns `Error`. It closes its file
+descriptor on success or error.
 
 Reads can block until data or EOF is available. The result must fit in memory.
 Concurrent file changes can affect the returned bytes, so this is not a snapshot.
@@ -97,7 +98,7 @@ They do not check effective access for the current process:
 fn is_dir self:$FileStat -> bool
 ```
 
-Returns whether the entry is a directory.
+`is_dir` returns whether the entry is a directory.
 
 ### FileStat::is_executable
 
@@ -105,7 +106,7 @@ Returns whether the entry is a directory.
 fn is_executable self:$FileStat -> bool
 ```
 
-Returns whether the owner-executable mode bit is set.
+`is_executable` returns whether the owner-executable mode bit is set.
 
 ### FileStat::is_file
 
@@ -113,7 +114,7 @@ Returns whether the owner-executable mode bit is set.
 fn is_file self:$FileStat -> bool
 ```
 
-Returns whether the entry is a regular file.
+`is_file` returns whether the entry is a regular file.
 
 ### FileStat::is_readable
 
@@ -121,7 +122,7 @@ Returns whether the entry is a regular file.
 fn is_readable self:$FileStat -> bool
 ```
 
-Returns whether the owner-readable mode bit is set.
+`is_readable` returns whether the owner-readable mode bit is set.
 
 ### FileStat::is_symlink
 
@@ -129,7 +130,7 @@ Returns whether the owner-readable mode bit is set.
 fn is_symlink self:$FileStat -> bool
 ```
 
-Returns whether the entry is a symbolic link.
+`is_symlink` returns whether the entry is a symbolic link.
 
 ### FileStat::is_writable
 
@@ -137,7 +138,7 @@ Returns whether the entry is a symbolic link.
 fn is_writable self:$FileStat -> bool
 ```
 
-Returns whether the owner-writable mode bit is set.
+`is_writable` returns whether the owner-writable mode bit is set.
 
 
 The complete [OS example](../examples/os_interaction.casa) creates, inspects,

@@ -99,6 +99,8 @@ Each method heading uses the qualified name, such as `array[T N]::clone`.
 The signature follows the heading, before the behavior description. The Method
 column uses only the method name and links to the automatic heading anchor.
 Keep signatures in both places for table lookup and direct heading links.
+Explain behavior in complete sentences, with an explicit subject for each
+operation.
 Method descriptions should state input limits, output ownership, failure,
 mutation, or callback order that the signature cannot express. Avoid a second
 summary sentence when the following contract already explains the operation.
