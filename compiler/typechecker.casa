@@ -296,7 +296,7 @@ fn commit_checked_program
                 .parameters
                 .iter
         do
-            aggregates types store parameter.typ commit_type_facts
+            aggregates store parameter.typ collect_layout_declarations
         done
         for
             typ in signature
@@ -304,7 +304,7 @@ fn commit_checked_program
                 .return_types
                 .iter
         do
-            aggregates types store typ commit_type_facts
+            aggregates store typ collect_layout_declarations
         done
     done
     for body in bodies.iter do
@@ -476,12 +476,62 @@ fn has_plain_fields typ:$common::Type store:$common::SymbolStore -> bool {
     false
 }
 
+# Collect layout declarations from signature types without computing semantic facts.
+# Visit actual type arguments first, then each declaration's unsubstituted fields
+# once. Type variables in those fields refer to arguments already visited.
+fn collect_layout_declarations
+    typ:$common::Type
+    store:$common::SymbolStore
+    aggregates:mut$std::Set[std::String]
+{
+    if typ common::Type::Generic(generic) is then
+        for argument in generic.params.iter do
+            aggregates store argument collect_layout_declarations
+        done
+        if generic.base aggregates.has then
+            return
+        fi
+        if generic.base store.structs.get std::Option::Some(shape) is then
+            generic.base.clone aggregates.add
+            for member in shape.members.iter do
+                aggregates store member.typ collect_layout_declarations
+            done
+        elif generic.base store.enums.get std::Option::Some(shape) is then
+            generic.base.clone aggregates.add
+            for variant in shape.variant_types.iter do
+                for member in variant.second.iter do
+                    aggregates store member collect_layout_declarations
+                done
+            done
+        fi
+    elif typ common::Type::Function(function) is then
+        for parameter in function.parameters.iter do
+            aggregates store parameter collect_layout_declarations
+        done
+        for result in function.return_types.iter do
+            aggregates store result collect_layout_declarations
+        done
+    fi
+}
+
 fn commit_type_facts
     typ:$common::Type
     store:$common::SymbolStore
     types:mut$std::Map[std::String CheckedType]
     aggregates:mut$std::Set[std::String]
 {
+    # Simple type names already exist. Avoid allocating them again on cache hits.
+    if typ common::Type::Builtin(builtin) is then
+        if builtin.format types.has_str then
+            return
+        fi
+    elif typ common::Type::Generic(generic) is then
+        if generic.params.is_empty then
+            if generic.base types.has then
+                return
+            fi
+        fi
+    fi
     typ.format = key
     if key types.has then
         return
@@ -545,13 +595,8 @@ fn commit_type_facts
     kind drop_function needs_destruction copy_aggregate shape_kind plain_storage CheckedType key types.set
     if typ common::Type::Generic(generic) is then
         aggregates types store typ generic commit_child_type_facts
-    elif typ common::Type::Function(function) is then
-        for parameter in function.parameters.iter do
-            aggregates types store parameter commit_type_facts
-        done
-        for result in function.return_types.iter do
-            aggregates types store result commit_type_facts
-        done
+    elif typ common::Type::Function(_) is then
+        aggregates store typ collect_layout_declarations
     fi
 }
 

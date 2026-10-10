@@ -106,7 +106,8 @@ unused declarations before backend emission. Shared layout queries still use
 the `SymbolStore` type, with checking-only collections empty. Reports retain
 the exact source text independently of this store.
 Drop declarations needed by field layout survive even when no reachable cleanup
-needs their bodies.
+needs their bodies. Signature-only types retain their layout declarations without
+computing unused semantic facts.
 Rejected source retains diagnostics and editor facts but cannot produce backend input. Unreachable source still receives
 type and structural checks. It retains source occurrences for editor queries,
 without executable operands or ownership actions.
