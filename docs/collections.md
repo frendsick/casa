@@ -861,6 +861,8 @@ Operations such as `any` and `find` can stop before it is exhausted.
 | [partition](#iterabletpartition) | `fn partition self:mut$self f:fn[$T -> bool] -> Pair[List[T] List[T]]` | Matching and non-matching lists |
 | [reduce](#iterabletreduce) | `fn reduce self:mut$self f:fn[T T -> T] -> Option[T]` | Reduce from the first value |
 | [sum](#iteri64sum) | `fn sum self:mut$Iter[i64] -> i64` | Add owned `i64` values |
+| [try_fold](#iterablettry_fold) | `fn try_fold [U E] self:mut$self acc:U f:fn[U T -> Result[U E]] -> Result[U E]` | Fallible reduction |
+| [try_for_each](#iterablettry_for_each) | `fn try_for_each [E] self:mut$self f:fn[T -> Result[Unit E]] -> Result[Unit E]` | Fallible action for each value |
 
 ### Iterable[T]::all
 
@@ -973,6 +975,34 @@ fn sum self:mut$Iter[i64] -> i64
 ```
 
 Adds owned `i64` values.
+
+### Iterable[T]::try_fold
+
+```text
+fn try_fold [U E] self:mut$self acc:U f:fn[U T -> Result[U E]] -> Result[U E]
+```
+
+Calls `f` with the current accumulator and item until the iterator ends or `f`
+returns `Error`. An empty iterator returns `Ok(acc)`. On success, the final
+accumulator is returned. On failure, the original error is returned, and the
+next unvisited item remains available from the iterator.
+
+Owned accumulators and items move into the callback. It returns the next
+accumulator on success. On failure, it must consume, destroy, or return the
+owners it received. `try_fold` does not duplicate them. Borrowed items remain
+borrows, with their source loans in force.
+
+### Iterable[T]::try_for_each
+
+```text
+fn try_for_each [E] self:mut$self f:fn[T -> Result[Unit E]] -> Result[Unit E]
+```
+
+Calls `f` for each item until the iterator ends or `f` returns `Error`. On
+success, returns `Ok(Unit::Value)`. On failure, returns the original error and
+leaves unvisited items available from the iterator. Owned items move into the
+callback, and `try_for_each` discards each successful Unit value. Borrowed
+items retain their source loans.
 
 ### Iterator example
 
