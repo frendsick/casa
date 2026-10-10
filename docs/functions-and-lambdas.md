@@ -45,7 +45,7 @@ reserve or automatically call a function named `main`. The root must leave an
 empty value stack when it completes. `return` is not valid in the root body.
 Root owners are destroyed on normal completion.
 
-`panic` and `process::exit` terminate without unwinding or cleanup. A direct
+`panic` and `std::process::exit` terminate without unwinding or cleanup. A direct
 call to a named function is also non-returning when every reachable path in its
 implementation terminates. These paths do not participate in branch stack or
 ownership joins. Function values called with `exec` are assumed to return, so

@@ -94,8 +94,8 @@ std::List[std::String]::new = libraries
 # SAFETY: getpid has no pointer arguments.
 unsafe {{ 39 syscall0 = pid }}
 f"{root}/.casa-assembly.{{pid}}.0" = occupied
-448 occupied.as_str.as_cstr.unwrap dir::create.unwrap drop
-"unrelated" std::Bytes::from_str f"{{occupied}}/marker".as_str.as_cstr.unwrap file::write_all.unwrap drop
+448 occupied.as_str.as_cstr.unwrap os::dir::create.unwrap drop
+"unrelated" std::Bytes::from_str f"{{occupied}}/marker".as_str.as_cstr.unwrap os::file::write_all.unwrap drop
 false libraries {json.dumps(str(output))} source driver.compile_binary.unwrap drop
 ''')
     harness = root / "harness"

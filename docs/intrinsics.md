@@ -75,7 +75,7 @@ as non-returning when it checks branch stack effects and ownership joins.
 | `argv` | `None -> ptr` | Command-line argument vector |
 | `envp` | `None -> ptr` | Environment vector |
 
-Prefer `process::args`, which returns owned `Bytes` values, unless raw startup
+Prefer `std::process::args`, which returns owned `Bytes` values, unless raw startup
 data is needed.
 
 ## Advanced memory access

@@ -9,7 +9,7 @@ interior NUL and lend the same path type without an implicit text conversion.
 allocate.
 
 Process arguments and file contents use `Bytes` in both directions.
-`process::args` and `run_command` use `List[Bytes]`, and byte-oriented file
+`std::process::args` and `run_command` use `List[Bytes]`, and byte-oriented file
 reads and writes use `Bytes`. `Bytes::from_str` provides an explicit,
 infallible text-to-bytes copy, and `List[Bytes].push_str` covers common text
 arguments. `Bytes` converts to text only through `to_str`. It validates UTF-8,
@@ -27,7 +27,7 @@ need lossless round trips.
 
 ## Considered options
 
-- Text-only path inputs leave valid results from `dir::list` and `dir::current`
+- Text-only path inputs leave valid results from `os::dir::list` and `os::dir::current`
   unusable as inputs to other safe filesystem operations.
 - Separate raw-path functions duplicate every filesystem operation and let the
   text and byte surfaces drift.
