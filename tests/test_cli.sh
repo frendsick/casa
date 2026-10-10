@@ -96,7 +96,7 @@ if matches_filter process_exit "$@"; then
     actual_status=$?
     set -e
     if [ "$actual_status" -ne 7 ]; then
-        echo "process::exit returned status $actual_status, expected 7" >&2
+        echo "std::process::exit returned status $actual_status, expected 7" >&2
         exit 1
     fi
 fi

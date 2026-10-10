@@ -29,6 +29,15 @@ use that namespace, including in type annotations and function references. Norma
 receiver method and field syntax remains available. An import never adds bare
 declaration names to the importing scope. This rule also applies to `std`.
 
+The rule includes namespaces introduced by `impl` without a type declaration.
+Inside the defining module, `file::read_all` can use the local `file` name.
+An importer of `os` uses `os::file::read_all`, or the chosen alias in place of
+`os`. Likewise, an importer of `std` uses `std::process::exit`. Function
+references use the same qualification. These namespaces have the canonical
+identity of their defining module, so two modules may each expose a local
+`file` namespace without merging. Built-in type methods remain attached to
+their primitive type, such as `str::substring`.
+
 Casa adds no separate `module` declaration. An import alias cannot change the
 resolved module identity.
 
@@ -43,6 +52,9 @@ declarations, methods, and fields. Enum variants inherit their enum's visibility
 Private helpers and transitive dependencies remain available inside their defining
 modules but cannot be named by an importer. Imports do not re-export dependencies.
 Public structs with private fields still require a public construction interface.
+An imported namespace exposes only its public methods. The old unqualified
+library namespace form is rejected. When exactly one imported module provides
+the referenced function, the diagnostic suggests the import-qualified form.
 
 Trait implementations follow the either-owner orphan rule in
 [ADR-0041](0041-trait-implementation-obeys-an-orphan-rule.md).
@@ -114,5 +126,8 @@ Production analysis and syntax checks retain public qualified access, aliases,
 unqualified-name rejection, privacy and private dependencies, collisions,
 full-import validation, complete cycle paths, ordered lookup, canonical identity,
 repeated imports, overrides, diagnostic order, and import non-execution.
+Check calls, function references, and editor navigation for impl namespaces
+under the importing module and alias, including same-named namespaces in
+different modules and primitive methods that keep their built-in name.
 Check the removed-clause diagnostic in both analysis and syntax-only formatting.
 Formatting valid imports does not require dependencies to exist on disk.

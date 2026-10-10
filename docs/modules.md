@@ -55,11 +55,20 @@ constructors, enum variants, and function references. Receiver calls such as
 re-export another module's imports.
 
 Methods on built-in types keep the type namespace, such as `str::split`.
-Namespaces introduced by an `impl` block without a type declaration also keep
-their names. Importing `os` makes `file::`, `dir::`, `env::`, and `path::`
-available, and importing `std` makes `process::` available. These names do not
-take a module prefix. Methods on an imported declared type do, such as
-`std::List[i64]::new`.
+An `impl` block can also introduce a namespace without a type declaration.
+Inside its defining module, that namespace keeps its local name. An importer
+uses the module name or alias first. For example, `import "os"` exposes
+`os::file::read_all` and `os::dir::create`. `import "os" as system` exposes
+`system::file::read_all` instead. `import "std"` exposes
+`std::process::exit`. Distinct modules can each define `impl file` without
+sharing the same namespace. Methods on an imported declared type also use the
+module prefix, as in `std::List[i64]::new`.
+
+Older code that imports `os` or `std` must add the module prefix to calls and
+function references. For example, change `file::read_all` to
+`os::file::read_all` and `&file::read_all` to `&os::file::read_all`. Use the
+actual import alias when one is present. The compiler suggests a qualified
+replacement when one imported module provides the named function.
 
 Selection clauses are no longer supported. Replace:
 

@@ -3,7 +3,7 @@ status: amended by [ADR-0160](0160-os-byte-round-trips-use-bytes-and-cstr.md)
 
 File contents, standard input, captured process output, process arguments, environment values, directory entry names, and other external data without a text guarantee enter safe Casa code as owned `Bytes`. `Bytes.to_str $self -> Result[String Utf8Error]` explicitly validates UTF-8 and creates owned text. OS failures remain `IoError`. Invalid text is not disguised as an OS error.
 
-The file API exposes `file::read_all path:$cstr -> Result[Bytes IoError]`. Buffered standard-input helpers in `io` also return `Bytes`. Safe text consumers validate at the point where they possess the domain knowledge that the input is intended to be text.
+The file API exposes `os::file::read_all path:$cstr -> Result[Bytes IoError]`. Buffered standard-input helpers in `io` also return `Bytes`. Safe text consumers validate at the point where they possess the domain knowledge that the input is intended to be text.
 
 ## Considered options
 

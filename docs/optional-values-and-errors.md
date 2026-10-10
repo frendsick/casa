@@ -302,7 +302,7 @@ import "std"
 import "os"
 
 fn write_note path:$cstr -> std::Result[std::Unit os::IoError] {
-    "note" std::Bytes::from_str path file::write_all ? drop
+    "note" std::Bytes::from_str path os::file::write_all ? drop
     std::Unit::Value std::Result::Ok
 }
 
@@ -321,7 +321,7 @@ success arm does not need the value.
 
 Payload-free APIs that previously returned `Result[bool E]` with `Ok(true)`
 now return `Result[std::Unit E]` with `Ok(std::Unit::Value)`. This includes
-`dir::change`, `dir::create`, `dir::remove`, `file::remove`, `file::write_all`,
+`os::dir::change`, `os::dir::create`, `os::dir::remove`, `os::file::remove`, `os::file::write_all`,
 and native compiler builds. Update explicit result types and replace checks of
 the unwrapped boolean with a success match or `.unwrap drop`. Calls that already
 use `? drop`, `.unwrap drop`, or `Ok(_)` need no change. Meaningful boolean

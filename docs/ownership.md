@@ -147,7 +147,7 @@ paths are not part of a public [function type](notation.md#function-types).
 Casa destroys remaining owners when their scope ends normally. Moving an owner
 transfers its cleanup responsibility. A borrow does not become a second owner.
 See [Custom destruction](structs-and-methods.md#custom-destruction) for the
-cleanup order and reserved `drop` method. `panic` and `process::exit` terminate
+cleanup order and reserved `drop` method. `panic` and `std::process::exit` terminate
 without cleanup.
 
 Structs and enums can retain borrows in their fields. Their loans last through

@@ -43,11 +43,11 @@ Prefer the high-level functions:
 
 | Function | Result |
 |---|---|
-| `file::exists path:$cstr -> bool` | Whether `stat` can find the path |
-| `file::read_all path:$cstr -> Result[Bytes IoError]` | Entire file contents |
-| `file::remove path:$cstr -> Result[Unit IoError]` | Remove a file |
-| `file::stat path:$cstr -> Result[FileStat IoError]` | File metadata |
-| `file::write_all path:$cstr content:$Bytes -> Result[Unit IoError]` | Create or replace a file |
+| `os::file::exists path:$cstr -> bool` | Whether `stat` can find the path |
+| `os::file::read_all path:$cstr -> Result[Bytes IoError]` | Entire file contents |
+| `os::file::remove path:$cstr -> Result[Unit IoError]` | Remove a file |
+| `os::file::stat path:$cstr -> Result[FileStat IoError]` | File metadata |
+| `os::file::write_all path:$cstr content:$Bytes -> Result[Unit IoError]` | Create or replace a file |
 
 Handle the operation result directly. A separate existence check can become
 stale before the next file operation:
@@ -56,14 +56,14 @@ stale before the next file operation:
 import "std"
 import "os"
 
-"notes.txt".as_cstr.unwrap file::read_all match
+"notes.txt".as_cstr.unwrap os::file::read_all match
     std::Result::Ok(bytes) => bytes.to_str.unwrap print
     std::Result::Error(error) => f"read failed: {error}" std::eprintln_string
 end
 ```
 
 `FileStat` has `size`, `mode`, `mtime`, `atime`, and `ctime` fields. It also
-provides these checks. `file::stat` follows symbolic links, so its result describes
+provides these checks. `os::file::stat` follows symbolic links, so its result describes
 the target rather than the link. Permission helpers inspect owner mode bits.
 They do not check effective access for the current process:
 
@@ -132,18 +132,18 @@ and removes a file and directory.
 
 | Function | Result |
 |---|---|
-| `dir::change path:$cstr -> Result[Unit IoError]` | Change working directory |
-| `dir::create path:$cstr mode:i64 -> Result[Unit IoError]` | Create a directory |
-| `dir::current -> Result[Bytes IoError]` | Current working directory |
-| `dir::exists path:$cstr -> bool` | Whether the path is a directory |
-| `dir::list path:$cstr -> Result[List[Bytes] IoError]` | Entry names without `.` or `..` |
-| `dir::remove path:$cstr -> Result[Unit IoError]` | Remove an empty directory |
+| `os::dir::change path:$cstr -> Result[Unit IoError]` | Change working directory |
+| `os::dir::create path:$cstr mode:i64 -> Result[Unit IoError]` | Create a directory |
+| `os::dir::current -> Result[Bytes IoError]` | Current working directory |
+| `os::dir::exists path:$cstr -> bool` | Whether the path is a directory |
+| `os::dir::list path:$cstr -> Result[List[Bytes] IoError]` | Entry names without `.` or `..` |
+| `os::dir::remove path:$cstr -> Result[Unit IoError]` | Remove an empty directory |
 
 The mode is a Linux permission value. For example, `493` is octal `0755`.
 
 ## Environment and paths
 
-`env::get name:$str -> Option[Bytes]` returns one environment variable.
+`os::env::get name:$str -> Option[Bytes]` returns one environment variable.
 Environment values and directory names can contain any non-NUL byte. Convert
 them with `Bytes.to_str` only when the caller requires UTF-8 text. Filesystem
 operations accept `$cstr`, so both text paths and byte paths use `as_cstr`.
@@ -151,21 +151,21 @@ Environment variable names and text path utilities remain `$str`.
 
 | Path function | Result |
 |---|---|
-| `path::basename path:$str -> String` | Final component |
-| `path::dirname path:$str -> String` | Parent portion |
-| `path::extension path:$str -> String` | Final extension without `.` |
-| `path::join child:$str parent:$str -> String` | Join with one `/` |
+| `os::path::basename path:$str -> String` | Final component |
+| `os::path::dirname path:$str -> String` | Parent portion |
+| `os::path::extension path:$str -> String` | Final extension without `.` |
+| `os::path::join child:$str parent:$str -> String` | Join with one `/` |
 
 ```casa
 import "std"
 import "os"
 
-"HOME" env::get
+"HOME" os::env::get
     .unwrap
     .to_str
     .unwrap print
-"tmp" "report.txt" path::join print # tmp/report.txt
-"src/main.casa" path::extension print # casa
+"tmp" "report.txt" os::path::join print # tmp/report.txt
+"src/main.casa" os::path::extension print # casa
 ```
 
 See the [OS example](../examples/os_interaction.casa) for files, directories,
@@ -173,17 +173,17 @@ environment variables, paths, and a child process.
 
 ## Arguments and processes
 
-`process::args -> List[Bytes]` copies all process arguments. `argc` is the
+`std::process::args -> List[Bytes]` copies all process arguments. `argc` is the
 argument count and `std::get_arg index:u64 -> Bytes` copies one argument. Index `0`
 is the program name. An invalid index terminates the program.
 
-`process::exit status:u8` terminates immediately with the supplied status. It
+`std::process::exit status:u8` terminates immediately with the supplied status. It
 does not unwind or run cleanup. Normal root completion exits with status zero.
 
 ```casa
 import "std"
 
-2 process::exit
+2 std::process::exit
 ```
 
 `std::run_command arguments:List[Bytes] -> i64` starts a process and waits for it. The
@@ -244,15 +244,15 @@ The module also exposes direct Linux file-descriptor operations:
 | Function | Result |
 |---|---|
 | `os::errno_to_io_error result:i64 -> IoError` | Convert a negative result |
-| `file::close fd:i64 -> i64` | Zero or negative error |
-| `file::open path:$cstr flags:i64 mode:i64 -> i64` | File descriptor or negative error |
-| `file::read fd:i64 buffer:ptr size:u64 -> i64` | Unsafe. Bytes read or negative error |
-| `file::write fd:i64 data:$Bytes -> i64` | Bytes written or negative error |
+| `os::file::close fd:i64 -> i64` | Zero or negative error |
+| `os::file::open path:$cstr flags:i64 mode:i64 -> i64` | File descriptor or negative error |
+| `os::file::read fd:i64 buffer:ptr size:u64 -> i64` | Unsafe. Bytes read or negative error |
+| `os::file::write fd:i64 data:$Bytes -> i64` | Bytes written or negative error |
 
 Open flags are `os::O_RDONLY`, `os::O_WRONLY`, `os::O_CREAT`, and `os::O_TRUNC`. Combine flags
 with `|`. Prefer the high-level `Result` functions unless direct descriptors
 are required.
 
-`file::read` requires an `unsafe` block. The caller must provide `size` writable
+`os::file::read` requires an `unsafe` block. The caller must provide `size` writable
 bytes at `buffer` with exclusive access for the call. Prefer `read_all` for
 checked reads into owned `Bytes`.

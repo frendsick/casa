@@ -126,8 +126,8 @@ Constructors return `None` for invalid native results. A frame ends drawing when
 it is destroyed. A texture cannot be released until its frame ends, and the
 window cannot close while either capability or a texture is live. Image, texture,
 and window owners release their native resources exactly once. As with other Casa
-owners, process termination through `panic` or `process::exit` does not run cleanup.
-The example returns from `run -> bool` before calling `process::exit`, so graphics
+owners, process termination through `panic` or `std::process::exit` does not run cleanup.
+The example returns from `run -> bool` before calling `std::process::exit`, so graphics
 cleanup completes on both success and resource failure.
 
 A frame retains one texture. Extend that contract if a later example needs several

@@ -41,7 +41,7 @@ The standard-library module (`lib/os.casa`) for file I/O, directory operations, 
 _Avoid_: assuming every OS wrapper belongs to this module
 
 **FileStat**:
-A struct returned by `file::stat` containing file metadata fields (`size`, `mode`, `mtime`, `atime`, `ctime` as raw integers) with helper methods for type checks (`is_dir`, `is_file`, `is_symlink`) and permission checks (`is_readable`, `is_writable`, `is_executable`).
+A struct returned by `os::file::stat` containing file metadata fields (`size`, `mode`, `mtime`, `atime`, `ctime` as raw integers) with helper methods for type checks (`is_dir`, `is_file`, `is_symlink`) and permission checks (`is_readable`, `is_writable`, `is_executable`).
 _Avoid_: stat buffer, metadata tuple
 
 ## Language
@@ -426,5 +426,5 @@ _Avoid_: Release lint, tag lint
 - The **Bootstrap policy check** validates both the **casa-release.env** tag name and GitHub release metadata.
 - The **os module** provides filesystem and environment APIs. The `std` module also provides process and output syscall wrappers.
 - Checked file and directory operations return `Result[T IoError]`. Low-level file wrappers return raw syscall results.
-- **FileStat** is returned by `file::stat` and provides both raw metadata fields and convenience query methods.
-- `env::get` returns `Option[Bytes]`, not `Result`. A missing environment variable represents absence rather than an error. A present Linux value is not guaranteed to be UTF-8.
+- **FileStat** is returned by `os::file::stat` and provides both raw metadata fields and convenience query methods.
+- `os::env::get` returns `Option[Bytes]`, not `Result`. A missing environment variable represents absence rather than an error. A present Linux value is not guaranteed to be UTF-8.
