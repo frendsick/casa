@@ -62,7 +62,7 @@ Names such as `std::List` assume `import "std"`. See
 
   ```casa
   0 = i
-  while i length > do
+  while i length < do
       i items.get process
       1 += i
   done
@@ -73,9 +73,9 @@ Names such as `std::List` assume `import "std"`. See
 
   ```casa
   0 = row
-  while row height > do
+  while row height < do
       0 = col
-      while col width > do
+      while col width < do
           ...
           1 += col
       done
@@ -279,10 +279,10 @@ without a type-name prefix is acceptable.
   ```casa
   # MUST
   const ALIVE_THRESHOLD 64
-  if unsafe { ALIVE_THRESHOLD cell load8 < } then ...
+  if unsafe { cell load8 ALIVE_THRESHOLD < } then ...
 
   # MUST NOT
-  if unsafe { 64 cell load8 < } then ...
+  if unsafe { cell load8 64 < } then ...
   ```
 
 ---
@@ -301,7 +301,7 @@ without a type-name prefix is acceptable.
   done
   # SHOULD NOT — manual indexing where `for` works
   0 = index: u64
-  while index tokens.length > do
+  while index tokens.length < do
       index tokens.get process
       1 += index
   done

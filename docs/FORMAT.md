@@ -481,7 +481,7 @@ fi
 Use a multiline body. Keep a short condition with `do` on the opening line:
 
 ```casa
-while index size > do
+while index size < do
     # body
     1 += index
 done

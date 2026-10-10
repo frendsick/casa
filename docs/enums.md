@@ -93,7 +93,7 @@ enum Color derives std::Ord {
     Blue
 }
 
-Color::Red Color::Blue > print # true, because Blue follows Red
+Color::Red Color::Blue < print # true, because Red precedes Blue
 Color::Blue print # 2
 Color print # 3
 ```

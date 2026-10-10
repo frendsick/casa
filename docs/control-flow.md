@@ -9,9 +9,9 @@ Use `if`, optional `elif` and `else` branches, and `fi`:
 
 ```casa
 82 = score
-if 90 score >= then
+if score 90 >= then
     "excellent"
-elif 60 score >= then
+elif score 60 >= then
     "pass"
 else
     "retry"
@@ -48,7 +48,7 @@ that owner stays loaned until the borrow's last use.
 
 ```casa
 0 = index
-while 5 index < do
+while index 5 < do
     index print "\n" print
     1 += index
 done
@@ -206,7 +206,7 @@ Add `if condition` before `=>` to restrict an arm:
 ```casa
 fn classify number:i64 -> str {
     number match
-        _ if 0 number > => "positive"
+        _ if number 0 > => "positive"
         _ if 0 number == => "zero"
         _ => "negative"
     end

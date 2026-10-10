@@ -156,6 +156,10 @@ implementation can replace that default. `PartialOrd` supplies the four
 ordering operator methods from `partial_cmp`. `Ord` supplies `partial_cmp`
 from `cmp`.
 
+Binary symbolic comparisons pass the left operand as `self` and the right
+operand as `other`. For already evaluated values, `left right <` corresponds
+to `right left.lt`. A named method call still consumes its receiver first.
+
 `Ordering` has the variants `Less`, `Equal`, and `Greater`. `partial_cmp`
 returns `None` when two values are unordered. The `f32` and `f64` types
 implement `PartialEq` and `PartialOrd`, but not `Eq` or `Ord`. Integer types

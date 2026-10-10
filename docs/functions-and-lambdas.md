@@ -53,7 +53,7 @@ ownership joins. Function values called with `exec` are assumed to return, so
 
 ```casa
 fn require_positive value:i64 -> i64 {
-    if 0 value > then
+    if value 0 > then
         value
     else
         "value must be positive" panic
