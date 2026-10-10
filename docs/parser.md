@@ -41,7 +41,8 @@ for signatures, fragments, and commands for running complete examples.
 fn advance self:mut$Cursor -> std::Option[char]
 ```
 
-Returns the current character and advances the cursor.
+Returns the current byte as `Some(char)` and advances by one byte. At or past
+the end, returns `None` without advancing.
 
 ### Cursor::expect_char
 
@@ -81,7 +82,8 @@ Returns the current character without advancing the cursor.
 fn peek_at self:$Cursor offset:u64 -> std::Option[char]
 ```
 
-Returns the character at a relative offset without advancing the cursor.
+Returns the byte at `pos + offset` as `Some(char)` without advancing.
+An out-of-range offset returns `None`, including when the sum would overflow.
 
 ### Cursor::restore
 
@@ -89,7 +91,8 @@ Returns the character at a relative offset without advancing the cursor.
 fn restore self:mut$Cursor saved:u64
 ```
 
-Returns to a saved position.
+Assigns the supplied byte position without a range check. Use a position from
+`save` for backtracking. At or past the byte length, the cursor reports EOF.
 
 ### Cursor::save
 
@@ -105,7 +108,9 @@ Returns the current cursor position.
 fn skip self:mut$Cursor count:u64
 ```
 
-Advances by a count.
+Adds `count` to the byte position without clamping to the source length.
+At or past the byte length, the cursor reports EOF. Integer overflow terminates
+the program.
 
 ### Cursor::skip_while
 
@@ -121,7 +126,8 @@ Advances while matching.
 fn starts_with self:$Cursor prefix:$str -> bool
 ```
 
-Matches remaining text without advancing.
+Matches the prefix at the current byte position without advancing. An empty
+prefix matches through EOF. Positions past EOF return false.
 
 ### Cursor::take_string
 
