@@ -48,8 +48,11 @@ Operands must have the same numeric type. Integer division truncates toward
 zero. Floating-point arithmetic preserves the operand width.
 
 Integer arithmetic terminates the program on overflow, division by zero, or
-an invalid shift. The standard library provides `try_add`, `try_sub`,
-`try_mul`, `try_div`, and `try_mod` when failure must produce an `Option`.
+an invalid shift. Integer remainder has the dividend's sign. `/` and `%` also
+terminate on signed minimum divided by `-1`. Floating-point division by zero
+follows IEEE behavior and can produce infinity or NaN. The standard library
+provides `try_add`, `try_sub`, `try_mul`, `try_div`, and `try_mod` when failure
+must produce an `Option`.
 It also provides `wrapping_add`, `wrapping_sub`, and `wrapping_mul` for
 deliberate modulo arithmetic.
 
@@ -121,6 +124,7 @@ Call: `exponent value.pow`.
 unsafe {
     16 alloc = buffer
     42 buffer 8 + store64
+    buffer free
 }
 ```
 
@@ -138,6 +142,8 @@ Pointer arithmetic requires an [unsafe](functions-and-lambdas.md#unsafe-boundari
 | `~` | `T -> T` | Bitwise NOT |
 
 Shifts preserve the integer width. A signed right shift preserves the sign.
+The `u64` count must be less than the operand width. Left shifts discard
+shifted-out bits, and unsigned right shifts insert zero bits.
 `&name` is a function reference when `&` appears before an identifier.
 
 ## Comparisons

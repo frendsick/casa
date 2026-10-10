@@ -408,7 +408,12 @@ Call: `numbers.sort`. See [the sorting example](../examples/sorting.casa).
 fn sort_by self:mut$List[T] f:fn[$T $T -> bool]
 ```
 
-Sorts elements in place with a [comparison callback](functions-and-lambdas.md#function-values). The list is borrowed exclusively.
+Sorts elements in place through an exclusive list borrow. The
+[comparison callback](functions-and-lambdas.md#function-values) must return
+true when its first parameter precedes its second. A named `&T::lt` gives
+ascending order. For an unnamed stack lambda, `{ > }` gives ascending order
+and `{ < }` gives descending order because symbolic operators read source
+order while callback parameters use consumption order. Sorting is not stable.
 
 Call: `compare numbers.sort_by`. See [the sorting example](../examples/sorting.casa).
 
@@ -418,8 +423,9 @@ Call: `compare numbers.sort_by`. See [the sorting example](../examples/sorting.c
 fn sort_by_range self:mut$List[T] low:u64 high:u64 f:$fn[$T $T -> bool]
 ```
 
-Sorts the inclusive index range with a borrowed comparison callback. The list is
-borrowed exclusively.
+Sorts the inclusive index range with a borrowed callback using the
+[sort_by](#listtsort_by) contract. `low >= high` leaves the list unchanged.
+Otherwise, both indices must be in range or the program terminates.
 
 Call: `compare high low numbers.sort_by_range`.
 

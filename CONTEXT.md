@@ -370,7 +370,7 @@ _Avoid_: Release lint, tag lint
 - `mut$T` is affine and not Copy. When `T: Clone`, `mut$T.clone` calls the **Borrowed value** implementation through a temporary shared reborrow and returns an owned `T`.
 - `ptr::from_ref` safely obtains `ptr` from `$T`. Owned and exclusive values may reborrow, and no separate `from_mut` exists because raw pointers have no mutability.
 - `unsafe` `ptr::into_raw` transfers a heap-indirect owner to its allocation address, and `ptr::from_raw[T]` reconstructs that owner when the caller proves the address is the complete live allocation and has no other owner.
-- `unsafe` `ptr::read[T]` and `ptr::write[T]` move ownership out of and into initialized generic storage. Their caller maintains validity and initialization state.
+- `unsafe` `ptr::read[T]` moves ownership out of initialized typed storage and leaves it uninitialized. `ptr::write[T]` moves ownership into uninitialized typed storage. Their caller maintains validity and initialization state.
 - `unsafe` raw storage uses `u64 alloc -> ptr` and `ptr free -> None`. `free` releases bytes only and never replaces typed destruction.
 - `0 alloc` returns `ptr::null`, `ptr::null free` is a no-op, and every positive allocation returns non-null or terminates.
 - Casa targets only x86-64 and has no `usize` or `isize`. In-memory sizes and indexes use `u64`, while signed offsets use `i64`.

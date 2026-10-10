@@ -5,7 +5,7 @@ Compile module-style imports with a library path such as `casac -L lib`.
 | Module | Purpose | Runnable example |
 |---|---|---|
 | `argparse` | Command-line definitions and help | [examples/argparse.casa](../examples/argparse.casa) |
-| `io` | Buffered standard input and output | [Standard input](os.md#standard-input) |
+| `io` | Buffered stdin and direct stdout writes | [Standard input](os.md#standard-input) |
 | `json` | JSON values, parsing, and serialization | See [JSON](#json) |
 | `log` | Leveled messages to standard error | [examples/log.casa](../examples/log.casa) |
 | `os` | Files, directories, environment, and paths | [OS reference](os.md) |
@@ -123,7 +123,7 @@ Creates a parser named from process argument `0`.
 fn parse_args self:$ArgParser -> ParsedArgs
 ```
 
-Parses process arguments without changing the parser definitions. `-h` and `--help` print help. Invalid arguments print usage and terminate with exit code `2`.
+Parses process arguments without changing the parser definitions.
 
 ## JSON
 

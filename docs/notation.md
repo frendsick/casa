@@ -98,6 +98,10 @@ The Signature column omits the body and visibility modifiers such as `pub`.
 Each method heading uses the qualified name, such as `array[T N]::clone`.
 The signature follows the heading, before the behavior description. The Method
 column uses only the method name and links to the automatic heading anchor.
+Keep signatures in both places for table lookup and direct heading links.
+Method descriptions should state input limits, output ownership, failure,
+mutation, or callback order that the signature cannot express. Avoid a second
+summary sentence when the following contract already explains the operation.
 Method tables and their entries use alphabetical order. Independent lookup
 lists also use alphabetical order. Examples keep execution order, and numeric
 families keep increasing width or argument count.

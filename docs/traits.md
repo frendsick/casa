@@ -149,7 +149,7 @@ The standard library defines these traits:
 | `Ord` | `cmp self:$self other:$self -> Ordering` | `PartialOrd + Eq` | Total ordering |
 | `PartialEq` | `eq self:$self other:$self -> bool` | None | `==` and `!=` |
 | `PartialOrd` | `partial_cmp self:$self other:$self -> Option[Ordering]` | `PartialEq` | `<`, `<=`, `>`, and `>=` |
-| `Word` | No methods | None | Raw memory stores and system calls |
+| `Word` | No methods | None | System-call arguments, `Display`, and `Hashable` bounds |
 
 `PartialEq` supplies `ne` from `eq`. The `!=` operator calls `ne`, so an
 implementation can replace that default. `PartialOrd` supplies the four
@@ -169,6 +169,8 @@ and `char` implement the total traits.
 [Collections](collections.md) for those operations.
 
 Primitive comparisons and printing remain available without importing `std`.
+Raw stores require their exact unsigned integer width, independently of `Word`.
+See [raw memory access](intrinsics.md#advanced-memory-access).
 
 ### Hashable contract
 

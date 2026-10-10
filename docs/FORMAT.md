@@ -10,11 +10,6 @@ looking up declarations. Unresolved names and both meanings of `Name {}` are
 safe to format. Field labels and assignment annotations are recognized from
 their grammatical position.
 
-The formatter checks tokens, comment attachment, and structural relationships
-against the formatted candidate. If recognition fails or these facts change,
-it returns the original source and a failure status. Analysis and assembly
-use the source builder to resolve declarations and check structured bodies.
-
 Build a current compiler first, then build the formatter:
 
 ```sh
@@ -28,17 +23,18 @@ Write to a temporary file so a formatter failure cannot replace the source:
 ./casafmt < program.casa > program.casa.tmp && mv program.casa.tmp program.casa
 ```
 
-`casafmt` validates input and output with the compiler syntax parser. This check
-does not load imports, resolve identifiers, or typecheck. On a lexical, syntax,
-output-validation, or source-preservation error, `casafmt` writes the original
-source unchanged, reports the error on standard error, and exits with status
-`1`. The command above leaves `program.casa` unchanged.
+`casafmt` validates input and output syntax, tokens, comment attachment, and
+structural relationships. On failure, it writes the original source unchanged,
+reports the error on standard error, and exits with status `1`. It does not
+resolve names or typecheck. The command above leaves `program.casa` unchanged.
 
 The formatter accepts LF, CRLF, and bare CR line endings. Successful output uses
 LF and ends with exactly one newline.
 
-The remaining sections define the mechanical rules that `casafmt` enforces.
-All rules are MUST unless noted otherwise.
+The sections below define layout rules and author conventions. `casafmt`
+enforces structural layout, but preserves freeform composition lines and
+comment text. It does not choose names, remove redundant comments, or rewrite
+string construction. Rules are MUST unless noted otherwise.
 
 See [STYLE.md](./STYLE.md) for naming conventions and idiomatic patterns.
 
@@ -149,7 +145,7 @@ value std::List[T]::from_array
 
 ---
 
-## Array and list literals
+## Array literals
 
 - Items MUST be comma-separated, with a space after each comma. A missing comma
   between items is a syntax error (see
@@ -254,7 +250,9 @@ std::Option::None = absent: std::Option[i64]
 
 ## Struct and enum field layout
 
-- Struct and enum fields use `name: Type` or `pub name: Type` (space after colon).
+- Struct fields use `name: Type` or `pub name: Type` (space after colon).
+  Enum variants use a name and an optional unnamed payload type list, such as
+  `Some(T)`.
 - When a struct has 2 or more fields, **align type names to the same column**:
 
 ```casa
@@ -343,7 +341,8 @@ Keep `pub`, [unsafe](functions-and-lambdas.md#unsafe-boundaries), or `extern` be
 
 - `fn name` alone on the first line
 - Each parameter on its own line, indented 4 spaces, `name:type` compact
-- `-> ReturnType {` on its own line at column 0
+- `-> ReturnType {` on its own line at the declaration's indentation level
+  (column 0 for a top-level function)
 
 ```casa
 fn make_compiler_with_tables
@@ -529,6 +528,8 @@ end
 ---
 
 ## f-strings vs string concatenation
+
+Author convention. `casafmt` does not rewrite concatenation or interpolation.
 
 Prefer f-strings whenever embedding one or more values into a string literal:
 

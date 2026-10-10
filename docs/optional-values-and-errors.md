@@ -74,7 +74,8 @@ end
 fn and_then [T U] self:Option[T] f:fn[T -> Option[U]] -> Option[U]
 ```
 
-Chains an optional operation.
+Calls `f` only for `Some`, transferring its payload to the callback. `None`
+passes through without calling `f`.
 
 ### Option[T]::filter
 
@@ -82,7 +83,8 @@ Chains an optional operation.
 fn filter [T] self:Option[T] f:fn[$T -> bool] -> Option[T]
 ```
 
-Keeps a present value only if it matches.
+Calls `f` with a shared payload borrow only for `Some`. A false result destroys
+the rejected payload and returns `None`.
 
 ### Option[T]::is_none
 
@@ -114,7 +116,8 @@ Returns whether a value is present.
 fn map [T U] self:Option[T] f:fn[T -> U] -> Option[U]
 ```
 
-Transforms a present value.
+Calls `f` only for `Some`, transferring its payload and wrapping the result in
+`Some`. `None` passes through without calling `f`.
 
 ### Option[T]::or_else
 
@@ -122,7 +125,7 @@ Transforms a present value.
 fn or_else [T] self:Option[T] f:fn[-> Option[T]] -> Option[T]
 ```
 
-Computes a fallback for `None`.
+Calls `f` only for `None`. A `Some` value passes through unchanged.
 
 ### Option[T]::propagate
 
@@ -130,7 +133,8 @@ Computes a fallback for `None`.
 fn propagate [T U] self:Option[T] -> Option[U]
 ```
 
-Converts `None` for an enclosing `?` return.
+Returns `None` for the enclosing `?` return type. This method discards a
+`Some` payload if called directly, so use `?` for conditional propagation.
 
 ### Option[T]::unwrap
 
@@ -146,7 +150,9 @@ Returns the present value. `None` terminates the program.
 fn unwrap_or [T] self:Option[T] default:T -> T
 ```
 
-Returns the present value, or `default` when the option is `None`.
+Returns the present value, or `default` when the option is `None`. The default
+expression is evaluated before the call, even for `Some`. Use `or_else` for a
+lazy fallback. An unused non-`Copy` default is destroyed.
 
 ### Option ownership and calls
 
@@ -206,7 +212,8 @@ end
 fn and_then [T U E] self:Result[T E] f:fn[T -> Result[U E]] -> Result[U E]
 ```
 
-Chains a fallible operation.
+Calls `f` only for `Ok`, transferring the success payload. `Error` passes
+through without calling `f`.
 
 ### Result[T E]::is_error
 
@@ -230,7 +237,8 @@ Returns whether the result is successful.
 fn map [T U E] self:Result[T E] f:fn[T -> U] -> Result[U E]
 ```
 
-Transforms a success value.
+Calls `f` only for `Ok`, transferring the success payload and wrapping the
+result in `Ok`. `Error` passes through unchanged.
 
 ### Result[T E]::map_error
 
@@ -238,7 +246,8 @@ Transforms a success value.
 fn map_error [T E F] self:Result[T E] f:fn[E -> F] -> Result[T F]
 ```
 
-Transforms an error value.
+Calls `f` only for `Error`, transferring the error payload and wrapping the
+result in `Error`. `Ok` passes through unchanged.
 
 ### Result[T E]::or_else
 
@@ -246,7 +255,8 @@ Transforms an error value.
 fn or_else [T E F] self:Result[T E] f:fn[E -> Result[T F]] -> Result[T F]
 ```
 
-Recovers from an error.
+Calls `f` only for `Error`, transferring the error payload. `Ok` passes through
+unchanged.
 
 ### Result[T E]::propagate
 
@@ -254,7 +264,8 @@ Recovers from an error.
 fn propagate [T U E] self:Result[T E] -> Result[U E]
 ```
 
-Preserves `Error` for an enclosing `?` return.
+Preserves the error for the enclosing `?` return type. Calling this method on
+`Ok` terminates the program, so use `?` for conditional propagation.
 
 ### Result[T E]::unwrap
 
@@ -278,7 +289,9 @@ Returns the error value. An `Ok` result terminates the program.
 fn unwrap_or [T E] self:Result[T E] default:T -> T
 ```
 
-Returns the success value, or `default` when the result is an error.
+Returns the success value, or `default` when the result is an error. The default
+expression is evaluated before the call, even for `Ok`. Use `or_else` for a
+lazy fallback. An unused non-`Copy` default or error payload is destroyed.
 
 ### Result ownership
 
