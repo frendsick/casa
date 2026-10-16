@@ -1493,6 +1493,9 @@ struct TypeChecker {
     underflow_reported_this_op: bool
     scope:                      block_scope::BlockScope
     moved_owners:               std::List[std::String]
+    # Latest move site per owner. Entries persist after reinitialization and
+    # flow restores, so read them only while the owner is moved.
+    move_locations:             std::Map[std::String common::Location]
     reported_move_conflicts:    std::List[std::String]
     owner_events:               std::List[common::OwnerEvent]
     next_owner_generation:      u64
@@ -2289,6 +2292,7 @@ impl TypeChecker {
         0 # next_owner_generation
         std::List[common::OwnerEvent]::new # owner_events
         std::List[std::String]::new # reported_move_conflicts
+        std::Map[std::String common::Location]::new # move_locations
         std::List[std::String]::new # moved_owners
         block_scope::BlockScope::new # scope
         false # underflow_reported_this_op
@@ -2664,9 +2668,24 @@ impl TypeChecker {
         fi
     }
 
+    # Mark an initialized owner as moved at the current location.
+    pub fn record_owner_move tc:mut$TypeChecker name:$str {
+        true name tc.set_owner_moved
+        tc.current_location.clone name.to_str tc.move_locations.set
+    }
+
+    pub fn report_moved_owner tc:mut$TypeChecker location:$common::Location name:$str {
+        location.clone f"Owner `{name}` was already moved" common::ErrorKind::InvalidVariable
+        error::CasaError::new = diagnostic
+        if name tc.move_locations.get_str std::Option::Some(moved_at) is then
+            moved_at.clone f"`{name}` moved here" error::CasaNote diagnostic.notes.push
+        fi
+        diagnostic tc.diagnostics.push_error
+    }
+
     pub fn record_conditional_move tc:mut$TypeChecker op:mut$common::Op name:$str {
         name op tc.record_named_binding
-        true name tc.set_owner_moved
+        name tc.record_owner_move
         name.to_str std::Option::Some = op.ensure_ownership.conditional_move
         tc
             .branched_stacks
@@ -3244,12 +3263,14 @@ impl TypeChecker {
         end
         if type_value.is_borrow ! then
             if function_opt type_value tc.type_is_duplicable ! then
+                # A reported use pushes an unbound value so the consuming
+                # operation does not report the same use again.
                 if name.as_str tc.owner_is_moved then
-                    op.location f"Owner `{name}` was already moved" common::ErrorKind::InvalidVariable
-                    tc.diagnostics.record_error_string
+                    name.as_str op.location tc.report_moved_owner
+                else
+                    name.to_str std::Option::Some = binding
+                    op.id std::Option::Some = source
                 fi
-                name.to_str std::Option::Some = binding
-                op.id std::Option::Some = source
             elif type_value tc.uses_copy_storage then
                 op.id std::Option::Some = source
             fi
@@ -3485,8 +3506,7 @@ impl TypeChecker {
         fi
         if value.binding std::Option::Some(name) is then
             if name.as_str tc.owner_is_moved then
-                tc.current_location f"Owner `{name}` was already moved"
-                common::ErrorKind::InvalidVariable tc.diagnostics.record_error_string
+                name.as_str tc.current_location.clone tc.report_moved_owner
                 return
             fi
             if
@@ -3501,7 +3521,7 @@ impl TypeChecker {
                 fi
                 return
             fi
-            true name.as_str tc.set_owner_moved
+            name.as_str tc.record_owner_move
             if value.source std::Option::Some(source_op) is then
                 source_op tc.moved_operations.add
             fi
@@ -3511,8 +3531,7 @@ impl TypeChecker {
     pub fn release_value tc:mut$TypeChecker value:$TypedValue {
         if value.binding std::Option::Some(name) is then
             if name.as_str tc.owner_is_moved then
-                tc.current_location f"Owner `{name}` was already moved"
-                common::ErrorKind::InvalidVariable tc.diagnostics.record_error_string
+                name.as_str tc.current_location.clone tc.report_moved_owner
             fi
         fi
     }
@@ -9196,7 +9215,7 @@ impl TypeChecker {
                 checker.report_loan_conflict
                 return
             fi
-            true hidden_name.as_str checker.set_owner_moved
+            hidden_name.as_str checker.record_owner_move
         fi
     }
 
@@ -10309,6 +10328,7 @@ impl TypeChecker {
                 self.current_trait_bounds.clone = guard_checker.current_trait_bounds
                 guard_scope = guard_checker.scope
                 guard_flow guard_checker.restore_ownership_flow
+                self.move_locations.clone = guard_checker.move_locations
                 self.contextual_callables.clone = guard_checker.contextual_callables
                 VariableUses::new guard_body collect_source_variable_uses = variable_uses
                 variable_uses.counts.clone = guard_checker.remaining_uses
