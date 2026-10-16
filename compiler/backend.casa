@@ -8,6 +8,7 @@ import "error" as error
 import "typechecker" as typechecker
 import "runtime" as runtime
 import "local_storage" as local_storage
+import "lexer" as lexer
 
 pub struct BytecodeFailure {
     pub message: std::String
@@ -114,13 +115,13 @@ fn resolve_struct_field
 }
 
 impl BackendPlanner {
-    fn new checked:$typechecker::CheckedProgram -> BackendPlanner {
+    fn new checked:$typechecker::CheckedProgram sources:$lexer::SourceStore -> BackendPlanner {
         checked.get_store = store
         store common::LayoutPlanner::new
         0
         std::Option[BytecodeFailure]::None
         std::List[FunctionWork]::new
-        Emitter::new
+        sources Emitter::new
         checked
         store
         BackendPlanner
@@ -2729,6 +2730,7 @@ impl FunctionPlanner {
         facts:$semantic_body::OperationFacts
         bytecode:mut$std::List[InstValue]
     {
+        facts.origin.clone InstValue::Source bytecode.push
         if facts.effects std::Option::Some(effects) is then
             for event in effects.cleanups.iter do
                 bytecode event self.compile_owner_cleanup
@@ -3075,6 +3077,7 @@ fn plan_function
             name.as_str checked.find_body.unwrap = body
             function state FunctionPlanner::for_function = compiler
             body compiler.prepare_local_aggregates
+            function.location.clone InstValue::Source output.push
             compiler.new_label InstValue::Label output.push
             output compiler.begin_results
             output body compiler.compile_body
@@ -3093,6 +3096,7 @@ fn plan_function
                 .get_function
                 .unwrap = lambda
             lambda state FunctionPlanner::for_function = compiler
+            lambda.location.clone InstValue::Source output.push
             0 = capture_index: u64
             while capture_index lambda.captures.length < do
                 capture_index lambda.captures.get = capture
@@ -3254,8 +3258,9 @@ fn is_leaf_candidate
 
 pub fn compile_checked
     checked:$typechecker::CheckedProgram
+    sources:$lexer::SourceStore
 -> std::Result[std::String AssemblyError] {
-    checked BackendPlanner::new = state
+    sources checked BackendPlanner::new = state
     error::Diagnostics::new = diagnostics
     checked.get_externs.keys = extern_names
     &does_function_name_precede extern_names.sort_by
@@ -3385,6 +3390,8 @@ enum RoundingKind derives std::Copy {
 }
 
 enum InstValue {
+    # Removed into the source table before instruction selection.
+    Source(common::Location)
     # Stack
     Drop
     Dup
@@ -3639,6 +3646,9 @@ const SCALAR_REGISTER_COUNT 4
 const INITIAL_SCALAR_REGISTER_ORDER 228
 
 struct Emitter {
+    sources:         $lexer::SourceStore
+    source_files:    std::Map[std::String u64]
+    last_location:   std::Option[common::Location]
     call_prefix:     std::String
     native_calls:    std::Map[std::String common::NativeCallPlan]
     asm:             std::String
@@ -3658,7 +3668,7 @@ struct Emitter {
 }
 
 impl Emitter {
-    fn new -> Emitter {
+    fn new sources:$lexer::SourceStore -> Emitter {
         ".section .text\n".to_str = header
         RETURN_STACK_SIZE common::WORD_SIZE - = call_limit
         common::WORD_SIZE = word_size
@@ -3669,7 +3679,7 @@ impl Emitter {
         std::Map[std::String u64]::new std::List[std::String]::new
         std::Set[std::String]::new std::Map[std::String LeafTemplate]::new
         std::Map[std::String std::String]::new
-        0 header std::Map[std::String common::NativeCallPlan]::new call_prefix Emitter
+        0 header std::Map[std::String common::NativeCallPlan]::new call_prefix std::Option[common::Location]::None std::Map[std::String u64]::new sources Emitter
     }
 
     fn intern_string self:mut$Emitter value:$str -> u64 {
@@ -3689,8 +3699,7 @@ impl Emitter {
             return
         fi
         if name " " str::contains then
-            self.functions.length = index
-            f".generic_{index}"
+            name encode_specialization_name
         else
             name sanitize_name
         fi = label
@@ -3854,6 +3863,7 @@ fn is_leaf_instruction inst:$InstValue -> bool {
 
 struct LeafTemplate {
     instructions:   std::List[InstValue]
+    locations:      std::List[common::Location]
     local_bytes:    u64
     start:          u64
     end_index:      u64
@@ -4149,16 +4159,19 @@ impl Emitter {
         fi
         label.clone self.symbols.add
         plan match
-            FunctionPlan { actions: actions } => actions
-        end = bytecode
+            FunctionPlan { actions: actions locations: locations } => locations actions
+        end = bytecode = locations
         ".p2align 6" self.line
+        f".type fn_{label}, @function" self.line_string
         f"fn_{label}:" self.line_string
+        locations self.emit_entry_location
         "popq -8(%r14)" self.indent
-        false bytecode self.emit_bytecode
+        false locations bytecode self.emit_bytecode
+        f".size fn_{label}, .-fn_{label}" self.line_string
         "" self.line
         self.templates bytecode find_leaf_range match
             std::Option::Some(range) => {
-                range.expanded_count range.end_index range.start range.local_bytes bytecode LeafTemplate
+                range.expanded_count range.end_index range.start range.local_bytes locations bytecode LeafTemplate
                 name.to_str self.templates.set
             }
             std::Option::None => {
@@ -4173,7 +4186,7 @@ impl Emitter {
             "Duplicate root function" self.reject return
         fi
         plan self.begin_selection ? drop
-        plan.actions self.emit_start
+        plan.locations plan.actions self.emit_start
         true = self.root_selected
         std::Unit::Value std::Result::Ok
     }
@@ -4191,13 +4204,20 @@ impl Emitter {
         fi
         self.emit_bss
         self.emit_data
+        common::empty_location self.emit_location
         runtime::ASSEMBLY self.asm.append
         self.into_asm std::Result::Ok
     }
 
-    fn emit_start self:mut$Emitter bytecode:$std::List[InstValue] {
+    fn emit_start
+        self:mut$Emitter
+        bytecode:$std::List[InstValue]
+        locations:$std::List[common::Location]
+    {
         ".globl _start" self.line
+        ".type _start, @function" self.line
         "_start:" self.line
+        locations self.emit_entry_location
         "leaq return_stack(%rip), %r14" self.indent
         "movq (%rsp), %rax" self.indent
         "movq %rax, __argc(%rip)" self.indent
@@ -4207,30 +4227,37 @@ impl Emitter {
         "addq $1, %rcx" self.indent
         "leaq 8(%rsp,%rcx,8), %rax" self.indent
         "movq %rax, __envp(%rip)" self.indent
-        true bytecode self.emit_bytecode
+        true locations bytecode self.emit_bytecode
         "movq $60, %rax" self.indent
         "xorq %rdi, %rdi" self.indent
         "syscall" self.indent
+        ".size _start, .-_start" self.line
         "" self.line
     }
 
-    fn emit_bytecode self:mut$Emitter bytecode:$std::List[InstValue] is_global:bool {
+    fn emit_bytecode
+        self:mut$Emitter
+        bytecode:$std::List[InstValue]
+        locations:$std::List[common::Location]
+        is_global:bool
+    {
         ScalarStack::new = cache
         # A standalone wrapper keeps its frame so nested capacity checks include it.
         std::Map[std::String LeafTemplate]::new = no_templates
         if is_global ! no_templates bytecode has_forwarding_frame && then
             common::WORD_SIZE self.emit_return_stack_check
-            is_global cache bytecode.length 2 - 4 bytecode self.emit_instruction_range
+            is_global cache bytecode.length 2 - 4 locations bytecode self.emit_instruction_range
             is_global cache InstValue::FnReturn self.emit_scalar_or_inst
             return
         fi
-        is_global cache bytecode.length 0 bytecode self.emit_instruction_range
+        is_global cache bytecode.length 0 locations bytecode self.emit_instruction_range
         cache self.flush_scalar_stack
     }
 
     fn emit_instruction_range
         self:mut$Emitter
         bytecode:$std::List[InstValue]
+        locations:$std::List[common::Location]
         start:u64
         end_index:u64
         cache:mut$ScalarStack
@@ -4239,6 +4266,7 @@ impl Emitter {
         start = index
         while index end_index < do
             index bytecode.get = inst
+            index locations.get self.emit_location
             if inst InstValue::LocalSet(written) is index 1 + end_index < && then
                 if index 1 + bytecode.get InstValue::LocalGet(read) is written read == && then
                     cache inst self.emit_scalar_inst drop
@@ -4418,14 +4446,18 @@ impl Emitter {
         is_global:bool
     {
         self.expanding_leaf = nested
+        self.last_location.clone = callsite
         # The outer check covers the maximum reservation across nested templates.
         if nested ! then
             common::WORD_SIZE template.local_bytes + self.emit_return_stack_check
         fi
         true = self.expanding_leaf
-        is_global cache template.end_index template.start template.instructions
+        is_global cache template.end_index template.start template.locations template.instructions
         self.emit_instruction_range
         nested = self.expanding_leaf
+        if callsite std::Option::Some(location) is then
+            location self.emit_location
+        fi
     }
 
     fn flush_scalar_stack self:mut$Emitter cache:mut$ScalarStack {
@@ -5964,13 +5996,34 @@ impl Emitter {
 
 # A complete physical function plan owns its actions and capture bounds.
 struct FunctionPlan {
+    locations:     std::List[common::Location]
     actions:       std::List[InstValue]
     capture_count: u64
 }
 
 impl FunctionPlan {
     fn new actions:std::List[InstValue] capture_count:u64 -> FunctionPlan {
-        capture_count actions FunctionPlan
+        std::List[InstValue]::new = instructions
+        std::List[common::Location]::new = locations
+        common::empty_location = location
+        # Frame setup belongs to the declaration, before the first body operation.
+        for action in actions.iter do
+            if action InstValue::Source(origin) is then
+                origin.clone = location
+                break
+            fi
+        done
+        actions.reverse
+        while actions.is_empty ! do
+            actions.pop = action
+            if action InstValue::Source(origin) is then
+                origin = location
+            else
+                location.clone locations.push
+                action instructions.push
+            fi
+        done
+        capture_count instructions locations FunctionPlan
     }
 }
 
@@ -6220,4 +6273,70 @@ fn escape_string s:$str -> std::String {
         1 += index
     done
     builder
+}
+
+impl Emitter {
+    fn emit_entry_location self:mut$Emitter locations:$std::List[common::Location] {
+        std::Option[common::Location]::None = self.last_location
+        if locations.is_empty then
+            common::empty_location self.emit_location
+        else
+            0 locations.get self.emit_location
+        fi
+    }
+
+    fn source_file_index self:mut$Emitter path:$str -> u64 {
+        if path self.source_files.get_copy_str std::Option::Some(index) is then
+            index return
+        fi
+        self.source_files.length 1 + = index
+        index path self.source_files.set_str
+        path escape_string = escaped
+        f".file {index} \"{escaped}\"" self.line_string
+        index
+    }
+
+    fn emit_location self:mut$Emitter location:$common::Location {
+        if self.last_location std::Option::Some(previous) is then
+            if location previous.matches then
+                return
+            fi
+        fi
+        location.clone std::Option::Some = self.last_location
+        location.file.as_str = path
+        if
+            path self
+                .sources
+                .line_starts
+                .get_str std::Option::Some(starts) is
+        then
+            location.span.offset = offset
+            { offset > } starts.bisect = line
+            if line 0 == then
+                return
+            fi
+            offset line 1 - starts.get copy - 1 + = column
+            path self.source_file_index = file_index
+            f".loc {file_index} {line} {column}" self.line_string
+        else
+            # GAS drops line-zero records. A synthetic file prevents generated
+            # helpers and runtime from inheriting a user's source line.
+            "<casa-generated>" self.source_file_index = file_index
+            f".loc {file_index} 1 0" self.line_string
+        fi
+    }
+}
+
+# Escape the complete semantic identity, including bindings, without collisions.
+# ASCII letters and digits stay readable. Underscores delimit decimal code points.
+fn encode_specialization_name name:$str -> std::String {
+    ".specialized_".to_str = label
+    for character in name.iter do
+        if character.codepoint 128 < character.is_alpha character.is_digit || && then
+            character label.push
+        else
+            f"_{character.codepoint}_" label.append_string
+        fi
+    done
+    label
 }

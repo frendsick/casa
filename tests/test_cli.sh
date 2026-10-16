@@ -180,6 +180,11 @@ if matches_filter installed_native "$@"; then
     )
 fi
 
+if matches_filter source_traceability "$@"; then
+    matched=true
+    python3 tests/test_source_traceability.py "$COMPILER"
+fi
+
 if matches_filter native_assembly "$@"; then
     matched=true
     python3 tests/test_native_assembly.py "$COMPILER"
