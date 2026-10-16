@@ -258,9 +258,11 @@ produces no assembly.
 
 Casa keeps ownership of every argument. A by-value extern struct copies its C
 representation. A borrowed scalar, extern struct, or `$cstr` is passed as a
-native pointer. The pointer is valid only while the Casa borrow is live. The
-native function must not retain it after the call unless a separate API
-contract keeps the storage alive.
+native pointer. For a scalar binding, this points to the binding's storage.
+Native writes through an exclusive scalar borrow are visible to later Casa
+reads, including reads of narrow signed integers. The pointer is valid only
+while the Casa borrow is live. The native function must not retain it after
+the call unless a separate API contract keeps the storage alive.
 
 Use `-l` / `--link-library` to link each required native library. The option is
 repeatable and preserves command-line order:
