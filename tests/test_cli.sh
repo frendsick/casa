@@ -185,6 +185,11 @@ if matches_filter native_assembly "$@"; then
     python3 tests/test_native_assembly.py "$COMPILER"
 fi
 
+if matches_filter unsigned_division "$@"; then
+    matched=true
+    python3 tests/test_unsigned_division.py "$COMPILER"
+fi
+
 if matches_filter lsp_workspace "$@"; then
     matched=true
     "$COMPILER" -L lib lsp.casa -o "$CLI_TMP/lsp"
