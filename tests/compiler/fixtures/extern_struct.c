@@ -252,3 +252,26 @@ IntPair casa_extern_int_pair(IntPair value) {
     IntPair result = {value.first + 1, value.second + 2};
     return result;
 }
+
+typedef struct {
+    int32_t x;
+    int32_t y;
+} Pair;
+
+typedef struct {
+    int64_t first;
+    int64_t second;
+    int64_t third;
+} OwnedLarge;
+
+Pair casa_extern_make_pair(void) {
+    return (Pair){17, 29};
+}
+
+IntPair casa_extern_owned_pair(void) {
+    return (IntPair){31, 47};
+}
+
+OwnedLarge casa_extern_owned_large(void) {
+    return (OwnedLarge){53, 67, 79};
+}
