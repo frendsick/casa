@@ -456,6 +456,58 @@ raylib stub ok"
 fi
 
 if [ "$TEST_CATEGORY" = all ] || [ "$TEST_CATEGORY" = runtime ]; then
+    if matches_filter "numeric_trunc_from" "$@"; then
+        matched=true
+        # The first two inputs lie just outside each target's range. The f32
+        # cases use representable neighbors where a half-integer would round away.
+        while read -r source target below above; do
+            for value in "$below" "$above" "${source}::nan" \
+                "${source}::infinity" "${source}::neg_infinity"
+            do
+                printf 'import "std"\n%s = value: %s\nvalue %s::trunc_from drop\n' \
+                    "$value" "$source" "$target" >"$TEST_TMP/numeric_trunc_from.casa"
+                printf 'Running: runtime/numeric_trunc_from_%s_%s (%s) ... ' \
+                    "$source" "$target" "$value"
+                if ! "$COMPILER" -L "$LIB_DIR" "$TEST_TMP/numeric_trunc_from.casa" \
+                    -o "$TEST_TMP/numeric_trunc_from" 2>"$TEST_TMP/compile_err"
+                then
+                    printf "${RED}COMPILE FAIL${RESET}\n"
+                    cat "$TEST_TMP/compile_err"
+                    fail=$((fail+1))
+                elif "$TEST_TMP/numeric_trunc_from" >"$TEST_TMP/runtime_out" \
+                    2>"$TEST_TMP/runtime_err"
+                then
+                    printf "${RED}EXPECTED RUNTIME FAIL${RESET}\n"
+                    fail=$((fail+1))
+                elif ! grep -q '^error: integer arithmetic failed$' "$TEST_TMP/runtime_err"; then
+                    printf "${RED}WRONG ERROR${RESET}\n"
+                    cat "$TEST_TMP/runtime_err"
+                    fail=$((fail+1))
+                else
+                    printf "${GREEN}OK${RESET}\n"
+                    pass=$((pass+1))
+                fi
+            done
+        done <<'CASES'
+f32 i8 -128.5 127.5
+f32 i16 -32768.5 32767.5
+f32 i32 -2147483904.0 2147483648.0
+f32 i64 -9223373136366403584.0 9223372036854775808.0
+f32 u8 -0.5 255.5
+f32 u16 -0.5 65535.5
+f32 u32 -0.5 4294967296.0
+f32 u64 -0.5 18446744073709551616.0
+f64 i8 -128.5 127.5
+f64 i16 -32768.5 32767.5
+f64 i32 -2147483648.5 2147483647.5
+f64 i64 -9223372036854777856.0 9223372036854775808.0
+f64 u8 -0.5 255.5
+f64 u16 -0.5 65535.5
+f64 u32 -0.5 4294967295.5
+f64 u64 -0.5 18446744073709551616.0
+CASES
+    fi
+
     if matches_filter "runtime_output" "$@"; then
         matched=true
         output_binary="$TEST_TMP/runtime_output"

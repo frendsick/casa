@@ -198,6 +198,12 @@ byte i16::from = widened
 count u8::try_from = maybe_byte
 ```
 
+`trunc_from` checks the source against the target's inclusive integer range
+before truncating toward zero. NaN, infinity, and out-of-range sources terminate.
+For example, `126.75 i8::trunc_from` returns `126`, but `127.5 i8::trunc_from`
+and `-0.5 u32::trunc_from` terminate. This rule applies to both `f32` and `f64`
+sources and every integer target.
+
 Use these operations for numeric conversion. Convert characters with
 `.codepoint`, `char::from_codepoint`, or the narrow [unsafe](functions-and-lambdas.md#unsafe-boundaries)
 `char::from_codepoint_unchecked` primitive. Representation casts to or from
