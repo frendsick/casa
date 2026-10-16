@@ -1500,6 +1500,8 @@ struct TypeChecker {
     owner_events:               std::List[common::OwnerEvent]
     next_owner_generation:      u64
     moved_operations:           std::Set[i64]
+    scalar_inputs:              std::List[common::ScalarInput]
+    operation_stack_depth:      u64
     binding_loans:              std::Map[std::String BindingLoans]
     remaining_uses:             std::Map[std::String u64]
     remaining_observing_uses:   std::Map[std::String u64]
@@ -2288,6 +2290,8 @@ impl TypeChecker {
         std::Map[std::String u64]::new # remaining_observing_uses
         std::Map[std::String u64]::new # remaining_uses
         std::Map[std::String BindingLoans]::new # binding_loans
+        0 # operation_stack_depth
+        std::List[common::ScalarInput]::new # scalar_inputs
         std::Set[i64]::new # moved_operations
         0 # next_owner_generation
         std::List[common::OwnerEvent]::new # owner_events
@@ -3255,7 +3259,9 @@ impl TypeChecker {
         target_opt match
             std::Option::Some(target) => {
                 if function_opt target tc.type_is_duplicable then
-                    target = stack_type
+                    if target.has_unresolved_type_var tc.store target common::type_has_scalar_storage || ! then
+                        target = stack_type
+                    fi
                 fi
             }
             std::Option::None => {
@@ -3426,6 +3432,18 @@ impl TypeChecker {
         expected:$common::Type
         value:$TypedValue
     -> bool {
+        if
+            self
+                .stack
+                .values
+                .length self.operation_stack_depth <
+        then
+            self.operation_stack_depth self
+                .stack
+                .values
+                .length - 1 - = depth
+            depth expected value self.record_scalar_input
+        fi
         if expected.is_borrow then
             value self.release_value
             true return
@@ -4999,6 +5017,102 @@ impl TypeChecker {
         fi
     }
 
+    fn resolve_scalar_borrow_source
+        self:mut$TypeChecker
+        value:$TypedValue
+    -> common::ScalarInputKind {
+        if value.place std::Option::Some(place) is then
+            if place.fields.is_empty ! then
+                common::ScalarInputKind::BorrowValue return
+            fi
+            place.binding.clone place.binding.clone common::BindingReference = binding
+            if place.binding.as_str self.scope.resolve_binding_reference std::Option::Some(resolved) is then
+                resolved = binding
+            fi
+            binding common::ScalarInputKind::BorrowBinding return
+        fi
+        common::ScalarInputKind::BorrowValue
+    }
+
+    # Record the semantic borrow or read before a consumer loses its input values.
+    # Generic facts remain symbolic until specialization chooses scalar storage.
+    fn record_scalar_input self:mut$TypeChecker value:$TypedValue expected:$common::Type depth:u64 {
+        for input in self.scalar_inputs.iter do
+            if input.depth depth == then
+                return
+            fi
+        done
+        if expected.is_borrow then
+            if value.type_value.is_borrow then
+                return
+            fi
+            value.type_value resolve_numeric_literal_default = target
+            if target.has_unresolved_type_var self.store target common::type_has_scalar_storage || then
+                value self.resolve_scalar_borrow_source target depth common::ScalarInput self.scalar_inputs.push
+            fi
+        elif expected.has_unresolved_type_var ! then
+            if value.type_value.borrow_target std::Option::Some(target) is then
+                if target.has_unresolved_type_var self.store target common::type_has_scalar_storage || then
+                    common::ScalarInputKind::Read target.clone depth common::ScalarInput self.scalar_inputs.push
+                fi
+            fi
+        fi
+    }
+
+    # Scalar borrows keep their address until an operation needs the value.
+    fn read_scalar_value self:mut$TypeChecker value:mut$TypedValue depth:u64 {
+        if value.type_value.borrow_target std::Option::Some(target) is then
+            if target common::Type::Builtin(_) is self.store target common::type_has_scalar_storage && then
+                depth target value self.record_scalar_input
+                target.clone = value.type_value
+            fi
+        fi
+    }
+
+    fn record_scalar_arguments self:mut$TypeChecker effect:$common::StackEffect leading_values:u64 {
+        self
+            .stack
+            .values
+            .length = count
+        0 = index: u64
+        while index effect.parameters.length < index leading_values + count < && do
+            index leading_values + = depth
+            count 1 - depth - self
+                .stack
+                .values
+                .get = value
+            depth index effect
+                .parameters
+                .get
+                .typ value self.record_scalar_input
+            1 += index
+        done
+    }
+
+    fn record_scalar_returns self:mut$TypeChecker function:mut$std::Option[common::Function] {
+        if function std::Option::Some(declaration) is then
+            declaration
+                .stack_effect
+                .return_types
+                .clone
+        else
+            return
+        fi = returns
+        self
+            .stack
+            .values
+            .length = count
+        0 = index: u64
+        while index returns.length < index count < && do
+            index self
+                .stack
+                .values
+                .get = value
+            count 1 - index - index returns.get value self.record_scalar_input
+            1 += index
+        done
+    }
+
     # Keep borrowed owner temporaries in ordinary compiler-managed variables.
     # This lets the existing move, loan, reassignment, and scope cleanup rules
     # control their lifetime.
@@ -5010,6 +5124,7 @@ impl TypeChecker {
         emitted_ops:mut$std::List[common::Op]
         function_opt:mut$std::Option[common::Function]
     {
+        leading_values effect tc.record_scalar_arguments
         effect.parameters.length leading_values + = required_values
         if
             required_values tc
@@ -5573,7 +5688,9 @@ impl TypeChecker {
         if numeric_value common::OpValue::NumericCall(call) is then
             if "__float_significand" call.method.as_str == then
                 tc.stack_pop_value = value
+                0 value tc.read_scalar_value
                 tc.stack_pop_value = exponent
+                1 exponent tc.read_scalar_value
                 common::make_f64_type value tc.resolve_float_value drop
                 common::make_i64_type exponent tc.resolve_integer_value drop
                 if call.target common::BuiltinType::U64 != then
@@ -5586,7 +5703,9 @@ impl TypeChecker {
             fi
             if "__from_decimal_parts" call.method.as_str == then
                 tc.stack_pop_value = significand
+                0 significand tc.read_scalar_value
                 tc.stack_pop_value = exponent
+                1 exponent tc.read_scalar_value
                 common::make_u64_type significand tc.resolve_integer_value drop
                 common::make_i64_type exponent tc.resolve_integer_value drop
                 if call.target common::BuiltinType::F64 != then
@@ -5598,6 +5717,7 @@ impl TypeChecker {
                 return
             fi
             tc.stack_pop_value = value
+            0 value tc.read_scalar_value
             common::make_unknown_type.clone = source_type
             if value.type_value.is_integer_literal_t then
                 tc.literal_resolutions tc.diagnostics common::make_i64_type value.resolve_literals drop
@@ -5692,6 +5812,7 @@ impl TypeChecker {
         op.value.clone = operation
         if operation common::OpValue::BitNot is then
             tc.stack_pop_value = value
+            0 value tc.read_scalar_value
             if value.type_value common::make_missing_type.eq then
                 common::make_missing_type tc.stack_push_type
                 return
@@ -5716,7 +5837,9 @@ impl TypeChecker {
         fi
 
         tc.stack_pop_value = right
+        0 right tc.read_scalar_value
         right tc.stack_pop_left_like = left
+        1 left tc.read_scalar_value
 
         if
             left.type_value common::make_missing_type.eq right.type_value common::make_missing_type.eq ||
@@ -5905,6 +6028,7 @@ impl TypeChecker {
             false return
         fi
         tc.stack_pop_value = value
+        0 value tc.read_scalar_value
         if value.type_value common::Type::Builtin(source) is then
             if source.is_float then
                 if source common::BuiltinType::F32 == then
@@ -5942,6 +6066,8 @@ impl TypeChecker {
         value1 value2 tc.resolve_comparison_parameter
         value1 tc.release_value
         value2 tc.release_value
+        0 value1 tc.read_scalar_value
+        1 value2 tc.read_scalar_value
         common::make_i64_type.clone = integer_target
         value1.type_value.clone = type1_t
         value2.type_value.clone = type2_t
@@ -6028,6 +6154,8 @@ impl TypeChecker {
         fi
         # Other primitives: bytecode handles the comparison directly.
         if type1_t.is_primitive_compare_type_t then
+            0 type1_t value1 tc.record_scalar_input
+            1 type2_t value2 tc.record_scalar_input
             type1_t.clone std::Option::Some op common::Op::set_type_hint
             common::make_bool_type tc.stack_push_type
             return
@@ -6272,6 +6400,7 @@ impl TypeChecker {
         semantics tc.record_decision_dependencies
         if semantics.stack_effect std::Option::Some(stored_effect) is then
             stored_effect.clone = effect
+            0 effect tc.record_scalar_arguments
             # Raw stores require an explicit conversion instead of binding `T` to
             # the store width while checking a generic function body.
             if
@@ -6455,6 +6584,24 @@ impl TypeChecker {
         op:mut$common::Op
         function_opt:mut$std::Option[common::Function]
     {
+        if op.value common::OpValue::Copy is then
+            if
+                tc
+                    .stack
+                    .values
+                    .is_empty !
+            then
+                tc
+                    .stack
+                    .values
+                    .length 1 - tc
+                    .stack
+                    .values
+                    .get = value
+                common::SHARED_BORROW_TYPE value.type_value.clone common::apply_borrow_type = expected
+                0 expected value tc.record_scalar_input
+            fi
+        fi
         if op tc.apply_stack_reordering then
             return
         fi
@@ -6470,6 +6617,7 @@ impl TypeChecker {
         rules::analyze_operation = semantics
         semantics tc.record_decision_dependencies
         if semantics.into_stack_effect std::Option::Some(effect) is then
+            0 effect tc.record_scalar_arguments
             function_opt std::Option[common::Type]::None "" effect
             tc.apply_stack_effect
         fi
@@ -6919,6 +7067,21 @@ impl TypeChecker {
             function_opt effective_type_t var_name.as_str tc.name_lambda_parameter
             function_opt var_name.as_str tc.take_parameter_initialization
             = is_parameter_initialization
+            if
+                is_parameter_initialization ! tc
+                    .stack
+                    .values
+                    .is_empty ! &&
+            then
+                tc
+                    .stack
+                    .values
+                    .length 1 - tc
+                    .stack
+                    .values
+                    .get = value
+                0 effective_type_t value tc.record_scalar_input
+            fi
 
             function_opt var_name.as_str tc.is_global_assignment = is_global
             var_name.as_str tc
@@ -8363,6 +8526,9 @@ impl TypeChecker {
             .clone = value
         bindings parameter.typ.substitute_t resolve_numeric_literal_default = target
         tc.literal_resolutions tc.diagnostics target value.resolve_literals drop
+        if target.borrow_target std::Option::Some(borrowed_target) is then
+            borrowed_target.clone = target
+        fi
         target.clone = value.type_value
         value stack_index tc
             .stack
@@ -9551,6 +9717,7 @@ impl TypeChecker {
                 common::ErrorKind::InvalidScope tc.diagnostics.record_error
                 return
             fi
+            function_opt tc.record_scalar_returns
             if function_opt std::Option::Some(function) is then
                 function.stack_effect tc.materialize_return_lambdas
                 function tc.resolve_declared_return_borrow_capabilities
@@ -9708,10 +9875,15 @@ impl TypeChecker {
     {
         "value with trait `Display`".to_str ExpectationContext::Text = tc.current_expect_ctx
         tc.stack_peek_type = peek_t
+        if peek_t.borrow_target std::Option::Some(target) is then
+            target.clone = peek_t
+        fi
         peek_t.format = typ
         if peek_t rules::primitive_print_operation std::Option::Some(operation) is then
             operation.clone = resolved_operation
-            tc.stack_pop_drop
+            tc.stack_pop_value = value
+            0 peek_t value tc.record_scalar_input
+            value tc.finish_value_use
             resolved_operation op common::Op::set_value
             peek_t.clone std::Option::Some op common::Op::set_type_hint
             return
@@ -10443,6 +10615,9 @@ impl TypeChecker {
         function_opt:mut$std::Option[common::Function]
     {
         tc.stack_pop_value = subject
+        if subject.type_value.borrow_target std::Option::Some(target) is then
+            0 target subject tc.record_scalar_input
+        fi
         function_opt emitted_ops op subject tc.bind_is_subject
         subject tc.release_value
         subject.type_value.clone = typ
@@ -10620,6 +10795,9 @@ impl TypeChecker {
                 .values
                 .length != = has_match_subject
             self.stack_pop_value = match_subject
+            if match_subject.type_value.borrow_target std::Option::Some(target) is then
+                0 target match_subject self.record_scalar_input
+            fi
             match_subject.type_value.clone = match_type
             if 0 match_subject.literals.length != then
                 match_type resolve_numeric_literal_default = match_type
@@ -11192,6 +11370,7 @@ impl TypeChecker {
             false return
         fi
         tc.stack_pop_value = value
+        0 value tc.read_scalar_value
         if value.type_value common::make_char_type.eq ! then
             op.location f"Method `codepoint` requires `char`, got `{value.type_value.format}`" common::ErrorKind::TypeMismatch tc.diagnostics.record_error_string
         fi
@@ -11213,7 +11392,9 @@ impl TypeChecker {
             false return
         fi
         tc.stack_pop_value = receiver
+        0 receiver tc.read_scalar_value
         receiver tc.stack_pop_left_like = other
+        1 other tc.read_scalar_value
         common::make_i64_type.clone = target_type
         if receiver.type_value.is_integer_type_t then
             receiver.type_value.clone = target_type
@@ -11252,6 +11433,7 @@ impl TypeChecker {
             false return
         fi
         tc.stack_pop_value = value
+        0 value tc.read_scalar_value
         if value.type_value common::Type::Builtin(target) is then
             if target.is_float then
                 target copy method_name.to_str common::FloatRound = rounding
@@ -11275,7 +11457,9 @@ impl TypeChecker {
             false return
         fi
         tc.stack_pop_value = receiver
+        0 receiver tc.read_scalar_value
         receiver tc.stack_pop_left_like = other
+        1 other tc.read_scalar_value
         common::make_i64_type.clone = target
         if receiver.type_value.is_integer_type_t then
             receiver.type_value.clone = target
@@ -11520,21 +11704,23 @@ impl TypeChecker {
             common::make_string_type tc.stack_push_type
             return
         fi
-        if fstring_type_t common::Type::Builtin(builtin) is then
+        if fstring_value_type common::Type::Builtin(builtin) is then
             if
                 builtin.is_integer
                 builtin common::BuiltinType::Bool == ||
                 builtin common::BuiltinType::Char == ||
             then
                 builtin common::OpValue::PrimitiveToStr op common::Op::set_value
-                tc.stack_pop_drop
+                tc.stack_pop_value = value
+                0 fstring_value_type value tc.record_scalar_input
+                value tc.finish_value_use
                 common::make_string_type tc.stack_push_type
                 return
             fi
         fi
         common::STD_DISPLAY_TRAIT.to_str common::GenericType::new common::Type::Generic = display_type
         if
-            tc.checks tc.diagnostics tc.store function_opt display_type fstring_type_t check_trait_satisfaction !
+            tc.checks tc.diagnostics tc.store function_opt display_type fstring_value_type check_trait_satisfaction !
         then
             op common::Op::location f"Type `{fstring_type}` cannot be used in f-string: does not satisfy trait `Display`" common::ErrorKind::MissingTraitMethod tc.diagnostics.record_error_string
             tc.stack_pop_drop
@@ -12684,6 +12870,14 @@ impl TypeChecker {
     }
 
     fn begin_operation self:mut$TypeChecker operation:mut$common::Op -> u64 u64 {
+        self
+            .stack
+            .values
+            .length = self.operation_stack_depth
+        std::List[common::ScalarInput]::new = self.scalar_inputs
+        if operation.ownership std::Option::Some(effects) is then
+            std::List[common::ScalarInput]::new = effects.scalar_inputs
+        fi
         operation self.assign_op_id
         operation.id self.scope.begin_operation
         operation.location.clone = self.current_location
@@ -12699,6 +12893,10 @@ impl TypeChecker {
         errors_before:u64
         facts_before:u64
     -> bool {
+        if self.scalar_inputs.is_empty ! then
+            self.scalar_inputs.clone = operation.ensure_ownership.scalar_inputs
+            std::List[common::ScalarInput]::new = self.scalar_inputs
+        fi
         errors_before self.diagnostics.error_count == = succeeded
         operation.value common::OpValue::IfElse is
         operation.value common::OpValue::IfElif is || = restores_branch
@@ -13236,6 +13434,14 @@ fn analyze_ops
     std::List[common::Op]::new = pending
     function_opt ops pending source checker.check_source_sequence
 
+    function_opt checker.record_scalar_returns
+    if checker.scalar_inputs.is_empty ! then
+        checker.current_location.clone common::OpValue::OwnerCleanup common::Op::new = inputs
+        inputs checker.assign_op_id
+        checker.scalar_inputs.clone = inputs.ensure_ownership.scalar_inputs
+        std::List[common::ScalarInput]::new = checker.scalar_inputs
+        inputs ops.push_operation
+    fi
     if function_opt std::Option::Some(checked_function) is then
         checker.path_continues ! checker.has_return_types ! && = checked_function.is_non_returning
         checked_function.stack_effect checker.materialize_return_lambdas

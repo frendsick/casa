@@ -423,6 +423,28 @@ impl FunctionPlanner {
         0
     }
 
+    fn binding_borrows_scalar self:mut$FunctionPlanner name:$str declared:$common::Type -> bool {
+        if self.state.store declared common::type_has_scalar_storage ! then
+            false return
+        fi
+        if self.function std::Option::Some(function) is then
+            for variable in function.variables.iter do
+                if variable.name.as_str name == then
+                    variable.typ.is_borrow return
+                fi
+            done
+        elif
+            name self
+                .state
+                .store
+                .variables
+                .get_str std::Option::Some(variable) is
+        then
+            variable.typ.is_borrow return
+        fi
+        false
+    }
+
     fn find_local_inline_aggregate_type
         self:mut$FunctionPlanner
         variable_name:$str
@@ -1249,12 +1271,14 @@ impl FunctionPlanner {
                     InstValue::Add bytecode.push
                 fi
                 substitutions member.typ.substitute_t = member_type
-                if subject_type.is_borrow then
-                    bytecode plan member_type compiler.emit_field_projection
-                else
-                    bytecode plan member_type compiler.emit_field_load
-                fi
                 var_name.as_str facts.resolve_storage_name = storage_name
+                if member_type storage_name.as_str compiler.binding_borrows_scalar ! then
+                    if subject_type.is_borrow then
+                        bytecode plan member_type compiler.emit_field_projection
+                    else
+                        bytecode plan member_type compiler.emit_field_load
+                    fi
+                fi
                 bytecode storage_name.as_str compiler.emit_variable_set
             fi
             1 += index
@@ -1406,9 +1430,11 @@ impl FunctionPlanner {
             plan.offset i64::try_from.unwrap InstValue::Push bytecode.push
             InstValue::Add bytecode.push
             substitutions index payload_types.get.substitute_t = payload_type
-            bytecode plan payload_type compiler.emit_field_load
             index variant common::EnumVariant::bindings.get = var_name
             var_name.as_str facts.resolve_storage_name = storage_name
+            if payload_type storage_name.as_str compiler.binding_borrows_scalar ! then
+                bytecode plan payload_type compiler.emit_field_load
+            fi
             bytecode storage_name.as_str compiler.emit_variable_set
             1 += index
         done
@@ -2156,22 +2182,21 @@ impl FunctionPlanner {
     }
 
     fn emit_typed_borrow
-        compiler:mut$FunctionPlanner
+        self:mut$FunctionPlanner
         target:$common::Type
         bytecode:mut$std::List[InstValue]
     {
-        # A cstr borrow is the raw character address itself, not a pointer loaded from it.
-        if target common::make_cstr_type.eq then
+        if target common::make_cstr_type.eq self.state.store target common::type_has_scalar_storage || then
             return
         fi
         if
-            compiler.state.store target common::type_value_representation std::Option::Some(representation) is
+            self.state.store target common::type_value_representation std::Option::Some(representation) is
         then
             if common::VALUE_REPR_INDIRECT representation != then
-                bytecode target compiler.emit_typed_load
+                bytecode target self.emit_typed_load
             fi
         else
-            f"Cannot determine representation of `{target.format}`" compiler.record_failure_string
+            f"Cannot determine representation of `{target.format}`" self.record_failure_string
         fi
     }
 
@@ -2186,7 +2211,10 @@ impl FunctionPlanner {
         if
             compiler.state.store target common::type_value_representation std::Option::Some(representation) is
         then
-            if common::VALUE_REPR_INDIRECT representation == then
+            if
+                common::VALUE_REPR_INDIRECT representation ==
+                compiler.state.store target common::type_has_scalar_storage ||
+            then
                 bytecode target compiler.emit_typed_load
             fi
         else
@@ -2669,6 +2697,7 @@ impl FunctionPlanner {
                 fi
             fi
         fi
+        bytecode typ self.emit_integer_normalization
     }
 
     fn compile_member_address
@@ -2734,6 +2763,44 @@ impl FunctionPlanner {
 }
 
 impl FunctionPlanner {
+    fn compile_scalar_input
+        self:mut$FunctionPlanner
+        input:$common::ScalarInput
+        bytecode:mut$std::List[InstValue]
+    {
+        if self.state.store input.typ common::type_has_scalar_storage ! then
+            return
+        fi
+        std::List[u64]::new = spilled
+        0 = depth: u64
+        while depth input.depth < do
+            self.allocate_local = slot
+            slot InstValue::LocalSet bytecode.push
+            slot spilled.push
+            1 += depth
+        done
+        input.kind match
+            common::ScalarInputKind::BorrowValue => {
+                self.allocate_local = slot
+                slot InstValue::LocalSet bytecode.push
+                slot InstValue::LocalAddress bytecode.push
+            }
+            common::ScalarInputKind::BorrowBinding(binding) => {
+                InstValue::Drop bytecode.push
+                if binding.name self.capture_slots.get_copy std::Option::Some(slot) is then
+                    slot InstValue::CaptureAddress bytecode.push
+                else
+                    binding.storage_name.as_str self.resolve_local = slot
+                    slot InstValue::LocalAddress bytecode.push
+                fi
+            }
+            common::ScalarInputKind::Read => bytecode input.typ self.emit_typed_load
+        end
+        while spilled.is_empty ! do
+            spilled.pop InstValue::LocalGet bytecode.push
+        done
+    }
+
     fn compile_facts
         self:mut$FunctionPlanner
         facts:$semantic_body::OperationFacts
@@ -2742,6 +2809,9 @@ impl FunctionPlanner {
         if facts.effects std::Option::Some(effects) is then
             for event in effects.cleanups.iter do
                 bytecode event self.compile_owner_cleanup
+            done
+            for input in effects.scalar_inputs.iter do
+                bytecode input self.compile_scalar_input
             done
         fi
     }
@@ -3474,6 +3544,7 @@ enum InstValue {
     CaptureFlagLoad(u64)
     CaptureFlagMark(u64)
     CaptureLoad(u64)
+    CaptureAddress(u64)
     CaptureSet(u64)
     ClosureDrop
     ClosureRecord(u64)
@@ -5584,6 +5655,12 @@ impl Emitter {
                 f"movq {offset}(%rax), %rax" self.indent_string
                 "pushq %rax" self.indent
             }
+            InstValue::CaptureAddress(capture_index) => {
+                capture_index 2 * 2 + common::WORD_SIZE * = offset
+                "movq current_env(%rip), %rax" self.indent
+                f"leaq {offset}(%rax), %rax" self.indent_string
+                "pushq %rax" self.indent
+            }
             InstValue::CaptureSet(capture_index) => {
                 capture_index 2 * 2 + common::WORD_SIZE * = offset
                 "popq %rax" self.indent
@@ -5919,6 +5996,7 @@ impl Emitter {
                 InstValue::LocalsInit(count) => local_count count == = valid
                 InstValue::LocalsUninit(count) => local_count count == = valid
                 InstValue::CaptureLoad(slot) => plan.capture_count slot > = valid
+                InstValue::CaptureAddress(slot) => plan.capture_count slot > = valid
                 InstValue::CaptureSet(slot) => plan.capture_count slot > = valid
                 InstValue::CaptureFlagLoad(slot) => plan.capture_count slot > = valid
                 InstValue::CaptureFlagMark(slot) => plan.capture_count slot > = valid

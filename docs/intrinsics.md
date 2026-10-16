@@ -146,6 +146,17 @@ foreign pointer are undefined behavior.
 
 ### Forming a borrow from a raw address
 
+Scalar borrows retain the storage address. `ptr::from_ref` reverses
+`ptr::as_ref[T]` or `ptr::as_mut[T]` without reading the stored value. Use `copy`
+to read a scalar through a borrow.
+
+```casa
+42 = value: i32
+value ptr::from_ref = address
+# SAFETY: value remains live and the shared borrow does not mutate it.
+unsafe { address ptr::as_ref[i32] copy } print
+```
+
 `ptr::as_ref[T]` and `ptr::as_mut[T]` form a typed borrow inside [unsafe](functions-and-lambdas.md#unsafe-boundaries). A raw
 address carries no lifetime, so the result is anchored conservatively to every
 compatible borrowed input of the enclosing function. A `$T` accepts any
