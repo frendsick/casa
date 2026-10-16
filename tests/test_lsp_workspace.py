@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise workspace requests through the LSP transport and real disk files."""
+"""Exercise LSP transport, malformed messages, and workspace requests on real disk files."""
 import json
 from pathlib import Path
 import subprocess
@@ -55,6 +55,39 @@ class Server:
     def close(self):
         self.process.stdin.close()
         assert self.process.wait(timeout=10) == 0
+
+
+def check_malformed_messages(binary):
+    with tempfile.TemporaryDirectory(prefix="casa-malformed-") as temporary:
+        document = Path(temporary) / "document.casa"
+        uri = {"uri": document.as_uri()}
+        server = Server(binary, Path(temporary))
+        try:
+            server.process.stdin.write(b"Content-Length: 5\r\n\r\n{oops")
+            server.send("textDocument/didOpen", {"textDocument": uri})
+            server.send("textDocument/didChange", {"textDocument": uri, "contentChanges": []})
+            server.send("textDocument/didSave", {})
+            server.send("textDocument/didClose", None)
+            for method, params in (
+                ("definition", {"position": {"line": 0, "character": 0}}),
+                ("hover", {"textDocument": uri}),
+                ("completion", {"textDocument": uri, "position": {"line": "0", "character": 0}}),
+                ("references", None),
+                ("rename", {"textDocument": uri, "position": {"line": 0, "character": 0}}),
+                ("semanticTokens/full", [uri]),
+            ):
+                response = server.request("textDocument/" + method, params)
+                assert response.get("error", {}).get("code") == -32602, (method, response)
+            assert any(item.get("id", 0) is None and item["error"]["code"] == -32700
+                       for item in server.notifications), server.notifications
+            server.open(document, "fn greet { }\ngreet\n")
+            assert server.query("definition", document, 1, 0)["result"] is not None
+            for method in ("definition", "hover"):
+                assert server.query(method, document, 1, -1)["result"] is None, method
+            assert server.query("completion", document, -2, 0)["result"]["items"] == []
+            assert server.request("shutdown", None)["result"] is None
+        finally:
+            server.close()
 
 
 def main(binary):
@@ -214,7 +247,8 @@ def main(binary):
         finally:
             writer.join()
             server.close()
-    print("Workspace LSP tests passed")
+    check_malformed_messages(binary)
+    print("LSP transport and workspace tests passed")
 
 
 if __name__ == "__main__":
