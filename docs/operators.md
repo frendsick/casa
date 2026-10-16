@@ -206,6 +206,9 @@ Both operands of `&&` and `||` are evaluated before the operator runs.
 "Helsinki" = person.address.city
 ```
 
+Integer `+=` and `-=` check for overflow, including when the binding is captured
+by a closure. Overflow terminates the program with `error: integer arithmetic failed`.
+
 A field assignment must start from a named binding. See
 [Functions and Lambdas](functions-and-lambdas.md#bindings) for scope and
 [Structs and Methods](structs-and-methods.md) for fields.
