@@ -632,7 +632,11 @@ import "std"
 
 42.to_str = answer
 f"answer: {answer}" std::println_string
+-9223372036854775808.to_str std::println_string
 ```
+
+`i64.to_str` and `u64.to_str` use the runtime integer formatter used by
+interpolation. They produce decimal text across the full range of each type.
 
 See the [built-in trait catalog](traits.md#built-in-traits) for displayable
 types and [Types and Literals](types-and-literals.md#string-interpolation) for
