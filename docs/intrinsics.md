@@ -168,8 +168,11 @@ and [ADR-0113](adr/0113-escaping-raw-mutable-borrows-require-exclusive-input-ori
 
 `unsafe fn memcpy destination:ptr source:ptr count:u64` is a `std` function,
 not an intrinsic. It becomes available after `import "std"` and copies raw
-bytes. Its call must also be inside an `unsafe` block. Prefer typed collections
-and text operations unless raw memory is required.
+bytes. The caller must provide `count` initialized readable source bytes and
+writable destination bytes in non-overlapping regions. Addresses may be
+unaligned. A zero count accesses no memory and permits null pointers. Its call
+must also be inside an `unsafe` block. Prefer typed collections and text
+operations unless raw memory is required.
 
 ## Advanced Linux system calls
 
