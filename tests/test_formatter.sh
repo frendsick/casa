@@ -254,6 +254,17 @@ if matches_filter "compiler_categories" "$@"; then
     fi
 fi
 
+if matches_filter "compiler_batches" "$@"; then
+    matched=true
+    if "$ROOT_DIR/tests/test_compiler_runner.sh"; then
+        printf "${GREEN}[OK]${RESET} Passed: compiler_batches\n"
+        pass=$((pass + 1))
+    else
+        printf "${RED}[FAIL]${RESET} Failed: compiler_batches\n"
+        fail=$((fail + 1))
+    fi
+fi
+
 if [ "$has_filter" = false ]; then
 
 # Idempotency tests (full suite only)

@@ -9,6 +9,7 @@ LIB_DIR="$ROOT_DIR/lib"
 TEST_TMP=$(mktemp -d "${TMPDIR:-/tmp}/casa_compiler_tests.XXXXXX")
 trap 'rm -rf "$TEST_TMP"' EXIT
 cd "$ROOT_DIR"
+TESTS_DIR=$(cd "$TESTS_DIR" && pwd)
 
 select_tool "${CASA_COMPILER:-}" "$ROOT_DIR/casac" "${1:-}"
 COMPILER=$TEST_TOOL
@@ -91,7 +92,11 @@ pass=0
 fail=0
 matched=false
 
+: > "$TEST_TMP/selected_tests"
+: > "$TEST_TMP/batch_tests"
+batch_count=0
 for f in "$TESTS_DIR"/test_*.casa; do
+    [ -f "$f" ] || continue
     base=$(basename "$f" .casa)
 
     category=$(test_category "test/$base")
@@ -103,12 +108,54 @@ for f in "$TESTS_DIR"/test_*.casa; do
         continue
     fi
     matched=true
+    printf '%s\n' "$f" >> "$TEST_TMP/selected_tests"
+    if grep -q '^pub fn run_tests {' "$f"; then
+        printf '%s\n' "$f" >> "$TEST_TMP/batch_tests"
+        batch_count=$((batch_count+1))
+    fi
+done
+
+# Imports share compiler dependencies, but each test still runs in a fresh process.
+# Tests without an entry function retain their standalone root-body coverage.
+batch_binary="$TEST_TMP/unit_tests"
+batch_ready=false
+if [ "$batch_count" -gt 1 ]; then
+    batch_source="$TEST_TMP/unit_tests.casa"
+    {
+        printf 'import "std" as std\n'
+        while IFS= read -r f; do
+            base=$(basename "$f" .casa)
+            printf 'import "%s" as %s\n' "$f" "$base"
+        done < "$TEST_TMP/batch_tests"
+        printf '\nfn run selected:$str {\n'
+        while IFS= read -r f; do
+            base=$(basename "$f" .casa)
+            printf '    if selected "%s" == then %s::run_tests return fi\n' "$base" "$base"
+        done < "$TEST_TMP/batch_tests"
+        printf '    "Unknown unit test" panic\n}\n'
+        printf '1 std::get_arg.to_str.unwrap = selected\nselected.as_str run\n'
+    } > "$batch_source"
+    if "$COMPILER" -L "$LIB_DIR" "$batch_source" -o "$batch_binary" \
+        2>"$TEST_TMP/batch_compile_err"
+    then
+        batch_ready=true
+    else
+        # Individual builds attribute compilation failures and still run valid tests.
+        printf 'Unit-test batch compile failed. Retrying individual builds.\n'
+        cat "$TEST_TMP/batch_compile_err"
+    fi
+fi
+
+while IFS= read -r f; do
+    base=$(basename "$f" .casa)
 
     binary="$TEST_TMP/$base"
 
     printf "Running: %s ... " "$base"
 
-    if ! $COMPILER -L "$LIB_DIR" "$f" -o "$binary" 2>"$TEST_TMP/compile_err"; then
+    if [ "$batch_ready" = true ] && grep -Fxq -e "$f" "$TEST_TMP/batch_tests"; then
+        binary="$batch_binary"
+    elif ! $COMPILER -L "$LIB_DIR" "$f" -o "$binary" 2>"$TEST_TMP/compile_err"; then
         printf "${RED}COMPILE FAIL${RESET}\n"
         cat "$TEST_TMP/compile_err"
         fail=$((fail+1))
@@ -117,18 +164,22 @@ for f in "$TESTS_DIR"/test_*.casa; do
     fi
 
     # Keep tests headless even when a compiled test reads stdin.
-    output=$("$binary" 2>&1 < /dev/null) || {
+    if output=$(if [ "$binary" = "$batch_binary" ]; then
+        "$binary" "$base"
+    else
+        "$binary"
+    fi 2>&1 < /dev/null); then
+        printf "${GREEN}OK${RESET} %s\n" "$(echo "$output" | tail -1)"
+        pass=$((pass+1))
+    else
         printf "${RED}RUNTIME FAIL${RESET}\n"
         echo "$output"
         fail=$((fail+1))
+    fi
+    if [ "$binary" != "$batch_binary" ]; then
         rm -f "$binary"
-        continue
-    }
-
-    printf "${GREEN}OK${RESET} %s\n" "$(echo "$output" | tail -1)"
-    pass=$((pass+1))
-    rm -f "$binary"
-done
+    fi
+done < "$TEST_TMP/selected_tests"
 
 # Append invariant checks inside the backend module so its machine types stay private.
 if [ "$TEST_CATEGORY" = all ] || [ "$TEST_CATEGORY" = compiler_integration ]; then
