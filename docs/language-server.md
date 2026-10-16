@@ -132,6 +132,17 @@ applying old ranges while a queued edit waits. There is no background workspace
 scan or debounce delay. File changes after the final disk check remain subject
 to the client's edit application behavior.
 
+Malformed messages do not end the session. A request with missing or mistyped
+parameters receives a JSON-RPC `-32602` error. A message body that is not valid
+JSON receives a `-32700` error with a null id. Malformed notifications are
+logged to standard error and skipped. Negative positions return no result.
+A missing or negative `Content-Length` and the end of input end the session
+because the server cannot find the next message.
+
+An internal compiler failure during analysis appears as a `window/showMessage`
+error. The server discards that document's previous analysis, so its queries
+return no result until it analyzes again.
+
 ## Limitations
 
 - Diagnostics from imported files are not published. Open the imported file to

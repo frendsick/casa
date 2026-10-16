@@ -162,6 +162,11 @@ const POLL_EVENTS_OFFSET 4
 const POLL_RETURNED_EVENTS_OFFSET 6
 const POLL_READABLE 1
 const UTF16_SINGLE_UNIT_MAX 65535
+const PARSE_ERROR -32700
+const INVALID_PARAMS -32602
+const REQUEST_FAILED -32803
+const MISSING_URI_MESSAGE "Expected string params.textDocument.uri"
+const MISSING_POSITION_MESSAGE "Expected integer params.position.line and params.position.character"
 pub const DIAGNOSTIC_ERROR 1
 pub const DIAGNOSTIC_WARNING 2
 pub const COMPLETION_METHOD 2
@@ -185,8 +190,11 @@ pub const TOKEN_STRUCT 8
 pub const TOKEN_MACRO 9
 
 # Coordinate conversion utilities
-pub fn convert_lsp_position line:i64 column:i64 -> common::SourcePosition {
-    column 1 + u64::try_from.unwrap line 1 + u64::try_from.unwrap common::SourcePosition::new
+# Negative protocol positions have no source position.
+pub fn convert_lsp_position line:i64 column:i64 -> std::Option[common::SourcePosition] {
+    column u64::try_from ? 1 + = source_column
+    line u64::try_from ? 1 + = source_line
+    source_column source_line common::SourcePosition::new std::Option::Some
 }
 
 pub fn convert_location_to_lsp_range
@@ -463,17 +471,15 @@ impl TextEdit {
 }
 
 # JSON-RPC protocol layer
-pub fn exit_with_lsp_error message:str {
-    f"[LSP] {message}\n".as_str std::eprint
-    1 std::process::exit
-}
-
-pub fn read_message reader:mut$io::StdinReader -> std::Option[json::JsonValue] {
+# None means input ended or framing failed. The stream cannot resynchronize, so the session ends.
+pub fn read_message
+    reader:mut$io::StdinReader
+-> std::Option[std::Result[json::JsonValue parser::ParseError]] {
     std::Option[i64]::None = content_length
     # Read headers until empty line
     while true do
         reader io::stdin_read_line.to_str match
-            std::Result::Error(_) => std::Option[json::JsonValue]::None return
+            std::Result::Error(_) => std::Option[std::Result[json::JsonValue parser::ParseError]]::None return
             std::Result::Ok(value) => value
         end
         = header_line
@@ -489,22 +495,16 @@ pub fn read_message reader:mut$io::StdinReader -> std::Option[json::JsonValue] {
             header_line.as_str 16 header_line.length 16 - str::substring.as_str parser::str_to_int std::Option::Some = content_length
         fi
     done
-    if content_length.is_none then
-        std::Option[json::JsonValue]::None
-        return
-    fi
-    content_length.unwrap = length
-    length u64::try_from.unwrap reader io::stdin_read_exact.to_str match
-        std::Result::Error(_) => std::Option[json::JsonValue]::None return
+    content_length ? u64::try_from ? = length
+    length reader io::stdin_read_exact.to_str match
+        std::Result::Error(_) => {
+            0 "invalid UTF-8" parser::ParseError std::Result[json::JsonValue parser::ParseError]::Error std::Option::Some return
+        }
         std::Result::Ok(value) => value
     end
     = body
     body.as_str parser::Cursor::new = cursor
-    cursor json::json_parse = parse_result
-    parse_result match
-        std::Result::Ok(parsed) => parsed std::Option::Some
-        std::Result::Error(_) => std::Option[json::JsonValue]::None
-    end
+    cursor json::json_parse std::Option::Some
 }
 
 pub fn send_json_rpc body:std::String {
@@ -534,7 +534,7 @@ pub fn compile_document_with_paths
     source:$str
     open_docs:$std::Map[std::String products::AnalysisSnapshot]
     library_paths:$std::List[std::String]
--> CompileResult {
+-> std::Result[CompileResult std::List[LspDiagnostic]] {
     source.to_str file_path.to_str products::SourceUnit
     "" lexer::absolute_normalize_path swap products::CompilationInput::new = input
     library_paths.clone = input.library_paths
@@ -547,37 +547,20 @@ pub fn compile_document_with_paths
     done
     input products::analyze match
         std::Result::Ok(snapshot) => snapshot
-        std::Result::Error(failure) => {
-            for
-                diagnostic in failure
-                    .get_report
-                    .get_diagnostics
-                    .entries
-                    .iter
-            do
-                if diagnostic error::Diagnostic::Error(source_error) is then
-                    source_error failure
-                        .get_report
-                        .get_sources
-                        .format_error std::eprintln_string
-                fi
-            done
-            failure.get_message = message
-            f"internal compiler error: {message}".as_str exit_with_lsp_error
-        }
+        std::Result::Error(failure) => file_path failure diagnostics_from_failure std::Result::Error return
     end = state
     file_path state.get_report diagnostics_from = diagnostics
 
     diagnostics
     state
-    CompileResult
+    CompileResult std::Result::Ok
 }
 
 pub fn compile_document
     file_path:$str
     source:$str
     open_docs:$std::Map[std::String products::AnalysisSnapshot]
--> CompileResult {
+-> std::Result[CompileResult std::List[LspDiagnostic]] {
     std::List[std::String]::new = library_paths
     library_paths open_docs source file_path compile_document_with_paths
 }
@@ -588,8 +571,7 @@ pub fn ingest_document_into
     open_docs:std::Map[std::String products::AnalysisSnapshot]
 -> std::List[LspDiagnostic] std::Map[std::String products::AnalysisSnapshot] {
     uri uri_to_path = path
-    open_docs source path.as_str compile_document.into_parts = diagnostics = document
-    document uri.to_str open_docs.set
+    open_docs source path.as_str compile_document uri open_docs store_compile_result = diagnostics
     diagnostics
     open_docs
 }
@@ -601,10 +583,27 @@ pub fn ingest_document uri:$str source:$str state:mut$LspState -> std::List[LspD
         .overrides
         .set
     1 += state.workspace.generation
-    state.library_paths state.open_documents source path.as_str compile_document_with_paths.into_parts
-    = diagnostics = document
-    document uri.to_str state.open_documents.set
-    diagnostics
+    state.library_paths state.open_documents source path.as_str compile_document_with_paths
+    uri state.open_documents store_compile_result
+}
+
+# A failed analysis removes the old snapshot so queries never apply its ranges to new text.
+fn store_compile_result
+    open_docs:mut$std::Map[std::String products::AnalysisSnapshot]
+    uri:$str
+    result:std::Result[CompileResult std::List[LspDiagnostic]]
+-> std::List[LspDiagnostic] {
+    result match
+        std::Result::Ok(compiled) => {
+            compiled.into_parts = diagnostics = document
+            document uri.to_str open_docs.set
+            diagnostics
+        }
+        std::Result::Error(diagnostics) => {
+            uri open_docs.remove_str drop
+            diagnostics
+        }
+    end
 }
 
 impl LspState {
@@ -620,9 +619,8 @@ impl LspState {
         else
             return
         fi = source
-        self.library_paths self.open_documents source.as_str path.as_str compile_document_with_paths.into_parts
-        = diagnostics = document
-        document uri.to_str self.open_documents.set
+        self.library_paths self.open_documents source.as_str path.as_str compile_document_with_paths
+        uri self.open_documents store_compile_result = diagnostics
         diagnostics uri publish_diagnostics
     }
 }
@@ -653,6 +651,21 @@ pub fn diagnostics_from report:$products::Report path:$str -> std::List[LspDiagn
         fi = related_information
         related_information presentation.code severity message range LspDiagnostic diagnostics.push
     done
+    diagnostics
+}
+
+# The failure becomes a request-level diagnostic beside any accumulated source diagnostics.
+pub fn diagnostics_from_failure
+    failure:$products::CompilerFailure
+    path:$str
+-> std::List[LspDiagnostic] {
+    path failure.get_report diagnostics_from = diagnostics
+    std::List[LspDiagnosticRelatedInformation]::new
+    "INTERNAL_COMPILER_ERROR"
+    DIAGNOSTIC_ERROR
+    failure.get_message.clone
+    std::Option[LspRange]::None
+    LspDiagnostic diagnostics.push
     diagnostics
 }
 
@@ -723,69 +736,49 @@ pub fn convert_document_location_to_lsp
 }
 
 # Diagnostics handler
-pub fn extract_uri message:$json::JsonValue -> std::String {
-    "params" message json::json_get_object = params_opt
-    if params_opt.is_none then
-        "Expected option value while unwrapping params message json_get_object" exit_with_lsp_error
+fn extract_text_document message:$json::JsonValue -> std::Option[$json::JsonValue] {
+    if "params" message json::json_get_object std::Option::Some(params) is then
+        "textDocument" params json::json_get_object return
     fi
-    params_opt.unwrap = params
-    "textDocument" params json::json_get_object = text_document_opt
-    if text_document_opt.is_none then
-        "Expected option value while unwrapping textDocument params json_get_object" exit_with_lsp_error
-    fi
-    text_document_opt.unwrap = text_document
-    if "uri" text_document json::json_get_str std::Option::Some(uri) is then
-        uri.clone return
-    fi
-    "Expected option value while unwrapping uri text_document json_get_str" exit_with_lsp_error
-    std::String::new
+    std::Option[$json::JsonValue]::None
 }
 
-pub fn extract_position message:$json::JsonValue -> LspRange {
-    "params" message json::json_get_object = params_opt
-    if params_opt.is_none then
-        "Expected option value while unwrapping params message json_get_object" exit_with_lsp_error
+pub fn extract_uri message:$json::JsonValue -> std::Option[std::String] {
+    if message extract_text_document std::Option::Some(text_document) is then
+        "uri" text_document json::json_get_str return
     fi
-    params_opt.unwrap = params
-    "position" params json::json_get_object = position_opt
-    if position_opt.is_none then
-        "Expected option value while unwrapping position params json_get_object" exit_with_lsp_error
+    std::Option[std::String]::None
+}
+
+pub fn extract_position message:$json::JsonValue -> std::Option[LspRange] {
+    if "params" message json::json_get_object std::Option::Some(params) is then
+        if "position" params json::json_get_object std::Option::Some(position) is then
+            "line" position json::json_get_int ? = line
+            "character" position json::json_get_int ? = character
+            0 0 character line LspRange std::Option::Some return
+        fi
     fi
-    position_opt.unwrap = position
-    "line" position json::json_get_int = line_opt
-    if line_opt.is_none then
-        "Expected option value while unwrapping line position json_get_int" exit_with_lsp_error
-    fi
-    line_opt.unwrap = line
-    "character" position json::json_get_int = character_opt
-    if character_opt.is_none then
-        "Expected option value while unwrapping character position json_get_int" exit_with_lsp_error
-    fi
-    character_opt.unwrap = character
-    0 0 character line LspRange
+    std::Option[LspRange]::None
+}
+
+# Notifications have no response channel, so malformed ones are logged and skipped.
+fn ignore_malformed_notification method:str {
+    f"[LSP] Ignored malformed {method} notification\n".as_str std::eprint
 }
 
 pub fn handle_did_open message:$json::JsonValue state:mut$LspState {
-    "params" message json::json_get_object = params_opt
-    if params_opt.is_none then
-        "Expected option value while unwrapping params message json_get_object" exit_with_lsp_error
-    fi
-    params_opt.unwrap = params
-    "textDocument" params json::json_get_object = text_document_opt
-    if text_document_opt.is_none then
-        "Expected option value while unwrapping textDocument params json_get_object" exit_with_lsp_error
-    fi
-    text_document_opt.unwrap = text_document
-    "uri" text_document json::json_get_str = uri_opt
-    if uri_opt.is_none then
-        "Expected option value while unwrapping uri text_document json_get_str" exit_with_lsp_error
-    fi
-    uri_opt.unwrap = uri
-    "text" text_document json::json_get_str = text_opt
-    if text_opt.is_none then
-        "Expected option value while unwrapping text text_document json_get_str" exit_with_lsp_error
-    fi
-    text_opt.unwrap = text
+    message extract_text_document match
+        std::Option::Some(text_document) => text_document
+        _ => "textDocument/didOpen" ignore_malformed_notification return
+    end = text_document
+    "uri" text_document json::json_get_str match
+        std::Option::Some(uri) => uri
+        _ => "textDocument/didOpen" ignore_malformed_notification return
+    end = uri
+    "text" text_document json::json_get_str match
+        std::Option::Some(text) => text
+        _ => "textDocument/didOpen" ignore_malformed_notification return
+    end = text
     if "version" text_document json::json_get_int std::Option::Some(version) is then
         version copy uri.as_str uri_to_path state.versions.set
     else
@@ -796,32 +789,26 @@ pub fn handle_did_open message:$json::JsonValue state:mut$LspState {
 }
 
 pub fn handle_did_change message:$json::JsonValue state:mut$LspState {
-    "params" message json::json_get_object = params_opt
-    if params_opt.is_none then
-        "Expected option value while unwrapping params message json_get_object" exit_with_lsp_error
+    message extract_text_document match
+        std::Option::Some(text_document) => text_document
+        _ => "textDocument/didChange" ignore_malformed_notification return
+    end = text_document
+    "uri" text_document json::json_get_str match
+        std::Option::Some(uri) => uri
+        _ => "textDocument/didChange" ignore_malformed_notification return
+    end = uri
+    std::Option[std::String]::None = text_opt
+    if "params" message json::json_get_object std::Option::Some(params) is then
+        if "contentChanges" params json::json_get_array std::Option::Some(changes) is then
+            if changes.is_empty ! then
+                "text" 0 changes.get json::json_get_str = text_opt
+            fi
+        fi
     fi
-    params_opt.unwrap = params
-    "textDocument" params json::json_get_object = text_document_opt
-    if text_document_opt.is_none then
-        "Expected option value while unwrapping textDocument params json_get_object" exit_with_lsp_error
-    fi
-    text_document_opt.unwrap = text_document
-    "uri" text_document json::json_get_str = uri_opt
-    if uri_opt.is_none then
-        "Expected option value while unwrapping uri text_document json_get_str" exit_with_lsp_error
-    fi
-    uri_opt.unwrap = uri
-    "contentChanges" params json::json_get_array = changes_opt
-    if changes_opt.is_none then
-        "Expected option value while unwrapping contentChanges params json_get_array" exit_with_lsp_error
-    fi
-    changes_opt.unwrap = changes
-    0 changes.get = change
-    "text" change json::json_get_str = text_opt
-    if text_opt.is_none then
-        "Expected option value while unwrapping text change json_get_str" exit_with_lsp_error
-    fi
-    text_opt.unwrap = text
+    text_opt match
+        std::Option::Some(text) => text
+        _ => "textDocument/didChange" ignore_malformed_notification return
+    end = text
     if "version" text_document json::json_get_int std::Option::Some(version) is then
         uri.as_str uri_to_path = path
         if path state.versions.get std::Option::Some(previous) is then
@@ -838,14 +825,20 @@ pub fn handle_did_change message:$json::JsonValue state:mut$LspState {
 }
 
 pub fn handle_did_save message:$json::JsonValue state:mut$LspState {
+    message extract_uri match
+        std::Option::Some(uri) => uri
+        _ => "textDocument/didSave" ignore_malformed_notification return
+    end = uri
     # Open buffers remain authoritative when a save notification arrives.
-    message extract_uri = uri
     uri.as_str state.refresh_document
     1 += state.workspace.generation
 }
 
 pub fn handle_did_close message:$json::JsonValue state:mut$LspState {
-    message extract_uri = uri
+    message extract_uri match
+        std::Option::Some(uri) => uri
+        _ => "textDocument/didClose" ignore_malformed_notification return
+    end = uri
     uri.as_str uri_to_path = path
     path.as_str state
         .workspace
@@ -862,7 +855,7 @@ pub fn compute_definition
     line:i64
     column:i64
 -> std::Option[LspLocation] {
-    column line convert_lsp_position = position
+    column line convert_lsp_position ? = position
     if position state.find_definition_at std::Option::Some(location) is then
         location state.get_sources convert_document_location_to_lsp std::Option::Some
     else
@@ -870,13 +863,15 @@ pub fn compute_definition
     fi
 }
 
-pub fn handle_definition message:$json::JsonValue state:$LspState {
-    message extract_uri = uri
-    "id" message json::json_get_value = request_id_opt
-    if request_id_opt.is_none then
-        "Expected option value while unwrapping id message json_get_value" exit_with_lsp_error
-    fi
-    request_id_opt.unwrap = request_id
+pub fn handle_definition message:$json::JsonValue request_id:$json::JsonValue state:$LspState {
+    message extract_uri match
+        std::Option::Some(uri) => uri
+        _ => MISSING_URI_MESSAGE INVALID_PARAMS request_id send_request_error return
+    end = uri
+    message extract_position match
+        std::Option::Some(position) => position
+        _ => MISSING_POSITION_MESSAGE INVALID_PARAMS request_id send_request_error return
+    end = position
 
     uri.as_str state.open_documents.get_str = document_opt
     if document_opt.is_none then
@@ -885,7 +880,6 @@ pub fn handle_definition message:$json::JsonValue state:$LspState {
     fi
     document_opt.unwrap = document
 
-    message extract_position = position
     position LspRange::start_col position LspRange::start_line document compute_definition = loc_opt
     if loc_opt std::Option::Some(loc) is then
         loc.to_json request_id send_response
@@ -908,7 +902,7 @@ pub fn compute_hover
     line:i64
     column:i64
 -> std::Option[HoverContent] {
-    column line convert_lsp_position = position
+    column line convert_lsp_position ? = position
     if position state.find_hover_at std::Option::Some(hover) is then
         hover state.get_sources convert_document_hover_to_lsp std::Option::Some
     else
@@ -916,13 +910,15 @@ pub fn compute_hover
     fi
 }
 
-pub fn handle_hover message:$json::JsonValue state:$LspState {
-    message extract_uri = uri
-    "id" message json::json_get_value = request_id_opt
-    if request_id_opt.is_none then
-        "Expected option value while unwrapping id message json_get_value" exit_with_lsp_error
-    fi
-    request_id_opt.unwrap = request_id
+pub fn handle_hover message:$json::JsonValue request_id:$json::JsonValue state:$LspState {
+    message extract_uri match
+        std::Option::Some(uri) => uri
+        _ => MISSING_URI_MESSAGE INVALID_PARAMS request_id send_request_error return
+    end = uri
+    message extract_position match
+        std::Option::Some(position) => position
+        _ => MISSING_POSITION_MESSAGE INVALID_PARAMS request_id send_request_error return
+    end = position
 
     uri.as_str state.open_documents.get_str = document_opt
     if document_opt.is_none then
@@ -931,7 +927,6 @@ pub fn handle_hover message:$json::JsonValue state:$LspState {
     fi
     document_opt.unwrap = document
 
-    message extract_position = position
     position LspRange::start_col position LspRange::start_line document compute_hover = hover_opt
     if hover_opt.is_none then
         json::JsonValue::JsonNull request_id send_response
@@ -999,7 +994,10 @@ pub fn compute_completion_with_coverage
     trigger:$str
 -> std::List[CompletionItem] bool {
     std::List[CompletionItem]::new = items
-    column line convert_lsp_position = position
+    column line convert_lsp_position match
+        std::Option::Some(position) => position
+        _ => items true return
+    end = position
     std::List[document::DocumentCompletion]::new = candidates
     false = incomplete
     trigger position state.find_completions_at match
@@ -1031,13 +1029,15 @@ pub fn compute_completion
     trigger column line state compute_completion_with_coverage drop
 }
 
-pub fn handle_completion message:$json::JsonValue state:$LspState {
-    message extract_uri = uri
-    "id" message json::json_get_value = request_id_opt
-    if request_id_opt.is_none then
-        "Expected option value while unwrapping id message json_get_value" exit_with_lsp_error
-    fi
-    request_id_opt.unwrap = request_id
+pub fn handle_completion message:$json::JsonValue request_id:$json::JsonValue state:$LspState {
+    message extract_uri match
+        std::Option::Some(uri) => uri
+        _ => MISSING_URI_MESSAGE INVALID_PARAMS request_id send_request_error return
+    end = uri
+    message extract_position match
+        std::Option::Some(position) => position
+        _ => MISSING_POSITION_MESSAGE INVALID_PARAMS request_id send_request_error return
+    end = position
 
     uri.as_str state.open_documents.get_str = document_opt
     if document_opt.is_none then
@@ -1050,21 +1050,15 @@ pub fn handle_completion message:$json::JsonValue state:$LspState {
     document_opt.unwrap = document
 
     # Check trigger character
-    "params" message json::json_get_object = params_opt
-    if params_opt.is_none then
-        "Expected option value while unwrapping params message json_get_object" exit_with_lsp_error
-    fi
-    params_opt.unwrap = params
-    "context" params json::json_get_object = context_opt
     std::String::new = trigger
-    if context_opt std::Option::Some(context) is then
-        "triggerCharacter" context json::json_get_str = trigger_opt
-        if trigger_opt.is_some then
-            trigger_opt.unwrap = trigger
+    if "params" message json::json_get_object std::Option::Some(params) is then
+        if "context" params json::json_get_object std::Option::Some(context) is then
+            if "triggerCharacter" context json::json_get_str std::Option::Some(character) is then
+                character = trigger
+            fi
         fi
     fi
 
-    message extract_position = position
     trigger.as_str position LspRange::start_col position LspRange::start_line document compute_completion_with_coverage = incomplete = items
 
     # Build response
@@ -1087,7 +1081,10 @@ pub fn compute_references_with_coverage
     column:i64
     include_declaration:bool
 -> std::Option[std::List[LspLocation]] bool {
-    column line convert_lsp_position = position
+    column line convert_lsp_position match
+        std::Option::Some(position) => position
+        _ => std::Option[std::List[LspLocation]]::None true return
+    end = position
     false = incomplete
     include_declaration position state.find_reference_answer_at match
         document::ReferenceAnswer::Complete(result) => result
@@ -1114,13 +1111,15 @@ pub fn compute_references
     include_declaration column line state compute_references_with_coverage drop
 }
 
-pub fn handle_references message:$json::JsonValue state:$LspState {
-    message extract_uri = uri
-    "id" message json::json_get_value = request_id_opt
-    if request_id_opt.is_none then
-        "Expected option value while unwrapping id message json_get_value" exit_with_lsp_error
-    fi
-    request_id_opt.unwrap = request_id
+pub fn handle_references message:$json::JsonValue request_id:$json::JsonValue state:$LspState {
+    message extract_uri match
+        std::Option::Some(uri) => uri
+        _ => MISSING_URI_MESSAGE INVALID_PARAMS request_id send_request_error return
+    end = uri
+    message extract_position match
+        std::Option::Some(position) => position
+        _ => MISSING_POSITION_MESSAGE INVALID_PARAMS request_id send_request_error return
+    end = position
 
     # includeDeclaration
     std::Option[$json::JsonValue]::None = context_opt
@@ -1135,7 +1134,6 @@ pub fn handle_references message:$json::JsonValue state:$LspState {
         fi
     fi
 
-    message extract_position = position
     uri.as_str uri_to_path = path
     position path.as_str state.workspace query_workspace_references = result_opt
     if result_opt.is_none then
@@ -1143,7 +1141,7 @@ pub fn handle_references message:$json::JsonValue state:$LspState {
     fi
     result_opt.unwrap = result
     if state.has_pending_input then
-        "References cancelled because newer client input is pending." request_id send_request_error return
+        "References cancelled because newer client input is pending." REQUEST_FAILED request_id send_request_error return
     fi
     result.complete ! = incomplete
     result make_reference_sources = sources
@@ -1169,50 +1167,48 @@ pub fn handle_references message:$json::JsonValue state:$LspState {
 }
 
 # Rename handler
-pub fn handle_rename message:$json::JsonValue state:$LspState {
-    message extract_uri = uri
-    "id" message json::json_get_value = request_id_opt
-    if request_id_opt.is_none then
-        "Expected option value while unwrapping id message json_get_value" exit_with_lsp_error
+pub fn handle_rename message:$json::JsonValue request_id:$json::JsonValue state:$LspState {
+    message extract_uri match
+        std::Option::Some(uri) => uri
+        _ => MISSING_URI_MESSAGE INVALID_PARAMS request_id send_request_error return
+    end = uri
+    message extract_position match
+        std::Option::Some(position) => position
+        _ => MISSING_POSITION_MESSAGE INVALID_PARAMS request_id send_request_error return
+    end = position
+    std::Option[std::String]::None = new_name_opt
+    if "params" message json::json_get_object std::Option::Some(params) is then
+        "newName" params json::json_get_str = new_name_opt
     fi
-    request_id_opt.unwrap = request_id
-
-    "params" message json::json_get_object = params_opt
-    if params_opt.is_none then
-        "Expected option value while unwrapping params message json_get_object" exit_with_lsp_error
-    fi
-    params_opt.unwrap = params
-    "newName" params json::json_get_str = new_name_opt
-    if new_name_opt.is_none then
-        "Expected option value while unwrapping newName params json_get_str" exit_with_lsp_error
-    fi
-    new_name_opt.unwrap = new_name
+    new_name_opt match
+        std::Option::Some(name) => name
+        _ => "Expected string params.newName" INVALID_PARAMS request_id send_request_error return
+    end = new_name
 
     if state.versioned_edits ! then
-        "Rename requires client support for versioned document changes." request_id send_request_error return
+        "Rename requires client support for versioned document changes." REQUEST_FAILED request_id send_request_error return
     fi
-    message extract_position = position
     uri.as_str uri_to_path = path
     position path.as_str state.workspace query_workspace_references = result_opt
     if result_opt.is_none then
-        "Rename identity is unavailable." request_id send_request_error return
+        "Rename identity is unavailable." REQUEST_FAILED request_id send_request_error return
     fi
     result_opt.unwrap = result
     if result state.has_document_versions ! then
-        "Rename requires the current version of every affected open document." request_id send_request_error return
+        "Rename requires the current version of every affected open document." REQUEST_FAILED request_id send_request_error return
     fi
     if new_name.as_str result state.workspace.validate_rename ! then
-        "Rename refused: stale or incomplete sources, invalid name, or changed bindings." request_id send_request_error return
+        "Rename refused: stale or incomplete sources, invalid name, or changed bindings." REQUEST_FAILED request_id send_request_error return
     fi
     if state.has_pending_input then
-        "Rename cancelled because newer client input is pending." request_id send_request_error return
+        "Rename cancelled because newer client input is pending." REQUEST_FAILED request_id send_request_error return
     fi
     result new_name.as_str state make_workspace_edit request_id send_response
 }
 
-pub fn send_request_error id:$json::JsonValue message:$str {
+pub fn send_request_error id:$json::JsonValue code:i64 message:$str {
     json::json_object
-    "code".to_str -32803 json::JsonValue::JsonInt json::json_set
+    "code".to_str code json::JsonValue::JsonInt json::json_set
     "message".to_str message.to_str json::JsonValue::JsonString json::json_set
     json::JsonValue::JsonObject = failure
     json::json_object
@@ -1322,13 +1318,11 @@ pub fn compute_semantic_tokens state:$products::AnalysisSnapshot -> std::List[Se
     tokens
 }
 
-pub fn handle_semantic_tokens message:$json::JsonValue state:$LspState {
-    message extract_uri = uri
-    "id" message json::json_get_value = request_id_opt
-    if request_id_opt.is_none then
-        "Expected option value while unwrapping id message json_get_value" exit_with_lsp_error
-    fi
-    request_id_opt.unwrap = request_id
+pub fn handle_semantic_tokens message:$json::JsonValue request_id:$json::JsonValue state:$LspState {
+    message extract_uri match
+        std::Option::Some(uri) => uri
+        _ => MISSING_URI_MESSAGE INVALID_PARAMS request_id send_request_error return
+    end = uri
 
     uri.as_str state.open_documents.get_str = document_opt
     if document_opt.is_none then
@@ -1443,13 +1437,7 @@ fn configure_edit_capability state:mut$LspState capabilities:$json::JsonValue {
     fi
 }
 
-pub fn handle_initialize message:$json::JsonValue state:mut$LspState {
-    "id" message json::json_get_value = request_id_opt
-    if request_id_opt.is_none then
-        "Expected option value while unwrapping id message json_get_value" exit_with_lsp_error
-    fi
-    request_id_opt.unwrap = request_id
-
+pub fn handle_initialize message:$json::JsonValue request_id:$json::JsonValue state:mut$LspState {
     message extract_library_paths = state.library_paths
     state.library_paths.clone = state.workspace.library_paths
     state message configure_workspace
@@ -1539,34 +1527,58 @@ fn update_workspace_folders state:mut$LspState event:$json::JsonValue {
     folders.to_list = state.workspace.folders
 }
 
-pub fn handle_shutdown message:$json::JsonValue {
-    if "id" message json::json_get_value std::Option::Some(request_id) is then
-        json::JsonValue::JsonNull request_id send_response
-    else
-        "Expected option value while unwrapping id message json_get_value" exit_with_lsp_error
-    fi
-}
-
 pub fn handle_exit message:$json::JsonValue { 0 std::process::exit }
 
+# JSON-RPC requests carry an id. Messages without one are notifications.
 pub fn dispatch_message message:$json::JsonValue state:mut$LspState {
     "method" message json::json_get_str = method_opt
     if method_opt.is_none then
         return
     fi
     method_opt.unwrap = method
+    if "id" message json::json_get_value std::Option::Some(request_id) is then
+        state request_id message method.as_str dispatch_request
+    else
+        state message method.as_str dispatch_notification
+    fi
+}
+
+fn dispatch_request
+    method:$str
+    message:$json::JsonValue
+    request_id:$json::JsonValue
+    state:mut$LspState
+{
     if
         "textDocument/definition" method == "textDocument/hover" method == ||
         "textDocument/completion" method == || "textDocument/semanticTokens/full" method == ||
     then
-        message extract_uri.as_str state.refresh_document
+        if message extract_uri std::Option::Some(uri) is then
+            uri.as_str state.refresh_document
+        fi
     fi
 
     if "initialize" method == then
-        state message handle_initialize
+        state request_id message handle_initialize
     elif "shutdown" method == then
-        message handle_shutdown
-    elif "exit" method == then
+        json::JsonValue::JsonNull request_id send_response
+    elif "textDocument/definition" method == then
+        state request_id message handle_definition
+    elif "textDocument/hover" method == then
+        state request_id message handle_hover
+    elif "textDocument/completion" method == then
+        state request_id message handle_completion
+    elif "textDocument/references" method == then
+        state request_id message handle_references
+    elif "textDocument/rename" method == then
+        state request_id message handle_rename
+    elif "textDocument/semanticTokens/full" method == then
+        state request_id message handle_semantic_tokens
+    fi
+}
+
+fn dispatch_notification method:$str message:$json::JsonValue state:mut$LspState {
+    if "exit" method == then
         message handle_exit
     elif "textDocument/didOpen" method == then
         state message handle_did_open
@@ -1580,31 +1592,21 @@ pub fn dispatch_message message:$json::JsonValue state:mut$LspState {
         1 += state.workspace.generation
     elif "textDocument/didSave" method == then
         state message handle_did_save
-    elif "textDocument/definition" method == then
-        state message handle_definition
-    elif "textDocument/hover" method == then
-        state message handle_hover
-    elif "textDocument/completion" method == then
-        state message handle_completion
-    elif "textDocument/references" method == then
-        state message handle_references
-    elif "textDocument/rename" method == then
-        state message handle_rename
-    elif "textDocument/semanticTokens/full" method == then
-        state message handle_semantic_tokens
     fi
 }
 
 pub fn main {
     LspState::new = state
+    json::JsonValue::JsonNull = unknown_id
     while true do
-        state.reader read_message = msg_opt
-        if msg_opt.is_none then
-            break
-        fi
-        if msg_opt std::Option::Some(message) is then
-            state message dispatch_message
-        fi
+        state.reader read_message match
+            std::Option::Some(parsed) => parsed
+            _ => break
+        end = parsed
+        parsed match
+            std::Result::Ok(message) => state message dispatch_message
+            std::Result::Error(_) => "Message body is not valid JSON" PARSE_ERROR unknown_id send_request_error
+        end
     done
 }
 main
