@@ -388,6 +388,10 @@ struct IndexBuilder {
     source:            std::String
     file_path:         std::String
     bindings:          binding::BindingStore
+    # Verified binding indexes by visibility file and name, in declaration order.
+    visible_bindings:  std::Map[std::String std::Map[std::String std::List[u64]]]
+    # Method candidates by receiver format. Completion triggers repeat few receivers.
+    receiver_methods:  std::Map[std::String std::List[CompletionCandidate]]
 }
 
 struct DocumentElement {
@@ -777,6 +781,7 @@ impl IndexBuilder {
             checked_store = store
             checked_bindings = bindings
         fi
+        std::Map[std::String std::List[CompletionCandidate]]::new bindings index_visible_bindings
         bindings file_path source sources diagnostics store std::List[ProjectionOperation]::new body_occurrences root_occurrences
         std::List[common::Location]::new IndexBuilder
     }
@@ -927,7 +932,7 @@ impl IndexBuilder {
     }
 
     pub fn find_completion_candidates
-        self:$IndexBuilder
+        self:mut$IndexBuilder
         position:$common::SourcePosition
         trigger:$str
     -> std::List[CompletionCandidate] {
@@ -1095,6 +1100,24 @@ impl IndexBuilder {
     }
 
     pub fn find_methods_for_type
+        self:mut$IndexBuilder
+        receiver_type:$common::Type
+        require_receiver:bool
+    -> std::List[CompletionCandidate] {
+        # Qualified lookups ignore receiver capability, so they use a separate key.
+        receiver_type.format = key
+        if require_receiver ! then
+            "::" key.append
+        fi
+        if key.as_str self.receiver_methods.get_str std::Option::Some(cached) is then
+            cached.clone return
+        fi
+        require_receiver receiver_type self.collect_methods_for_type = candidates
+        candidates.clone key self.receiver_methods.set
+        candidates
+    }
+
+    fn collect_methods_for_type
         self:$IndexBuilder
         receiver_type:$common::Type
         require_receiver:bool
@@ -1135,7 +1158,7 @@ impl IndexBuilder {
     }
 
     pub fn find_qualified_completion_candidates
-        self:$IndexBuilder
+        self:mut$IndexBuilder
         type_name:$str
     -> std::List[CompletionCandidate] {
         std::List[CompletionCandidate]::new = candidates
@@ -1204,7 +1227,7 @@ impl IndexBuilder {
     }
 
     pub fn find_triggered_completion_candidates
-        self:$IndexBuilder
+        self:mut$IndexBuilder
         offset:u64
     -> std::List[CompletionCandidate] {
         if 0 offset == then
@@ -2071,7 +2094,11 @@ impl IndexBuilder {
         end
     }
 
-    fn project_completion_triggers self:$IndexBuilder token:$common::Token index:mut$EditorIndex {
+    fn project_completion_triggers
+        self:mut$IndexBuilder
+        token:$common::Token
+        index:mut$EditorIndex
+    {
         if token.kind common::TokenKind::Identifier != token.kind common::TokenKind::Delimiter != && then
             return
         fi
@@ -2346,6 +2373,31 @@ impl EditorIndex {
     }
 }
 
+fn index_visible_bindings
+    bindings:$binding::BindingStore
+-> std::Map[std::String std::Map[std::String std::List[u64]]] {
+    std::Map[std::String std::Map[std::String std::List[u64]]]::new = files
+    0 = index: u64
+    for binding in bindings.declarations.iter do
+        if binding.verified then
+            binding.visibility.file = file
+            if file.as_str files.has_str ! then
+                std::Map[std::String std::List[u64]]::new file.clone files.set
+            fi
+            file.as_str files.get_mut_str.unwrap = names
+            if binding.name.as_str names.has_str ! then
+                std::List[u64]::new binding.name.clone names.set
+            fi
+            index binding.name.as_str names
+                .get_mut_str
+                .unwrap
+                .push
+        fi
+        1 += index
+    done
+    files
+}
+
 pub fn project_index
     checked:std::Option[typechecker::TypecheckResult]
     sources:lexer::SourceStore
@@ -2552,22 +2604,19 @@ impl IndexBuilder {
     }
 
     fn find_variable_type self:$IndexBuilder name:$str offset:u64 -> std::Option[common::Type] {
-        for
-            binding in self
-                .bindings
-                .declarations
-                .iter
-        do
-            if binding.verified ! binding.name name != || then
-                continue
+        if self.file_path.as_str self.visible_bindings.get_str std::Option::Some(names) is then
+            if name names.get_str std::Option::Some(indexes) is then
+                for index in indexes.iter do
+                    index copy self
+                        .bindings
+                        .declarations
+                        .get = binding
+                    if offset self.file_path.as_str binding.visibility self.locate.contains then
+                        binding.typ.clone std::Option::Some return
+                    fi
+                done
             fi
-            if binding.visibility.file self.file_path != then
-                continue
-            fi
-            if offset self.file_path.as_str binding.visibility self.locate.contains then
-                binding.typ.clone std::Option::Some return
-            fi
-        done
+        fi
         std::Option[common::Type]::None
     }
 
