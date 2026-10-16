@@ -432,7 +432,11 @@ which is bounded by the shared Map borrow. `entry_value` expects the value
 address, not the start of an entry. Prefer `get`, `get_mut`, or `iter`.
 
 `Map[K V]` associates unique keys with values. `K` must implement [Hashable](traits.md#hashable-contract).
-A new map allocates its buckets when the first entry is inserted:
+A new map allocates its buckets and first entry block on the first insertion.
+Entries share blocks, and later insertions reuse removed slots. Removing an
+entry destroys its key and returns or destroys its value, as specified below.
+Entry storage remains allocated until map destruction, so a long-lived map can
+retain storage from its largest live entry count.
 
 ```casa
 import "std"
