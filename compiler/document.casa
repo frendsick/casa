@@ -378,7 +378,10 @@ fn project_source_occurrence
 }
 
 struct IndexBuilder {
-    declarations:      std::List[common::Location]
+    declarations:      std::Set[std::String]
+    # Source function names in store order, with positions keyed by the text before the first `::`.
+    function_names:    std::List[std::String]
+    receiver_names:    std::Map[std::String std::List[u64]]
     root_occurrences:  std::List[ProjectionOperation]
     body_occurrences:  std::Map[std::String std::List[ProjectionOperation]]
     empty_occurrences: std::List[ProjectionOperation]
@@ -392,6 +395,30 @@ struct IndexBuilder {
     visible_bindings:  std::Map[std::String std::Map[std::String std::List[u64]]]
     # Method candidates by receiver format. Completion triggers repeat few receivers.
     receiver_methods:  std::Map[std::String std::List[CompletionCandidate]]
+}
+
+fn index_receiver_names names:$std::List[std::String] -> std::Map[std::String std::List[u64]] {
+    std::Map[std::String std::List[u64]]::new = receivers
+    0 = index: u64
+    for name in names.iter do
+        name.as_str "::" str::find = separator
+        if 0 separator <= then
+            name.as_str 0 separator u64::try_from.unwrap str::substring = receiver
+            if receiver.as_str receivers.has_str ! then
+                std::List[u64]::new receiver.clone receivers.set
+            fi
+            index receiver.as_str receivers
+                .get_mut_str
+                .unwrap
+                .push
+        fi
+        1 += index
+    done
+    receivers
+}
+
+fn declaration_key location:$common::Location -> std::String {
+    f"{location.span.offset}:{location.span.length}:{location.file}"
 }
 
 struct DocumentElement {
@@ -782,8 +809,10 @@ impl IndexBuilder {
             checked_bindings = bindings
         fi
         std::Map[std::String std::List[CompletionCandidate]]::new bindings index_visible_bindings
+        store.get_source_function_names = function_names
+        function_names index_receiver_names = receiver_names
         bindings file_path source sources diagnostics store std::List[ProjectionOperation]::new body_occurrences root_occurrences
-        std::List[common::Location]::new IndexBuilder
+        receiver_names function_names std::Set[std::String]::new IndexBuilder
     }
 
     fn get_function_occurrences self:$IndexBuilder name:$str -> $std::List[ProjectionOperation] {
@@ -797,8 +826,7 @@ impl IndexBuilder {
         std::List[std::String]::new = functions
         for
             function_name in self
-                .store
-                .get_source_function_names
+                .function_names
                 .iter
         do
             if
@@ -947,8 +975,7 @@ impl IndexBuilder {
         std::List[CompletionCandidate]::new = candidates
         for
             function_name in self
-                .store
-                .get_source_function_names
+                .function_names
                 .iter
         do
             if
@@ -1127,12 +1154,9 @@ impl IndexBuilder {
         f"{target.match_base}::" = base_prefix
         std::List[CompletionCandidate]::new = candidates
         std::Set[std::String]::new = method_names
-        for
-            function_name in self
-                .store
-                .get_source_function_names
-                .iter
-        do
+        target.match_base target.format self.find_receiver_positions = positions
+        for position in positions.iter do
+            position copy self.function_names.get = function_name
             if
                 function_name.as_str exact_prefix.as_str str::starts_with ! function_name.as_str base_prefix.as_str str::starts_with ! &&
             then
@@ -1155,6 +1179,33 @@ impl IndexBuilder {
             function.name.clone CompletionCandidate::Method candidates.push
         done
         candidates
+    }
+
+    # Positions of names that can start with either receiver, in store order.
+    fn find_receiver_positions
+        self:$IndexBuilder
+        exact:std::String
+        base:std::String
+    -> std::List[u64] {
+        std::List[u64]::new = positions
+        if exact.as_str "::" str::contains base.as_str "::" str::contains || then
+            0 = position: u64
+            while position self.function_names.length < do
+                position positions.push
+                1 += position
+            done
+            positions return
+        fi
+        if exact.as_str self.receiver_names.get_str std::Option::Some(found) is then
+            found.clone positions.append
+        fi
+        if exact base != then
+            if base.as_str self.receiver_names.get_str std::Option::Some(found) is then
+                found.clone positions.append
+                positions.sort
+            fi
+        fi
+        positions
     }
 
     pub fn find_qualified_completion_candidates
@@ -1917,12 +1968,7 @@ impl IndexBuilder {
     }
 
     fn has_source_declaration self:$IndexBuilder function:$common::Function -> bool {
-        for location in self.declarations.iter do
-            if location function.location.matches then
-                true return
-            fi
-        done
-        false
+        function.location declaration_key self.declarations.has
     }
 
     fn collect_source_declarations self:mut$IndexBuilder tokens:$std::List[common::Token] {
@@ -1932,7 +1978,7 @@ impl IndexBuilder {
                 continue
             fi
             if after_fn token.kind common::TokenKind::Identifier == && then
-                token.location.clone self.declarations.push
+                token.location declaration_key self.declarations.add
             fi
             token.kind common::TokenKind::Keyword == token.value "fn" == && = after_fn
         done
@@ -1991,8 +2037,7 @@ impl IndexBuilder {
         index std::Option[std::String]::None self.root_occurrences self.project_operations
         for
             name in self
-                .store
-                .get_source_function_names
+                .function_names
                 .iter
         do
             if
