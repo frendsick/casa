@@ -443,6 +443,30 @@ impl FunctionPlanner {
         false
     }
 
+    # An f-string expression reads an outer generic owner at a borrow type.
+    # When specialization selects scalar storage, the read lends the owner's
+    # address, as a call borrow does. Only function locals need this: root
+    # bindings are concrete, and a closure cannot use generic bounds yet, so it
+    # cannot interpolate a generic capture. Lend captured scalars here once
+    # closures inherit bounds.
+    fn lends_owned_scalar self:mut$FunctionPlanner name:$str typ:$common::Type -> bool {
+        if typ.borrow_target std::Option::Some(target) is then
+            if self.state.store target common::type_has_scalar_storage ! then
+                false return
+            fi
+        else
+            false return
+        fi
+        if self.function std::Option::Some(function) is then
+            for variable in function.variables.iter do
+                if variable.name.as_str name == then
+                    variable.typ.is_borrow ! return
+                fi
+            done
+        fi
+        false
+    }
+
     fn find_local_inline_aggregate_type
         self:mut$FunctionPlanner
         variable_name:$str
@@ -2584,6 +2608,10 @@ impl FunctionPlanner {
                 f"Capture `{binding.name}` is missing during target planning" self.record_failure_string
             fi
         else
+            if typ binding.storage_name.as_str self.lends_owned_scalar then
+                binding.storage_name.as_str self.resolve_local InstValue::LocalAddress bytecode.push
+                return
+            fi
             bytecode facts.moves_owner binding.storage_name.as_str self.emit_variable_get
             if facts.moves_owner then
                 if binding.storage_name self.owner_flags.get_copy std::Option::Some(flag) is then
@@ -4059,9 +4087,10 @@ impl Emitter {
         do
             index self.strings.get = value
             value.as_str escape_string = escaped
+            value.length = length
             ".align 8" self.line
             f"str_{index}:" self.line_string
-            f".quad {value.length}" self.line_string
+            f".quad {length}" self.line_string
             f".asciz \"{escaped}\"" self.line_string
             1 += index
         done
@@ -4073,8 +4102,9 @@ impl Emitter {
                 .iter
         do
             name.as_str self.function_label = label
+            f"closure_{label}: .quad fn_{label}" = record
             ".align 8" self.line
-            f"closure_{label}: .quad fn_{label}" self.line_string
+            record self.line_string
             ".quad 0" self.line
         done
 
@@ -5723,8 +5753,7 @@ impl Emitter {
                 "pushq %rdx" self.indent
             }
             InstValue::FnCall(fn_name) => {
-                fn_name.as_str self.function_label = fn_label
-                f"fn_{fn_label}" = jump_target
+                f"fn_{fn_name.as_str self.function_label}" = jump_target
                 jump_target.as_str self.emit_call_via_return_stack
             }
             InstValue::ExternCall(call) => call self.emit_extern_call
@@ -5752,13 +5781,11 @@ impl Emitter {
                 "movq %rax, current_env(%rip)" self.indent
             }
             InstValue::FnPush(fn_name) => {
-                fn_name.as_str self.function_label = fn_label
-                f"leaq fn_{fn_label}(%rip), %rax" self.indent_string
+                f"leaq fn_{fn_name.as_str self.function_label}(%rip), %rax" self.indent_string
                 "pushq %rax" self.indent
             }
             InstValue::FnPushStatic(fn_name) => {
-                fn_name.as_str self.function_label = fn_label
-                f"leaq closure_{fn_label}(%rip), %rax" self.indent_string
+                f"leaq closure_{fn_name.as_str self.function_label}(%rip), %rax" self.indent_string
                 "pushq %rax" self.indent
             }
             InstValue::Panic => {
@@ -5783,8 +5810,7 @@ impl Emitter {
                 fi
             }
             InstValue::DropFn(fn_name) => {
-                fn_name.as_str self.function_label = fn_label
-                f"leaq fn_{fn_label}(%rip), %rax" self.indent_string
+                f"leaq fn_{fn_name.as_str self.function_label}(%rip), %rax" self.indent_string
                 "pushq %rax" self.indent
             }
 

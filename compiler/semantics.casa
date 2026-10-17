@@ -571,6 +571,7 @@ fn collect_source_variable_uses body:$source_body::SourceBody uses:VariableUses 
                 done
             }
             source_body::SourceNode::Unsafe(region) => uses region.body collect_source_variable_uses = uses
+            source_body::SourceNode::FormatExpr(region) => uses region.body collect_source_variable_uses = uses
             source_body::SourceNode::Array(compound) => uses compound.body collect_source_variable_uses = uses
             source_body::SourceNode::Group(compound) => uses compound.body collect_source_variable_uses = uses
         end
@@ -1507,6 +1508,10 @@ struct TypeChecker {
     last_use_locations:         std::Map[std::String common::Location]
     current_trait_bounds:       std::Map[std::String std::List[common::TraitBound]]
     unsafe_depth:               u64
+    # Scope depth of the innermost f-string expression, or zero outside one.
+    format_scope_depth:         u64
+    # Stacks that enclosing f-string expressions set aside, innermost last.
+    format_enclosing_stacks:    std::List[TypedStack]
     literal_resolutions:        std::Map[i64 common::Type]
     contextual_parameters:      std::List[common::Type]
     contextual_callables:       std::List[std::Set[std::String]]
@@ -2281,6 +2286,8 @@ impl TypeChecker {
         std::List[std::Set[std::String]]::new # contextual_callables
         std::List[common::Type]::new # contextual_parameters
         std::Map[i64 common::Type]::new # literal_resolutions
+        std::List[TypedStack]::new # format_enclosing_stacks
+        0 # format_scope_depth
         0 # unsafe_depth
         std::Map[std::String std::List[common::TraitBound]]::new # current_trait_bounds
         std::Map[std::String common::Location]::new # last_use_locations
@@ -2828,6 +2835,61 @@ impl TypeChecker {
         std::Option[std::String]::None
     }
 
+    fn find_value_loan_conflict
+        self:$TypeChecker
+        value:$TypedValue
+        place:$Place
+        exclusive:bool
+        ignored_bindings:$std::List[std::String]
+    -> std::Option[LoanConflict] {
+        if value.binding std::Option::Some(binding_name) is then
+            if
+                place.fields.is_empty place.binding.as_str binding_name.as_str == &&
+                binding_name.as_str ignored_bindings common::string_list_contains ||
+            then
+                std::Option[LoanConflict]::None return
+            fi
+        fi
+        if value.place std::Option::Some(value_place) is then
+            if place value_place.eq value.type_value.is_borrow exclusive ! || && then
+                std::Option[LoanConflict]::None return
+            fi
+        fi
+        if value.capability ValueCapability::Owned is ! then
+            if value.place std::Option::Some(value_place) is then
+                if
+                    place value_place.overlaps
+                    value.capability ValueCapability::Exclusive is exclusive || &&
+                then
+                    std::Option[Origin]::None value self.make_stacked_loan_conflict
+                    std::Option::Some return
+                fi
+            fi
+        fi
+        exclusive place value self.find_value_origin_conflict
+    }
+
+    # Report a loan that a value holds on an overlapping place.
+    fn find_value_origin_conflict
+        self:$TypeChecker
+        value:$TypedValue
+        place:$Place
+        exclusive:bool
+    -> std::Option[LoanConflict] {
+        if value.origins std::Option::Some(origins) is then
+            for origin in origins.iter do
+                if
+                    place origin.overlaps
+                    origin.exclusive exclusive || &&
+                then
+                    origin.clone std::Option::Some value self.make_stacked_loan_conflict
+                    std::Option::Some return
+                fi
+            done
+        fi
+        std::Option[LoanConflict]::None
+    }
+
     fn find_conflicting_loan_except
         self:$TypeChecker
         place:$Place
@@ -2841,43 +2903,20 @@ impl TypeChecker {
                 .stack
                 .values
                 .get = value
-            if value.binding std::Option::Some(binding_name) is then
-                if
-                    place.fields.is_empty place.binding.as_str binding_name.as_str == &&
-                    binding_name.as_str ignored_bindings common::string_list_contains ||
-                then
-                    1 += index continue
-                fi
-            fi
-            if value.place std::Option::Some(value_place) is then
-                if place value_place.eq value.type_value.is_borrow exclusive ! || && then
-                    1 += index
-                    continue
-                fi
-            fi
-            if value.capability ValueCapability::Owned is ! then
-                if value.place std::Option::Some(value_place) is then
-                    if
-                        place value_place.overlaps
-                        value.capability ValueCapability::Exclusive is exclusive || &&
-                    then
-                        std::Option[Origin]::None value self.make_stacked_loan_conflict
-                        std::Option::Some return
-                    fi
-                fi
-            fi
-            if value.origins std::Option::Some(origins) is then
-                for origin in origins.iter do
-                    if
-                        place origin.overlaps
-                        origin.exclusive exclusive || &&
-                    then
-                        origin.clone std::Option::Some value self.make_stacked_loan_conflict
-                        std::Option::Some return
-                    fi
-                done
+            ignored_bindings exclusive place value self.find_value_loan_conflict = conflict
+            if conflict.is_some then
+                conflict return
             fi
             1 += index
+        done
+        # Borrows held below an f-string expression stay live while it runs.
+        for enclosing in self.format_enclosing_stacks.iter do
+            for value in enclosing.values.iter do
+                exclusive place value self.find_value_origin_conflict = conflict
+                if conflict.is_some then
+                    conflict return
+                fi
+            done
         done
         for
             binding in self
@@ -6787,7 +6826,6 @@ impl TypeChecker {
         effective_type:$common::Type
         scope:str
     {
-        variable common::Variable::name = var_name: $std::String
         variable common::Variable::typ = pre_type: $common::Type
         pre_type.is_unknown pre_type.is_unknown_placeholder || = pre_unknown
         if pre_unknown effective_type.is_unknown_placeholder ! && then
@@ -6797,7 +6835,7 @@ impl TypeChecker {
         unified match
             std::Option::Some(unified_type) => unified_type variable common::Variable::set_typ
             std::Option::None => {
-                op common::Op::location f"Cannot override {scope} variable `{var_name}` of type `{variable common::Variable::typ.format}` with other type `{effective_type.format}`" common::ErrorKind::InvalidVariable self.diagnostics.record_error_string
+                op common::Op::location f"Cannot override {scope} variable `{variable common::Variable::name}` of type `{variable common::Variable::typ.format}` with other type `{effective_type.format}`" common::ErrorKind::InvalidVariable self.diagnostics.record_error_string
             }
         end
     }
@@ -6984,6 +7022,12 @@ impl TypeChecker {
         op.value.clone = assignment_value
         op common::op_str_value = target
         target.as_str "." str::split.unwrap = target_parts
+        if 0 target_parts.get.as_str tc.is_format_outer_binding then
+            op.location f"F-string expression cannot assign `{target}` declared outside it"
+            common::ErrorKind::InvalidScope tc.diagnostics.record_error_string
+            tc.stack_pop_drop
+            return
+        fi
         if target_parts.length 1 > then
             target_parts function_opt pending_ops op tc.lower_field_assignment
             return
@@ -7408,6 +7452,55 @@ impl TypeChecker {
         fi
     }
 
+    # An f-string expression shares bindings declared outside it.
+    fn is_format_outer_binding self:$TypeChecker name:$str -> bool {
+        if 0 self.format_scope_depth == then
+            false return
+        fi
+        name self
+            .scope
+            .lookup
+            .is_some self.format_scope_depth name self.scope.binds_from ! &&
+    }
+
+    # Borrow an outer owner on top of the stack. Copy values and existing
+    # borrows keep their access. Returns whether the value became shared.
+    fn share_format_value self:mut$TypeChecker name:$str -> bool {
+        if name self.is_format_outer_binding ! then
+            false return
+        fi
+        self
+            .stack
+            .values
+            .length 1 - self
+            .stack
+            .values
+            .get_mut = value
+        if value.binding.is_none then
+            false return
+        fi
+        common::SHARED_BORROW_TYPE value.type_value.clone common::apply_borrow_type = value.type_value
+        ValueCapability::Shared = value.capability
+        std::Option[std::String]::None = value.binding
+        std::Option[i64]::None = value.source
+        false name Place::new value.origins.clone add_origin = value.origins
+        true
+    }
+
+    fn share_format_binding self:mut$TypeChecker name:$str op:mut$common::Op {
+        if name self.share_format_value then
+            self
+                .stack
+                .values
+                .length 1 - self
+                .stack
+                .values
+                .get
+                .type_value
+                .clone std::Option::Some = op.type_hint
+        fi
+    }
+
     pub fn check_push_var
         tc:mut$TypeChecker
         op:mut$common::Op
@@ -7429,6 +7522,7 @@ impl TypeChecker {
             fi
             if capture_type_opt std::Option::Some(capture_type) is then
                 function_opt op capture_name.as_str capture_type tc.stack_push_binding
+                op capture_name.as_str tc.share_format_binding
                 capture_name.as_str tc.apply_binding_callables
                 return
             fi
@@ -7452,6 +7546,7 @@ impl TypeChecker {
             if function_opt var_name.as_str tc.local_var_type std::Option::Some(local_type) is then
                 if local_type.is_unknown ! then
                     function_opt op var_name.as_str local_type tc.stack_push_binding
+                    op var_name.as_str tc.share_format_binding
                 else
                     common::make_unknown_type tc.stack_push_type
                 fi
@@ -7467,6 +7562,7 @@ impl TypeChecker {
             if global_opt std::Option::Some(global_var) is then
                 if global_var common::Variable::typ.is_unknown ! then
                     function_opt op var_name.as_str global_var common::Variable::typ tc.stack_push_binding
+                    op var_name.as_str tc.share_format_binding
                 else
                     common::make_unknown_type tc.stack_push_type
                 fi
@@ -7577,6 +7673,9 @@ impl TypeChecker {
             if tc.path_continues then
                 if_ctx op tc.merge_if_branch_stack
                 true = if_ctx.has_continuing_branch
+            else
+                # Unreachable code after a path ends cannot reach the next branch.
+                if_ctx.before tc.stack.restore
             fi
             errors_before_completion tc.diagnostics.error_count == if_ctx.branches_have_facts &&
             = if_ctx.branches_have_facts
@@ -9274,6 +9373,8 @@ impl TypeChecker {
             fi
 
             function_opt op capture_name.as_str capture_type tc.stack_push_binding
+            # A closure inside an f-string expression shares outer owners.
+            capture_name.as_str tc.share_format_value ! = capture_exclusive
             tc.stack_pop_value = captured_value
             captured_value.origins closure_origins merge_origins = closure_origins
 
@@ -9305,13 +9406,11 @@ impl TypeChecker {
                 continue
             fi
 
-            lambda.captures_shared ! = capture_exclusive
             if
-                lambda.captures_shared !
                 capture_exclusive tc
                     .stack
                     .values
-                    .length capture_name.as_str Place::new tc.find_conflicting_loan std::Option::Some(conflict) is &&
+                    .length capture_name.as_str Place::new tc.find_conflicting_loan std::Option::Some(conflict) is
             then
                 conflict f"Cannot capture owner `{capture_name}` while it is borrowed"
                 tc.report_loan_conflict
@@ -12991,6 +13090,80 @@ impl TypeChecker {
         end
     }
 
+    # An f-string expression starts from an empty stack and leaves one value.
+    # It shares bindings declared outside it, and its own bindings end with it.
+    fn check_format_expr
+        self:mut$TypeChecker
+        expression:source_body::SourceRegion
+        pending:mut$std::List[common::Op]
+        emitted:mut$body_builder::Builder
+        function:mut$std::Option[common::Function]
+    {
+        expression match
+            source_body::SourceRegion { origin: origin body: body end_origin: end_origin } => {
+                if false body.find_format_exit std::Option::Some(exit) is then
+                    exit.term match
+                        source_body::SourceTerm::Control(kind) => kind.format_source
+                        _ => "?"
+                    end = keyword
+                    exit.origin f"`{keyword}` cannot leave an f-string expression"
+                    common::ErrorKind::InvalidScope self.diagnostics.record_error_string
+                    false = self.facts_available
+                    common::make_string_type self.stack_push_type
+                    return
+                fi
+                self.stack.snapshot self.format_enclosing_stacks.push
+                TypedStack::new = self.stack
+                self.param_cap.clone = enclosing_param_cap
+                self.parameters.length std::Option::Some = self.param_cap
+                self.format_scope_depth copy = enclosing_scope_depth
+                self.scope.enter
+                self
+                    .scope
+                    .frames
+                    .length = self.format_scope_depth
+                function emitted pending body self.check_source_sequence
+                if self.path_continues then
+                    self
+                        .stack
+                        .values
+                        .length = value_count
+                    if 1 value_count != then
+                        end_origin f"F-string expression must leave one value, got {value_count}"
+                        common::ErrorKind::StackMismatch self.diagnostics.record_error_string
+                    fi
+                    TypedStack::new self.materialize_branch_results
+                fi
+                end_origin.clone = self.current_location
+                end_origin.clone common::OpValue::OwnerCleanup common::Op::new = cleanup
+                cleanup self.assign_op_id
+                cleanup self.attach_scope_cleanups
+                0 end_origin.span.offset self.close_source_bindings
+                self.scope.exit
+                cleanup emitted.push_operation
+                if
+                    self
+                        .stack
+                        .values
+                        .is_empty
+                then
+                    common::make_string_type self.stack_push_type
+                fi
+                self
+                    .stack
+                    .values
+                    .pop = value
+                self.format_enclosing_stacks.pop = self.stack
+                value self
+                    .stack
+                    .values
+                    .push
+                enclosing_param_cap = self.param_cap
+                enclosing_scope_depth = self.format_scope_depth
+            }
+        end
+    }
+
     fn check_source_node
         self:mut$TypeChecker
         node:source_body::SourceNode
@@ -13031,6 +13204,7 @@ impl TypeChecker {
                 end
             }
             source_body::SourceNode::Match(match_body) => function emitted pending match_body self.check_source_match
+            source_body::SourceNode::FormatExpr(region) => function emitted pending region self.check_format_expr
             source_body::SourceNode::Unsafe(region) => {
                 region match
                     source_body::SourceRegion {

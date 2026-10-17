@@ -99,8 +99,25 @@ Prefix a string with `f` and put expressions inside braces:
 f"{name} has {count} tasks\n" print
 ```
 
-Each expression must implement `Display`.
+Each expression must leave one value that implements `Display`.
 Use `\{` and `\}` for literal braces.
+
+An f-string expression runs in place and starts with an empty stack. It
+borrows owners declared outside it with shared access, so neither the
+expression nor a closure inside it can move or mutate them. Existing borrows
+keep their access. The expression also cannot assign a binding declared outside
+it. Bindings that the expression declares end with it:
+
+```casa
+import "std"
+
+"Ada".to_str = name
+f"{name} has {name.length} letters" std::println_string
+name std::println_string # name is still available
+```
+
+`return`, `?`, and a `break` or `continue` that is not inside a loop in the
+expression cannot leave the expression.
 
 ## Other types
 
