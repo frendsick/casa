@@ -44,6 +44,20 @@ emission. The report builder keeps the exact source snapshot on success,
 rejection, and reportable internal failure. No retained borrow crosses a
 completed request. Pending semantic work and caches are freed on every exit.
 
+The implementation coordinates these operations in `compiler/typechecker.casa`.
+After source checking, it consumes `SemanticSession` into its symbol store and
+opaque checking state. `compiler/post_check.casa` validates trait implementations
+and recipe cycles, then specializes reachable bodies. Each operation receives
+its store, checking state, and diagnostics explicitly. Specialization returns the
+root body, and `finish_semantics` settles analysis facts before commit.
+
+The post-check module owns traversal state and specialization identities. It
+accesses completed recipes through checking-state methods. Generated Clone and
+default methods still need the checker's preparation paths, so those methods
+remain in `semantics.casa`. Shared declaration substitution lives in
+`semantic_rules.casa` because default-method checking also uses it. No post-check
+operation can access pending source work or ownership proof fields directly.
+
 ## One operation decision
 
 The checker consumes a structured source node with its lexical scope, source
