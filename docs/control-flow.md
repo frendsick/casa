@@ -184,16 +184,63 @@ in the subject and are not destroyed.
 Literal patterns work with booleans, integers, characters, and strings. `_`
 matches any remaining value.
 
+## Nested patterns and alternatives
+
+Payload and field positions accept patterns recursively:
+
+```casa
+import "std"
+
+fn read value:std::Option[std::Result[i64 i64]] -> i64 {
+    value match
+        std::Option::Some(std::Result::Ok(number)) |
+        std::Option::Some(std::Result::Error(number)) => number
+        std::Option::None => 0
+    end
+}
+```
+
+Use `|` between complete arm patterns to share a body. Put spaces around `|`.
+An unbraced body ending in a literal followed by bitwise `|` can look like the
+start of the next arm's alternatives. Put that body in braces, for example
+`true => { flags 1 | } false => 0`.
+
+Each alternative must bind the same names with the same types and capabilities.
+The names can occur at different payload or field positions. A name cannot be
+bound twice in one alternative. Alternatives inside payload or field positions
+are not supported.
+
+A nested bare name binds that value. `_` ignores it. Literal patterns test the
+value at that position. Omitted enum payloads and omitted struct fields match
+any value. All nested bindings follow the subject's ownership or borrow
+capability. On success, owned values move into their bindings, and ignored
+fields and consumed wrappers are destroyed.
+
+Nested patterns also work in enum-root `is` checks:
+
+```casa
+if value std::Option::Some(std::Result::Ok(number)) is then
+    number print
+fi
+```
+
+A failed nested check retains the complete subject. A successful check that
+binds only `Copy` payloads also retains an owned subject.
+
 ## Exhaustiveness
 
 Every `match` must handle every possible input:
 
-- An enum match must cover every variant or use `_`.
+- An enum match must cover every variant and its nested payload patterns, or use `_`.
 - A boolean match must cover `true` and `false` or use `_`.
 - An integer, character, or string match must use `_`.
-- One matching struct pattern is exhaustive. `_` is also valid.
+- A struct pattern is exhaustive when all named field patterns are exhaustive.
+  `_` is also valid.
 
-Duplicate unguarded arms are compile-time errors. All continuing arms must leave
+Coverage combines unguarded alternatives and arms. For example, `Some(true)`
+and `Some(false)` cover the boolean payload of `Some`. With multiple fields,
+every combination must be covered. An arm or alternative that matches no new
+values is a compile-time error. All continuing arms must leave
 the same stack effect, just like branches of an `if`.
 
 Ownership also joins across arms. An arm that returns does not affect the join.
@@ -218,4 +265,10 @@ A guard cannot move an owner because a false guard must leave the subject and
 outer bindings available to later arms. A guarded arm does not count toward
 exhaustiveness because its condition can be false.
 
-See [examples/enum.casa](../examples/enum.casa) for guards on enum payloads.
+Alternatives are tried from left to right. The first matching alternative
+supplies bindings to the shared guard. If that guard fails, execution continues
+with the next arm. The guard is not retried with another alternative from the
+same arm.
+
+See [examples/enum.casa](../examples/enum.casa) for nested patterns, alternatives,
+and guards on enum payloads.

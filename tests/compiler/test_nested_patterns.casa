@@ -1,0 +1,197 @@
+import "std" as std
+import "../../compiler/error.casa" as error
+import "../../lib/test.casa" as test
+import "helpers.casa" as helpers
+
+enum Choice[T] {
+    First(T)
+    Second(T)
+    Empty
+}
+
+struct Pair {
+    left:  Choice[i64]
+    right: Choice[i64]
+}
+
+fn choose value:Choice[Choice[i64]] -> i64 {
+    value match
+        Choice::First(Choice::First(number)) | Choice::Second(Choice::Second(number)) => number
+        Choice::First(Choice::Second(_)) | Choice::Second(Choice::First(_)) => -1
+        Choice::First(Choice::Empty) | Choice::Second(Choice::Empty) | Choice::Empty => -2
+    end
+}
+
+fn pick_pair value:Pair -> i64 {
+    value match
+        Pair { left: Choice::First(number) right: Choice::Empty } | Pair { left: Choice::Empty right: Choice::Second(number) } => number
+        _ => 0
+    end
+}
+
+enum BorrowedTag {
+    Yes
+    No
+}
+
+enum BorrowedFields {
+    Number($i64)
+    Tag($BorrowedTag)
+}
+
+fn test_borrowed_fields value:BorrowedFields -> i64 {
+    value match
+        BorrowedFields::Number(42) | BorrowedFields::Tag(BorrowedTag::Yes) => 1
+        _ => 0
+    end
+}
+
+fn copy_is value:Choice[Resources] -> Resource {
+    if value Choice::First(Resources { kept: Resource { value: number } }) is then
+        "Copy-only nested is" 4 number test::assert_eq
+    fi
+    value extract
+}
+
+fn classify value:Choice[bool] -> i64 {
+    value match
+        Choice::First(true) | Choice::Second(false) => 1
+        Choice::First(false) | Choice::Second(true) => 2
+        Choice::Empty => 3
+    end
+}
+
+fn bitwise_body flag:bool left:i64 right:i64 -> i64 {
+    flag match
+        true => left right |
+        false => {
+            left 1 |
+        }
+    end
+}
+
+fn reject source:$str expected:$str {
+    error::Diagnostics::new = diagnostics
+    diagnostics source helpers::typecheck_test_source = checked
+    checked.get_diagnostics.clone diagnostics.merge
+    diagnostics source expected helpers::assert_error_contains
+}
+
+struct Resource {
+    value: i64
+    drops: ptr
+}
+
+impl Resource {
+    fn drop self:mut$Resource {
+        unsafe { self.drops load64 1 + self.drops store64 }
+    }
+}
+
+struct Resources {
+    kept:    Resource
+    ignored: Resource
+}
+
+fn extract value:Choice[Resources] -> Resource {
+    value match
+        Choice::First(Resources { kept: resource }) | Choice::Second(Resources { kept: resource }) => resource
+        Choice::Empty => {
+            1 std::process::exit unsafe {
+                ptr::null ptr::read[Resource]
+            }
+        }
+    end
+}
+
+fn mutate value:mut$Choice[Resources] {
+    if value Choice::First(Resources { kept: resource }) is then
+        10 += resource.value
+    fi
+}
+
+fn inspect value:$Choice[Resources] -> i64 {
+    value match
+        Choice::First(Resources { kept: resource }) | Choice::Second(Resources { kept: resource }) => resource.value
+        Choice::Empty => -1
+    end
+}
+
+fn guarded value:Choice[Resources] -> Resource {
+    value match
+        Choice::First(Resources { kept: resource }) | Choice::Second(Resources { kept: resource }) if resource.value 100 > => resource
+        Choice::First(Resources { ignored: resource }) | Choice::Second(Resources { ignored: resource }) => resource
+        Choice::Empty => {
+            1 std::process::exit unsafe {
+                ptr::null ptr::read[Resource]
+            }
+        }
+    end
+}
+
+fn failed_is value:Choice[Resources] -> Resource {
+    if value Choice::First(Resources { kept: Resource { value: 99 } ignored: resource }) is then
+        resource return
+    fi
+    value extract
+}
+
+fn guard_once value:Pair counter:ptr -> i64 {
+    value match
+        Pair { left: Choice::First(number) } | Pair { right: Choice::Second(number) } if { unsafe { counter load64 1 + counter store64 } number 5 > } exec => number
+        _ => -1
+    end
+}
+
+pub fn run_tests {
+    "nested_patterns" test::test_start
+    "unbraced bitwise body" 6 2 4 true bitwise_body test::assert_eq
+    "braced literal bitwise body" 5 2 4 false bitwise_body test::assert_eq
+    42 = number
+    "borrowed scalar literal" 1 number BorrowedFields::Number test_borrowed_fields test::assert_eq
+    BorrowedTag::Yes = tag
+    "borrowed enum tag" 1 tag BorrowedFields::Tag test_borrowed_fields test::assert_eq
+    "nested first" 41 41 Choice::First Choice::First choose test::assert_eq
+    "nested second" 42 42 Choice::Second Choice::Second choose test::assert_eq
+    "nested failure" -1 42 Choice::First Choice::Second choose test::assert_eq
+    "outer empty" -2 Choice::Empty choose test::assert_eq
+    Choice::Empty = empty: Choice[i64]
+    "nested empty" -2 empty Choice::First choose test::assert_eq
+    "different field paths" 7 Pair { left: Choice::Empty right: 7 Choice::Second } pick_pair test::assert_eq
+    "first boolean" 1 true Choice::First classify test::assert_eq
+    "second boolean" 2 true Choice::Second classify test::assert_eq
+    8 std::RawBuffer::new = counter
+    unsafe { 0 counter.data store64 }
+    "failed guard goes to next arm" -1 counter.data Pair { left: 1 Choice::First right: 9 Choice::Second } guard_once test::assert_eq
+    unsafe { "guard runs once" 1 counter.data load64 test::assert_eq }
+    unsafe { 0 counter.data store64 }
+    Resources { kept: Resource { value: 4 drops: counter.data } ignored: Resource { value: 5 drops: counter.data } } Choice::First = borrowed
+    borrowed mutate
+    "nested mutable binding" 14 borrowed inspect test::assert_eq
+    borrowed failed_is = selected
+    "failed nested is retains owner" 14 selected.value test::assert_eq
+    unsafe { "ignored resource destroyed" 1 counter.data load64 test::assert_eq }
+    selected drop
+    unsafe { "moved resource destroyed once" 2 counter.data load64 test::assert_eq }
+    Resources { kept: Resource { value: 4 drops: counter.data } ignored: Resource { value: 5 drops: counter.data } } Choice::Second guarded = fallback
+    "failed guard retains nested payload" 5 fallback.value test::assert_eq
+    fallback drop
+    unsafe { "guarded destruction exactly once" 4 counter.data load64 test::assert_eq }
+    Resources { kept: Resource { value: 99 drops: counter.data } ignored: Resource { value: 7 drops: counter.data } } Choice::First failed_is = transferred
+    "successful nested is moves binding" 7 transferred.value test::assert_eq
+    unsafe { "successful is destroys ignored field" 5 counter.data load64 test::assert_eq }
+    transferred drop
+    Resources { kept: Resource { value: 4 drops: counter.data } ignored: Resource { value: 8 drops: counter.data } } Choice::First copy_is drop
+    unsafe { "Copy-only nested is retains subject" 8 counter.data load64 test::assert_eq }
+    "Non-exhaustive match" "enum E { Pair(bool bool) } fn f x:E { x match E::Pair(true true) => E::Pair(false false) => end }" reject
+    "Duplicate match arm" "enum E { Some(bool) None } fn f x:E { x match E::Some(true) | E::Some(false) => E::Some(_) => E::None => end }" reject
+    "Duplicate match arm" "enum E { A B } fn f x:E { x match E::A | E::A => E::B => end }" reject
+    "same names" "enum E { A(i64) B(i64) } fn f x:E { x match E::A(a) | E::B(b) => end }" reject
+    "same types" "enum E { A(i64) B(bool) } fn f x:E { x match E::A(a) | E::B(a) => end }" reject
+    "Duplicate binding" "enum E { Pair(i64 i64) } fn f x:E { x match E::Pair(a a) => end }" reject
+    "Boolean pattern requires" "enum E { Some(i64) } fn f x:E { x match E::Some(true) => _ => end }" reject
+    "Unknown pattern field" "struct S { value:i64 } fn f x:S { x match S { missing: value } => end }" reject
+    "Non-exhaustive match" "enum E { Some(bool) } fn f x:E { x match E::Some(true) | E::Some(false) if false => end }" reject
+    test::test_summary
+}
+run_tests

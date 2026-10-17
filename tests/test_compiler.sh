@@ -62,7 +62,7 @@ test_category() {
             echo language_memory
             ;;
         test/test_global_keyword|test/test_root_state|\
-        test/test_match_underflow|test/test_question)
+        test/test_match_underflow|test/test_nested_patterns|test/test_question)
             echo language_control_flow
             ;;
         test/test_argv|test/test_compare|test/test_enum|test/test_operator_order|\

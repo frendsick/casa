@@ -4,6 +4,7 @@
 import "std" as std
 import "os" as os
 import "parser" as parser
+import "pattern" as pattern
 import "common" as common
 import "constant_eval" as constant_eval
 import "error" as error
@@ -1439,75 +1440,43 @@ pub fn get_op_delimiter
     # are ignored or handled by their enclosing constructs
 }
 
-# _try_parse_is_check - try parsing Enum::Variant is
-pub fn try_parse_is_check token:$common::Token cursor:mut$TokenCursor -> std::Option[common::Op] {
-    cursor.save = saved_pos
-    std::List[std::String]::new = bindings
-    std::Map[std::String common::Location]::new = binding_locations
-
-    # Check for bindings: Enum::Variant(a b) is
-    false = has_bindings
-    if cursor.peek std::Option::Some(peek_token) is then
-        "(" peek_token common::Token::value.as_str == = has_bindings
-    else
-        std::Option[common::Op]::None return
-    fi
-    if has_bindings then
-        cursor.pop drop # consume (
-        while true do
-            if cursor.peek std::Option::Some(inner) is then
-                if ")" inner common::Token::value.as_str == then
-                    cursor.pop drop # consume )
-                    if 0 bindings.length == then
-                        saved_pos cursor.restore
-                        std::Option::None return
-                    fi
-                    break
-                fi
-                if common::TokenKind::Identifier inner common::Token::kind != then
-                    saved_pos cursor.restore
-                    std::Option::None return
-                fi
-                cursor.pop drop
-                inner.location.clone inner.value.clone binding_locations.set
-                if inner.value.as_str "::" str::contains then
-                    inner.value.as_str cursor.resolve_name bindings.push
-                else
-                    inner.value.clone bindings.push
-                fi
-            else
-                saved_pos cursor.restore
-                std::Option::None return
+# Look ahead without diagnostics before parsing an enum-root `is` pattern.
+pub fn try_parse_is_check
+    token:$common::Token
+    cursor:mut$TokenCursor
+    parser:mut$Parser
+-> std::Option[common::Op] {
+    cursor.pos = scan
+    0 = depth: u64
+    while scan cursor.tokens.length < do
+        scan cursor
+            .tokens
+            .get
+            .value
+            .as_str = value
+        if 0 depth == "(" value != && then
+            if "is" value != then
+                std::Option[common::Op]::None return
             fi
-        done
-    fi
-
-    # Check if next token is `is`
-    if cursor.peek std::Option::Some(is_token) is then
-        if "is" is_token common::Token::value.as_str != then
-            saved_pos cursor.restore
-            std::Option::None return
+            false cursor token parser parse_pattern_value = pattern
+            cursor.pop drop
+            if pattern common::PatternValue::EnumVariant(variant) is then
+                token.location.clone variant common::OpValue::IsCheck common::Op::new
+                std::Option::Some return
+            fi
+            std::Option[common::Op]::None return
         fi
-    else
-        saved_pos cursor.restore
-        std::Option::None return
-    fi
-    cursor.pop drop # consume `is`
-
-    # Split token value on ::
-    token common::Token::value.as_str cursor.resolve_name.as_str "::" str::find = separator
-    token common::Token::value.as_str cursor.resolve_name.as_str 0 separator u64::try_from.unwrap str::substring = enum_name
-    token common::Token::value.as_str cursor.resolve_name.as_str separator 2 + u64::try_from.unwrap
-    token common::Token::value.as_str cursor
-        .resolve_name
-        .as_str
-        .length separator u64::try_from.unwrap - 2 - str::substring = variant_name
-
-    std::Option::None variant_name enum_name common::EnumVariant::new = variant
-    bindings variant common::EnumVariant::set_bindings
-    binding_locations = variant.binding_locations
-    token common::Token::location variant common::OpValue::IsCheck common::Op::new = parsed_is
-    parsed_is std::Option::Some
+        if "(" value == "{" value == || then
+            1 += depth
+        elif ")" value == "}" value == || then
+            if 0 depth == then
+                std::Option[common::Op]::None return
+            fi
+            1 -= depth
+        fi
+        1 += scan
+    done
+    std::Option[common::Op]::None
 }
 
 pub fn require_global_scope
@@ -2681,7 +2650,7 @@ pub fn make_derived_enum_arm
     bindings:std::List[std::String]
 -> common::MatchArm {
     ordinal std::Option::Some variant_name.to_str enum_name.to_str common::EnumVariant::new = variant
-    bindings variant common::EnumVariant::set_bindings
+    bindings pattern::make_binding_patterns variant common::EnumVariant::set_bindings
     std::List[common::Op]::new variant common::PatternValue::EnumVariant common::MatchArm::new
 }
 
@@ -2804,9 +2773,11 @@ pub fn append_enum_derived_eq_body
             location.clone common::OpValue::And common::Op::new ops.push
             1 += payload_index
         done
-        make_derived_wildcard_arm = wildcard_arm
-        location.clone wildcard_arm common::OpValue::MatchArm common::Op::new ops.push
-        location.clone 0 common::OpValue::PushBool common::Op::new ops.push
+        if 1 casa_enum.variants.length < then
+            make_derived_wildcard_arm = wildcard_arm
+            location.clone wildcard_arm common::OpValue::MatchArm common::Op::new ops.push
+            location.clone 0 common::OpValue::PushBool common::Op::new ops.push
+        fi
         location.clone common::OpValue::MatchEnd common::Op::new ops.push
         1 += variant_index
     done
@@ -4840,7 +4811,7 @@ pub fn append_enum_copy_clone_body
         fi
         bindings.length = binding_count
         variant_index i64::try_from.unwrap std::Option::Some variant_name.clone casa_enum.name.clone common::EnumVariant::new = pattern_variant
-        bindings pattern_variant common::EnumVariant::set_bindings
+        bindings pattern::make_binding_patterns pattern_variant common::EnumVariant::set_bindings
         std::List[common::Op]::new pattern_variant common::PatternValue::EnumVariant common::MatchArm::new = arm
         location.clone arm common::OpValue::MatchArm common::Op::new ops.push
         variant_name casa_enum
@@ -5270,115 +5241,128 @@ pub fn parse_impl_block parser:mut$Parser cursor:mut$TokenCursor {
 
 # parse_match_block - parse a full match construct (match ... end)
 pub fn is_match_arm_boundary parser:$Parser cursor:$TokenCursor -> bool {
-    cursor TokenCursor::pos = pos
-    cursor TokenCursor::tokens = token_list: $std::List[common::Token]
-    if pos 1 + token_list.length >= then
-        false return
-    fi
-    pos token_list.get = token
-    pos 1 + token_list.get = next_token
-
-    # _ => or _ if ...
-    if common::MATCH_WILDCARD token common::Token::value.as_str == then
-        if "=>" next_token common::Token::value.as_str == then
-            true return
+    cursor.pos = scan
+    while scan cursor.tokens.length < do
+        scan cursor.tokens.get = token
+        if common::TokenKind::Identifier token.kind != common::TokenKind::Literal token.kind != && then
+            false return
         fi
-        if "if" next_token common::Token::value.as_str == then
-            true return
-        fi
-    fi
-    # literal => or literal if ...
-    if common::TokenKind::Literal token common::Token::kind == then
-        if "=>" next_token common::Token::value.as_str == then
-            true return
-        fi
-        if "if" next_token common::Token::value.as_str == then
-            true return
-        fi
-    fi
-    if common::TokenKind::Identifier token common::Token::kind != then
-        false return
-    fi
-    # Identifier => or Identifier if ...
-    if "=>" next_token common::Token::value.as_str == then
-        true return
-    fi
-    if "if" next_token common::Token::value.as_str == then
-        true return
-    fi
-    # StructName { ... } =>
-    if
-        "{" next_token common::Token::value.as_str ==
-        token common::Token::value.as_str cursor.resolve_name.as_str parser
-            .store
-            .structs
-            .get_str
-            .is_some &&
-    then
-        true return
-    fi
-    # EnumName::Variant(bindings) => or EnumName::Variant(bindings) if ...
-    if "(" next_token common::Token::value.as_str == then
-        token common::Token::value.as_str "::" str::find = separator
-        if 0 separator < then
-            pos 2 + = scan_pos
-            while scan_pos token_list.length < do
-                if ")" scan_pos token_list.get common::Token::value.as_str == then
-                    if scan_pos 1 + token_list.length < then
-                        scan_pos 1 + token_list.get common::Token::value.as_str = after_paren: $str
-                        if "=>" after_paren.as_str == then
-                            true return
-                        fi
-                        if "if" after_paren.as_str == then
-                            true return
+        1 += scan
+        0 = depth: u64
+        while scan cursor.tokens.length < do
+            scan cursor
+                .tokens
+                .get
+                .value
+                .as_str = value
+            if 0 depth == then
+                if "=>" value == "if" value == || then
+                    true return
+                fi
+                if "|" value == then
+                    if scan cursor.pos 1 + == common::TokenKind::Identifier token.kind == && then
+                        if token.value.as_str "::" str::contains ! common::MATCH_WILDCARD token.value.as_str != && then
+                            false return
                         fi
                     fi
+                    1 += scan
                     break
                 fi
-                1 += scan_pos
-            done
-        fi
-    fi
+                if "(" value != "{" value != && then
+                    false return
+                fi
+            fi
+            if "(" value == "{" value == || then
+                1 += depth
+            elif ")" value == "}" value == || then
+                1 -= depth
+            fi
+            1 += scan
+        done
+    done
     false
 }
 
-pub fn parse_struct_match_pattern
+pub fn parse_pattern_value
     parser:mut$Parser
-    name_token:$common::Token
+    token:$common::Token
     cursor:mut$TokenCursor
--> common::StructPattern {
-    fallback_token parser.state "{" cursor expect_token_value.unwrap_or drop
-    name_token common::Token::value.as_str cursor.resolve_name.as_str parser
-        .store
-        .structs
-        .get_str = struct_opt
-    if struct_opt.is_none then
-        name_token common::Token::location f"Struct `{name_token common::Token::value.as_str cursor.resolve_name.as_str}` is not defined" common::ErrorKind::UndefinedName parser.state.record_error_string
+    nested:bool
+-> common::PatternValue {
+    if common::TokenKind::Literal token.kind == then
+        parser token parse_literal_match_pattern common::PatternValue::Literal return
     fi
-    std::Map[std::String std::String]::new = bindings
-    std::Map[std::String common::Location]::new = binding_locations
-
-    while true do
-        cursor.peek = next_opt
-        if next_opt.is_none then
-            name_token common::Token::location "Unexpected end of input in struct pattern" common::ErrorKind::UnexpectedToken parser.state.record_error
-            parser.state.mark_output_unusable
-            break
-        fi
-        if next_opt std::Option::Some(next) is then
-            if "}" next common::Token::value.as_str == then
+    if common::TokenKind::Identifier token.kind != then
+        token.location "Expected pattern" common::ErrorKind::UnexpectedToken parser.state.record_error
+        parser.state.mark_output_unusable
+    fi
+    if
+        { common::Token::value.as_str "{" == } cursor
+            .peek
+            .filter
+            .is_some
+    then
+        cursor.pop drop
+        std::Map[std::String common::PatternValue]::new = fields
+        while cursor.is_finished ! do
+            if
+                { common::Token::value.as_str "}" == } cursor
+                    .peek
+                    .filter
+                    .is_some
+            then
                 cursor.pop drop
-                break
+                fields token.value.as_str cursor.resolve_name common::StructPattern
+                common::PatternValue::Struct return
             fi
+            fallback_token parser.state common::TokenKind::Identifier cursor expect_token_kind.unwrap_or = field
+            fallback_token parser.state ":" cursor expect_token_value.unwrap_or drop
+            if field.value fields.has then
+                field.location "Duplicate field in pattern" common::ErrorKind::DuplicateName parser.state.record_error
+            fi
+            cursor.pop match
+                std::Option::Some(child) => child
+                std::Option::None => break
+            end = child
+            true cursor child parser parse_pattern_value field.value.clone fields.set
+        done
+        token.location "Unclosed struct pattern" common::ErrorKind::UnexpectedToken parser.state.record_error
+        parser.state.mark_output_unusable
+        fields token.value.as_str cursor.resolve_name common::StructPattern
+        common::PatternValue::Struct return
+    fi
+    token.value.as_str cursor.resolve_name = name
+    name.as_str "::" str::find = separator
+    if 0 separator > then
+        if nested common::MATCH_WILDCARD token.value.as_str != && then
+            token.location.clone token.value.clone common::PatternBinding
+            common::PatternValue::Binding return
         fi
-        fallback_token parser.state common::TokenKind::Identifier cursor expect_token_kind.unwrap_or = field_token
-        fallback_token parser.state ":" cursor expect_token_value.unwrap_or drop
-        fallback_token parser.state common::TokenKind::Identifier cursor expect_token_kind.unwrap_or = var_token
-        var_token.location.clone var_token.value.clone binding_locations.set
-        var_token common::Token::value.clone field_token common::Token::value.clone bindings.set
-    done
-
-    binding_locations bindings name_token common::Token::value.as_str cursor.resolve_name common::StructPattern
+        std::Option[i64]::None name "".to_str common::EnumVariant::new
+        common::PatternValue::EnumVariant return
+    fi
+    name.as_str 0 separator u64::try_from.unwrap str::substring = enum_name
+    separator 2 + u64::try_from.unwrap = start
+    name.as_str start name.length start - str::substring = variant_name
+    std::Option[i64]::None variant_name enum_name common::EnumVariant::new = variant
+    if
+        { common::Token::value.as_str "(" == } cursor
+            .peek
+            .filter
+            .is_some
+    then
+        cursor.pop drop
+        while cursor.is_finished ! do
+            cursor.pop.unwrap = child
+            if ")" child.value.as_str == then
+                variant common::PatternValue::EnumVariant return
+            fi
+            true cursor child parser parse_pattern_value variant.bindings.push
+        done
+        token.location "Unclosed enum pattern" common::ErrorKind::UnexpectedToken parser.state.record_error
+        parser.state.mark_output_unusable
+    fi
+    variant common::PatternValue::EnumVariant
 }
 
 # parse_pattern_terminator — consume the `=>` that separates a match-arm
@@ -5461,8 +5445,7 @@ pub fn parse_literal_match_pattern
     "".to_str 0 common::IntegerLiteral::from_int common::LiteralValue::Int common::LiteralPattern
 }
 
-# Parse one match-arm pattern (wildcard, literal, struct, bare ident, or
-# Enum::Variant) plus its optional guard, append the OpMatchArm to `ops`.
+# Parse all alternatives before the shared guard and body.
 pub fn parse_match_arm_pattern
     parser:mut$Parser
     arm_token:$common::Token
@@ -5470,78 +5453,30 @@ pub fn parse_match_arm_pattern
     function_name:$str
     ops:mut$std::List[common::Op]
 {
-    if common::MATCH_WILDCARD arm_token common::Token::value.as_str cursor.resolve_name.as_str == then
-        function_name cursor parser parse_pattern_terminator = wildcard_guard_ops
-        std::Option::None common::MATCH_WILDCARD.to_str "".to_str common::EnumVariant::new = wildcard
-        wildcard_guard_ops wildcard common::PatternValue::EnumVariant common::MatchArm::new = wildcard_arm
-        cursor wildcard_arm.retain_guard_end
-        arm_token common::Token::location wildcard_arm common::OpValue::MatchArm common::Op::new ops.push
-    elif common::TokenKind::Literal arm_token common::Token::kind == then
-        function_name cursor parser parse_pattern_terminator = literal_guard_ops
-        parser arm_token parse_literal_match_pattern = literal_pattern
-        literal_guard_ops literal_pattern common::PatternValue::Literal common::MatchArm::new = literal_arm
-        cursor literal_arm.retain_guard_end
-        arm_token common::Token::location literal_arm common::OpValue::MatchArm common::Op::new ops.push
-    elif common::TokenKind::Identifier arm_token common::Token::kind != then
-        arm_token common::Token::location "Expected match pattern or `_`" common::ErrorKind::UnexpectedToken parser.state.record_error
-    elif
-        { common::Token::value.as_str "{" == } cursor
+    false cursor arm_token parser parse_pattern_value = pattern
+    if
+        { common::Token::value.as_str "|" == } cursor
             .peek
             .filter
             .is_some
     then
-        cursor arm_token parser parse_struct_match_pattern = struct_pattern
-        function_name cursor parser parse_pattern_terminator = struct_guard_ops
-        struct_guard_ops struct_pattern common::PatternValue::Struct common::MatchArm::new = struct_arm
-        cursor struct_arm.retain_guard_end
-        arm_token common::Token::location struct_arm common::OpValue::MatchArm common::Op::new ops.push
-    elif arm_token common::Token::value.as_str cursor.resolve_name.as_str "::" str::find 0 < then
-        function_name cursor parser parse_pattern_terminator = bare_guard_ops
-        std::Option::None arm_token common::Token::value.as_str cursor.resolve_name "".to_str common::EnumVariant::new = bare_variant
-        bare_guard_ops bare_variant common::PatternValue::EnumVariant common::MatchArm::new = bare_arm
-        cursor bare_arm.retain_guard_end
-        arm_token common::Token::location bare_arm common::OpValue::MatchArm common::Op::new ops.push
-    else
-        arm_token common::Token::value.as_str cursor.resolve_name.as_str "::" str::find = separator
-        arm_token common::Token::value.as_str cursor.resolve_name.as_str 0 separator u64::try_from.unwrap str::substring = enum_name
-        arm_token common::Token::value.as_str cursor.resolve_name.as_str separator 2 + u64::try_from.unwrap
-        arm_token common::Token::value.as_str cursor
-            .resolve_name
-            .as_str
-            .length separator u64::try_from.unwrap - 2 - str::substring = variant_name
-
-        std::List[std::String]::new = bindings
-        std::Map[std::String common::Location]::new = binding_locations
-        cursor.peek = paren_opt
-        if { common::Token::value.as_str "(" == } paren_opt.filter.is_some then
+        std::List[common::PatternValue]::new = alternatives
+        pattern alternatives.push
+        while
+            { common::Token::value.as_str "|" == } cursor
+                .peek
+                .filter
+                .is_some
+        do
             cursor.pop drop
-            while true do
-                cursor.peek = inner_opt
-                if inner_opt.is_none then
-                    arm_token common::Token::location "Unexpected end of input in match arm bindings" common::ErrorKind::UnexpectedToken parser.state.record_error
-                    parser.state.mark_output_unusable
-                    break
-                fi
-                if inner_opt std::Option::Some(inner) is then
-                    if ")" inner common::Token::value.as_str == then
-                        cursor.pop drop
-                        break
-                    fi
-                fi
-                fallback_token parser.state common::TokenKind::Identifier cursor expect_token_kind.unwrap_or = binding_token
-                binding_token.location.clone binding_token.value.clone binding_locations.set
-                binding_token common::Token::value.clone bindings.push
-            done
-        fi
-
-        function_name cursor parser parse_pattern_terminator = enum_guard_ops
-        std::Option::None variant_name enum_name common::EnumVariant::new = variant
-        bindings variant common::EnumVariant::set_bindings
-        binding_locations = variant.binding_locations
-        enum_guard_ops variant common::PatternValue::EnumVariant common::MatchArm::new = variant_arm
-        cursor variant_arm.retain_guard_end
-        arm_token common::Token::location variant_arm common::OpValue::MatchArm common::Op::new ops.push
+            fallback_token parser.state cursor expect_token.unwrap_or = next
+            false cursor next parser parse_pattern_value alternatives.push
+        done
+        alternatives common::PatternValue::Alternatives = pattern
     fi
+    function_name cursor parser parse_pattern_terminator pattern common::MatchArm::new = arm
+    cursor arm.retain_guard_end
+    arm_token.location.clone arm common::OpValue::MatchArm common::Op::new ops.push
 }
 
 # Parse a match-arm body (either a `{...}` block or a single-line expression
@@ -6788,7 +6723,7 @@ pub fn token_to_op
 
         # Check for is check: Enum::Variant is
         if token common::Token::value.as_str "::" str::find 0 >= then
-            cursor token try_parse_is_check = is_check_opt
+            parser cursor token try_parse_is_check = is_check_opt
             is_check_opt match
                 std::Option::Some(is_check) => {
                     is_check ops.push
@@ -7237,19 +7172,9 @@ pub fn resolve_enum_variant
             fi
         fi
     fi
-    # Register bindings as variables
-    if 0 variant common::EnumVariant::bindings.length != then
-        for rev_var_name in variant common::EnumVariant::bindings.iter do
-            rev_var_name.as_str common::Variable::new = rev_var
-            if common::GLOBAL_SCOPE_LABEL function common::Function::name.as_str == then
-                rev_var rev_var_name.clone store.variables.set
-            else
-                if rev_var_name.as_str function common::Function::variables common::variable_list_contains ! then
-                    rev_var function common::Function::variables.push
-                fi
-            fi
-        done
-    fi
+    for child in variant.bindings.iter_mut do
+        errors function op child store resolve_pattern_value
+    done
 }
 
 impl Parser {
@@ -7658,6 +7583,48 @@ impl common::Op {
     }
 }
 
+pub fn resolve_pattern_value
+    store:mut$common::SymbolStore
+    pattern:mut$common::PatternValue
+    op:mut$common::Op
+    function:mut$common::Function
+    errors:mut$std::List[error::CasaError]
+{
+    pattern match
+        common::PatternValue::Binding(binding) => {
+            binding.name.as_str function store register_struct_pattern_binding
+        }
+        common::PatternValue::EnumVariant(variant) => {
+            errors function op variant store resolve_enum_variant
+        }
+        common::PatternValue::Struct(struct_pattern) => {
+            if struct_pattern.struct_name store.structs.has ! then
+                op.location.clone f"Struct `{struct_pattern.struct_name}` is not defined"
+                common::ErrorKind::UndefinedName error::CasaError::new errors.push
+            fi
+            for
+                name in struct_pattern
+                    .bindings
+                    .keys
+                    .iter
+            do
+                name struct_pattern
+                    .bindings
+                    .get_mut
+                    .unwrap = child
+                errors function op child store resolve_pattern_value
+            done
+        }
+        common::PatternValue::Alternatives(alternatives) => {
+            for alternative in alternatives.iter_mut do
+                errors function op alternative store resolve_pattern_value
+            done
+        }
+        common::PatternValue::Literal(_) => {
+        }
+    end
+}
+
 # Register struct-pattern field bindings as locals or globals.
 # Resolve enum-variant ordinals. Literal and wildcard patterns need no resolution.
 pub fn resolve_match_op
@@ -7669,24 +7636,9 @@ pub fn resolve_match_op
     diagnostics:mut$error::Diagnostics
     bodies:mut$SourceBodies
 {
-    op common::pattern_value_of match
-        common::PatternValue::Struct(struct_pattern) => {
-            struct_pattern.bindings.keys = pattern_keys
-            for pattern_key in pattern_keys.iter do
-                pattern_key struct_pattern
-                    .bindings
-                    .get
-                    .unwrap = binding_name
-                binding_name.as_str function store register_struct_pattern_binding
-            done
-        }
-        common::PatternValue::EnumVariant(variant) => {
-            errors function op variant store resolve_enum_variant
-            variant common::PatternValue::EnumVariant op.set_match_pattern_value
-        }
-        common::PatternValue::Literal => {
-        }
-    end
+    op common::pattern_value_of = pattern
+    errors function op pattern store resolve_pattern_value
+    pattern op.set_match_pattern_value
     if op.value common::OpValue::MatchArm(arm) is then
         if arm.guard_ops.length 0 != then
             arm.clone = resolved_arm

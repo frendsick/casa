@@ -505,6 +505,10 @@ done
 
 ## `match` / `end` arms
 
+- Put spaces around the `|` that separates alternative patterns.
+- Nested enum patterns retain adjacent payload parentheses. Struct field
+  patterns retain `field: pattern` spacing.
+
 - Put `match` arms on indented lines and align `end` with the matched value.
 - Keep a single operation or expression on the arm line.
 - Expand a block arm with its braces and body on separate lines.
