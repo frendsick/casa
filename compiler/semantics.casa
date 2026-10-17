@@ -1341,12 +1341,11 @@ struct MatchContext {
     entry_continues:         bool
     has_continuing_arm:      bool
     condition_present:       bool
-    branch_records:          std::List[std::String]
+    coverage:                std::List[pattern::CoverageRow]
     match_type:              common::Type
     match_origins:           std::Option[std::List[Origin]]
     match_cleanup_origins:   std::Option[std::List[Origin]]
     match_place:             std::Option[Place]
-    current_branch_label:    std::String
     current_branch_location: common::Location
     entry_facts_available:   bool
     arms_have_facts:         bool
@@ -1445,12 +1444,11 @@ impl MatchContext {
     pub fn new match_type:common::Type -> MatchContext {
         true true
         common::empty_location
-        "".to_str
         std::Option[Place]::None
         std::Option[std::List[Origin]]::None
         std::Option[std::List[Origin]]::None
         match_type
-        std::List[std::String]::new
+        std::List[pattern::CoverageRow]::new
         false
         false
         false
@@ -2745,7 +2743,7 @@ impl TypeChecker {
         function_opt:mut$std::Option[common::Function]
     {
         variant.clone common::PatternValue::EnumVariant = pattern_value
-        for name in variant.bindings.iter do
+        for name in pattern_value pattern::binding_names.iter do
             name.as_str self.scope.lookup match
                 std::Option::Some(typ) => typ.clone
                 std::Option::None => continue
@@ -10074,34 +10072,24 @@ impl TypeChecker {
         fi
     }
 
-    # detect_duplicate_arm — raise an error if the current pattern's covered key
-    # has already been recorded on this match context.
-    fn detect_duplicate_arm
+    fn record_pattern_coverage
         self:mut$TypeChecker
-        match_ctx:mut$MatchContext
-        op:mut$common::Op
-        covered_key:$str
+        value:$common::PatternValue
+        subject:$common::Type
+        rows:mut$std::List[pattern::CoverageRow]
+        op:$common::Op
     {
-        if "" covered_key.as_str == then
-            return
+        self.store subject value pattern::coverage_pattern pattern::CoverageRow::single = row
+        if rows row pattern::is_useful ! then
+            op.location "Duplicate match arm or redundant alternative" common::ErrorKind::DuplicateName self.diagnostics.record_error
         fi
-        for record in match_ctx MatchContext::branch_records.iter do
-            if covered_key record.as_str == then
-                op common::Op::location f"Duplicate match arm for `{covered_key}`" common::ErrorKind::DuplicateName self.diagnostics.record_error_string
-            fi
-        done
-        if covered_key match_ctx MatchContext::current_branch_label.as_str == then
-            op common::Op::location f"Duplicate match arm for `{covered_key}`" common::ErrorKind::DuplicateName self.diagnostics.record_error_string
-        fi
+        row rows.push
     }
 
     # unify_arm_stacks — reconcile the stack effect of the arm just finished
     # against the arm template recorded on the MatchContext. Runs only when a
     # prior arm has already executed (condition_present).
     fn unify_arm_stacks self:mut$TypeChecker match_ctx:mut$MatchContext op:mut$common::Op {
-        if "" match_ctx MatchContext::current_branch_label.as_str != then
-            match_ctx MatchContext::current_branch_label.clone match_ctx MatchContext::branch_records.push
-        fi
         match_ctx MatchContext::before = match_before: mut$TypedStack
         match_ctx MatchContext::after = match_after: mut$TypedStack
         if self.path_continues ! then
@@ -10129,18 +10117,6 @@ impl TypeChecker {
         fi
         match_before self.stack.restore
     }
-
-    fn assign_struct_binding_type
-        self:mut$TypeChecker
-        match_subject_type:$common::Type
-        binding_type:common::Type
-        bound_var:$str
-        function_opt:mut$std::Option[common::Function]
-    {
-        function_opt binding_type self.type_is_duplicable = binding_is_copy
-        binding_is_copy binding_type match_subject_type rules::pattern_binding_type = binding_type
-        function_opt binding_type bound_var self set_binding_type
-    }
 }
 
 fn resolve_struct_pattern_field_types
@@ -10165,148 +10141,121 @@ fn resolve_struct_pattern_field_types
 }
 
 impl TypeChecker {
-    # Attach field types to each local bound by a struct destructure arm.
-    fn register_struct_pattern_bindings
+    fn collect_pattern_types
         self:mut$TypeChecker
-        function_opt:mut$std::Option[common::Function]
-        struct_pattern:common::StructPattern
-        match_subject_type:$common::Type
-        location:$common::Location
+        value:$common::PatternValue
+        subject:$common::Type
+        bindings:mut$std::Map[std::String common::Type]
+        op:mut$common::Op
+        function:mut$std::Option[common::Function]
     {
-        self.store struct_pattern.struct_name.as_str match_subject_type resolve_struct_pattern_field_types
-        = field_types_opt
-        if field_types_opt.is_none then
-            common::empty_location "Expected option value while unwrapping struct_pattern StructPattern::struct_name self.store.structs.get" common::ErrorKind::Syntax self.diagnostics.record_error
-            return
-        fi
-        field_types_opt.unwrap = field_types
-        struct_pattern common::StructPattern::bindings.keys = binding_keys
-        for field_name in binding_keys.iter do
-            f"{struct_pattern.struct_name}::{field_name}" = accessor_name
-            if location.file.as_str accessor_name.as_str self.store.is_private_from then
-                location "Cannot bind a private struct field outside its module"
-                common::ErrorKind::InvalidScope self.diagnostics.record_error
-            fi
-            if
-                field_name struct_pattern common::StructPattern::bindings.get std::Option::Some(bound_var) is
-            then
-                if field_name field_types.get std::Option::Some(binding_type) is then
-                    function_opt bound_var.as_str binding_type.clone match_subject_type self.assign_struct_binding_type
+        subject pattern::owned_type = owner
+        value match
+            common::PatternValue::Binding(binding) => {
+                if binding.name bindings.has then
+                    binding.location "Duplicate binding in pattern" common::ErrorKind::DuplicateName self.diagnostics.record_error
                 fi
-            else
-                common::empty_location "Expected option value while unwrapping field_name struct_pattern StructPattern::bindings.get" common::ErrorKind::Syntax self.diagnostics.record_error
-            fi
-        done
-    }
-
-    # register_enum_pattern_bindings — attach payload types to each local bound
-    # by an enum-variant destructure arm.
-    fn register_enum_pattern_bindings
-        self:mut$TypeChecker
-        function_opt:mut$std::Option[common::Function]
-        variant:common::EnumVariant
-        match_subject_type:$common::Type
-    {
-        if 0 variant common::EnumVariant::bindings.length == then
-            return
-        fi
-        match_subject_type.clone = subject_type
-        if match_subject_type.borrow_target std::Option::Some(target) is then
-            target.clone = subject_type
-        fi
-        subject_type.match_base = base_enum_name
-        if
-            self.store base_enum_name.as_str variant.variant_name.as_str subject_type resolve_enum_pattern_types
-            std::Option::Some(inner_types) is
-        then
-            match_subject_type variant inner_types function_opt self.apply_enum_bindings
-        fi
-    }
-}
-
-fn resolve_enum_pattern_types
-    subject_type:$common::Type
-    variant_name:$str
-    enum_name:$str
-    store:$common::SymbolStore
--> std::Option[std::List[common::Type]] {
-    if enum_name store.enums.get_str std::Option::Some(casa_enum) is then
-        subject_type casa_enum build_enum_type_bindings = type_bindings
-        if variant_name casa_enum.variant_types.get_str std::Option::Some(payload_types) is then
-            std::List[common::Type]::new = resolved_types
-            for payload_type in payload_types.iter do
-                type_bindings payload_type.substitute_t resolved_types.push
-            done
-            resolved_types std::Option::Some return
-        fi
-    fi
-    std::Option[std::List[common::Type]]::None
-}
-
-fn build_enum_type_bindings
-    casa_enum:$common::CasaEnum
-    match_subject_type:$common::Type
--> std::Map[std::String common::Type] {
-    std::Map[std::String common::Type]::new = type_bindings
-    if 0 casa_enum common::CasaEnum::type_vars.length == then
-        type_bindings return
-    fi
-    if match_subject_type.type_params std::Option::Some(type_params) is then
-        0 = type_var_index: u64
-        while
-            type_var_index casa_enum common::CasaEnum::type_vars.length <
-            type_var_index type_params.length < &&
-        do
-            type_var_index type_params.get.clone
-            type_var_index casa_enum common::CasaEnum::type_vars.get.clone
-            type_bindings.set
-            1 += type_var_index
-        done
-    fi
-    type_bindings
-}
-
-impl TypeChecker {
-    fn apply_enum_bindings
-        self:mut$TypeChecker
-        function_opt:mut$std::Option[common::Function]
-        inner_types:$std::List[common::Type]
-        variant:$common::EnumVariant
-        match_subject_type:$common::Type
-    {
-        0 = bind_index: u64
-        while
-            bind_index variant common::EnumVariant::bindings.length <
-            bind_index inner_types.length < &&
-        do
-            bind_index variant common::EnumVariant::bindings.get = binding_var
-            bind_index inner_types.get.clone = binding_type
-            function_opt binding_type self.type_is_duplicable = binding_is_copy
-            binding_is_copy binding_type match_subject_type rules::pattern_binding_type = binding_type
-            function_opt binding_type binding_var.as_str self set_binding_type
-            1 += bind_index
-        done
+                subject.clone binding.name.clone bindings.set
+            }
+            common::PatternValue::Literal(literal) => {
+                subject literal.clone op self.check_literal_pattern
+            }
+            common::PatternValue::EnumVariant(variant) => {
+                if value pattern::is_wildcard then
+                    return
+                fi
+                if variant.enum_name.as_str "" == then
+                    owner.match_base.as_str variant.clone op self.diagnose_bare_enum_pattern
+                    return
+                fi
+                if owner.is_unknown_placeholder ! owner.match_base variant.enum_name != && then
+                    op.location f"Cannot match `{variant.enum_name}::{variant.variant_name}` on `{owner.format}`" common::ErrorKind::TypeMismatch self.diagnostics.record_error_string
+                    return
+                fi
+                self.store variant owner pattern::enum_payload_types = types
+                if variant.bindings.is_empty then
+                    return
+                fi
+                if types.length variant.bindings.length < then
+                    op.location f"Variant `{variant.enum_name}::{variant.variant_name}` has {types.length} inner value(s), but {variant.bindings.length} pattern(s) provided" common::ErrorKind::TypeMismatch self.diagnostics.record_error_string
+                    return
+                fi
+                0 = index: u64
+                for child in variant.bindings.iter do
+                    index types.get = typ
+                    function typ self.type_is_duplicable typ.clone subject rules::pattern_binding_type = child_type
+                    function op bindings child_type child self.collect_pattern_types
+                    1 += index
+                done
+            }
+            common::PatternValue::Struct(struct_pattern) => {
+                if owner.is_unknown_placeholder ! owner.match_base struct_pattern.struct_name != && then
+                    op.location f"Cannot match struct `{struct_pattern.struct_name}` on `{owner.format}`" common::ErrorKind::TypeMismatch self.diagnostics.record_error_string
+                    return
+                fi
+                self.store struct_pattern.struct_name.as_str owner resolve_struct_pattern_field_types match
+                    std::Option::Some(types) => types
+                    std::Option::None => return
+                end = types
+                for field in struct_pattern.bindings.iter do
+                    f"{struct_pattern.struct_name}::{field.first}" = accessor
+                    if
+                        op
+                            .location
+                            .file
+                            .as_str accessor.as_str self.store.is_private_from
+                    then
+                        op.location "Cannot bind a private struct field outside its module" common::ErrorKind::InvalidScope self.diagnostics.record_error
+                    fi
+                    if field.first types.get std::Option::Some(typ) is then
+                        function typ self.type_is_duplicable typ.clone subject rules::pattern_binding_type = child_type
+                        function op bindings child_type field.second self.collect_pattern_types
+                    else
+                        op.location f"Unknown pattern field `{field.first}`" common::ErrorKind::UndefinedName self.diagnostics.record_error_string
+                    fi
+                done
+            }
+            common::PatternValue::Alternatives(alternatives) => {
+                false = first
+                for alternative in alternatives.iter do
+                    std::Map[std::String common::Type]::new = current
+                    function op current subject alternative self.collect_pattern_types
+                    if first ! then
+                        for binding in current.iter do
+                            binding.second.clone binding.first.clone bindings.set
+                        done
+                        true = first
+                        continue
+                    fi
+                    current.length bindings.length == = compatible
+                    for binding in bindings.iter do
+                        if binding.first current.get std::Option::Some(typ) is then
+                            if binding.second typ.eq ! then
+                                false = compatible
+                            fi
+                        else
+                            false = compatible
+                        fi
+                    done
+                    if compatible ! then
+                        op.location "Pattern alternatives must bind the same names with the same types and capabilities" common::ErrorKind::TypeMismatch self.diagnostics.record_error
+                    fi
+                done
+            }
+        end
     }
 
     fn register_pattern_bindings
         self:mut$TypeChecker
-        function_opt:mut$std::Option[common::Function]
+        function:mut$std::Option[common::Function]
         op:mut$common::Op
-        match_subject_type:$common::Type
+        subject:$common::Type
     {
-        op common::pattern_value_of match
-            common::PatternValue::Struct(struct_pattern) => {
-                op.location match_subject_type struct_pattern function_opt self.register_struct_pattern_bindings
-            }
-            common::PatternValue::EnumVariant(variant) => {
-                if op pattern::pattern_is_wildcard then
-                    return
-                fi
-                match_subject_type variant function_opt self.register_enum_pattern_bindings
-            }
-            common::PatternValue::Literal => {
-            }
-        end
+        std::Map[std::String common::Type]::new = bindings
+        function op bindings subject op common::pattern_value_of self.collect_pattern_types
+        for binding in bindings.iter do
+            function binding.second binding.first.as_str self set_binding_type
+        done
     }
 
     fn record_match_pattern_origins
@@ -10337,7 +10286,7 @@ impl TypeChecker {
                             subject_place.clone = binding_place
                             if op common::pattern_value_of common::PatternValue::Struct(struct_pattern) is then
                                 for pair in struct_pattern.bindings.iter do
-                                    if pair.second binding_name == then
+                                    if binding_name.as_str pair.second pattern::binding_names common::string_list_contains then
                                         pair.first.as_str subject_place.project = binding_place
                                     fi
                                 done
@@ -10405,7 +10354,6 @@ impl TypeChecker {
                 fi
             }
         end
-        subject_type.clone std::Option::Some op common::Op::set_type_hint
     }
 
     # Return the error checkpoint after completing the previous arm, so its
@@ -10440,27 +10388,18 @@ impl TypeChecker {
             match_ctx.entry_facts_available = self.facts_available
             self.diagnostics.error_count = errors_before_arm
             match_ctx MatchContext::match_type.clone = match_subject_type
-            if source_guard.is_some then
-                "".to_str
+            match_ctx.coverage.clone = arm_coverage
+            op common::pattern_value_of = arm_pattern
+            if arm_pattern common::PatternValue::Alternatives(alternatives) is then
+                for alternative in alternatives.iter do
+                    op arm_coverage match_subject_type alternative self.record_pattern_coverage
+                done
             else
-                op pattern::pattern_covered_key
-            fi = covered_key
-            match_subject_type.match_base = arm_base
-
-            op common::pattern_value_of match
-                common::PatternValue::EnumVariant(variant) => {
-                    if op pattern::pattern_is_wildcard ! then
-                        arm_base.as_str variant op self.diagnose_bare_enum_pattern
-                    fi
-                }
-                common::PatternValue::Literal(literal_pattern) => {
-                    match_subject_type literal_pattern op self.check_literal_pattern
-                }
-                _ => {
-                }
-            end
-
-            covered_key.as_str op match_ctx self.detect_duplicate_arm
+                op arm_coverage match_subject_type arm_pattern self.record_pattern_coverage
+            fi
+            if source_guard.is_none then
+                arm_coverage = match_ctx.coverage
+            fi
 
             if match_ctx MatchContext::condition_present ! then
                 true match_ctx MatchContext::set_condition_present
@@ -10557,7 +10496,6 @@ impl TypeChecker {
 
             errors_before_arm self.diagnostics.error_count == self.facts_available &&
             = self.facts_available
-            covered_key match_ctx MatchContext::set_current_branch_label
             op common::Op::location.clone match_ctx MatchContext::set_current_branch_location
             match_ctx BranchFrame::BranchMatch = top_frame
         fi
@@ -10645,25 +10583,16 @@ impl TypeChecker {
                     f"Cannot check `{variant common::EnumVariant::enum_name}::{variant common::EnumVariant::variant_name}` on value of type `{typ.format}`" tc.raise_type_mismatch
                 fi
             fi
-            # Validate binding count for data-carrying variants
-            if 0 variant common::EnumVariant::bindings.length != then
-                tc.store variant.variant_name.as_str base.as_str get_enum_variant_arity = arity_opt
-                if arity_opt std::Option::Some(arity) is then
-                    if variant common::EnumVariant::bindings.length arity != then
-                        f"Variant `{variant common::EnumVariant::enum_name}::{variant common::EnumVariant::variant_name}` has {arity} inner value(s), but {variant common::EnumVariant::bindings.length} binding(s) provided" tc.raise_type_mismatch
-                    fi
-                fi
-                if tc.in_branch_condition ! then
-                    op common::Op::location "`is` with bindings is only allowed in if/elif conditions" common::ErrorKind::InvalidScope tc.diagnostics.record_error
-                    common::make_bool_type tc.stack_push_type
-                    return
-                fi
+            variant.clone common::PatternValue::EnumVariant = pattern_value
+            pattern_value pattern::binding_names = binding_names
+            if binding_names.is_empty ! tc.in_branch_condition ! && then
+                op.location "`is` with bindings is only allowed in if/elif conditions" common::ErrorKind::InvalidScope tc.diagnostics.record_error
+                common::make_bool_type tc.stack_push_type
+                return
             fi
-            # Track bindings in scope; implicit bindings cannot shadow outer vars.
-            for binding_var in variant common::EnumVariant::bindings.iter do
-                op binding_var.as_str tc.record_implicit_binding
+            for name in binding_names.iter do
+                op name.as_str tc.record_implicit_binding
             done
-            variant.bindings.clone = binding_names
             typ.clone = pattern_subject_type
             if pattern_subject_type.is_borrow ! then
                 if subject.capability ValueCapability::Shared is then
@@ -10674,7 +10603,11 @@ impl TypeChecker {
                     = pattern_subject_type
                 fi
             fi
-            pattern_subject_type variant.clone function_opt tc.register_enum_pattern_bindings
+            std::Map[std::String common::Type]::new = binding_types
+            function_opt op binding_types pattern_subject_type pattern_value tc.collect_pattern_types
+            for binding in binding_types.iter do
+                function_opt binding.second binding.first.as_str tc set_binding_type
+            done
             false = moves_payload
             for binding_name in binding_names.iter do
                 if binding_name.as_str tc.scope.lookup std::Option::Some(binding_type) is then
@@ -10846,78 +10779,20 @@ impl TypeChecker {
         op:mut$common::Op
         match_ctx:mut$MatchContext
     {
-        match_ctx MatchContext::match_type.clone = end_match_type
-        if end_match_type.borrow_target std::Option::Some(target) is then
-            target.clone = end_match_type
-        fi
-        end_match_type.match_base = end_base
-
-        # Build covered set
-        std::Set[std::String]::new = covered_set
-        for record in match_ctx MatchContext::branch_records.iter do
-            if record.as_str "__covered:" str::starts_with then
-                record.as_str 10 record.length 10 - str::substring covered_set.add
-            fi
-        done
-        common::MATCH_WILDCARD covered_set.has_str = has_wildcard
-
-        # Check exhaustiveness
-        if has_wildcard ! then
+        pattern::CoveragePattern::any pattern::CoverageRow::single = remaining
+        if match_ctx.coverage remaining pattern::is_useful then
+            match_ctx.match_type pattern::owned_type = subject
             if
-                end_base self
+                subject.match_base self
                     .store
-                    .enums
-                    .get std::Option::Some(end_enum) is
+                    .structs
+                    .has
             then
-                std::List[std::String]::new = missing
-                for variant_name in end_enum common::CasaEnum::variants.iter do
-                    if variant_name covered_set.has ! then
-                        variant_name.clone missing.push
-                    fi
-                done
-                if 0 missing.length != then
-                    std::List[std::String]::new = formatted_missing
-                    for variant_name in missing.iter do
-                        f"`{end_base}::{variant_name}`" formatted_missing.push
-                    done
-                    ", " formatted_missing.join_strings = missing_str
-                    op common::Op::location f"Non-exhaustive match, missing arms: {missing_str}" common::ErrorKind::TypeMismatch self.diagnostics.record_error_string
-                fi
-            fi
-        fi
-        if
-            end_base self
-                .store
-                .structs
-                .has has_wildcard ! &&
-        then
-            if end_base covered_set.has ! then
-                op common::Op::location f"Non-exhaustive match on struct `{end_match_type.format}`" common::ErrorKind::TypeMismatch self.diagnostics.record_error_string
-            fi
-        fi
-        # Literal exhaustiveness
-        if
-            "bool" end_base.as_str ==
-            end_match_type.is_integer_type_t ||
-            "char" end_base.as_str == ||
-            "str" end_base.as_str == ||
-        then
-            if has_wildcard ! then
-                if "bool" end_base.as_str == then
-                    std::List[std::String]::new = bool_missing
-                    if "true".to_str covered_set.has ! then
-                        "true".to_str bool_missing.push
-                    fi
-                    if "false".to_str covered_set.has ! then
-                        "false".to_str bool_missing.push
-                    fi
-                    if 0 bool_missing.length != then
-                        op common::Op::location "Non-exhaustive match on `bool`" common::ErrorKind::TypeMismatch self.diagnostics.record_error
-                    fi
-                else
-                    op common::Op::location f"Non-exhaustive match on type `{end_base}`. A wildcard `_` arm is required" common::ErrorKind::TypeMismatch self.diagnostics.record_error_string
-                fi
-            fi
+                f"Non-exhaustive match on struct `{subject.format}`"
+            else
+                f"Non-exhaustive match on `{subject.format}`. Add the missing patterns or a wildcard `_` arm"
+            fi = message
+            op.location message common::ErrorKind::TypeMismatch self.diagnostics.record_error_string
         fi
     }
 
@@ -12506,19 +12381,28 @@ impl TypeChecker {
         end
     }
 
-    fn collect_pattern_dependency self:mut$TypeChecker pattern:$common::PatternValue {
-        pattern match
+    fn collect_pattern_dependency self:mut$TypeChecker value:$common::PatternValue {
+        value match
             common::PatternValue::Struct(struct_pattern) => {
-                if "" struct_pattern.struct_name.as_str != then
-                    struct_pattern.struct_name.as_str self.add_symbol_dependency
-                fi
+                struct_pattern.struct_name.as_str self.add_symbol_dependency
+                for field in struct_pattern.bindings.iter do
+                    field.second self.collect_pattern_dependency
+                done
             }
             common::PatternValue::EnumVariant(variant) => {
-                if "" variant.enum_name.as_str != then
+                if variant.enum_name.is_empty ! then
                     variant.enum_name.as_str self.add_symbol_dependency
                 fi
+                for child in variant.bindings.iter do
+                    child self.collect_pattern_dependency
+                done
             }
-            common::PatternValue::Literal => {
+            common::PatternValue::Alternatives(alternatives) => {
+                for alternative in alternatives.iter do
+                    alternative self.collect_pattern_dependency
+                done
+            }
+            _ => {
             }
         end
     }
@@ -12639,7 +12523,7 @@ impl TypeChecker {
                 variant.enum_name.as_str self.add_symbol_dependency
             }
             common::OpValue::IsCheck(variant) => {
-                variant.enum_name.as_str self.add_symbol_dependency
+                variant.clone common::PatternValue::EnumVariant self.collect_pattern_dependency
             }
             common::OpValue::SizeOf(target_type) => {
                 target_type.clone SemanticDependency::Type self.ordered_facts.push
@@ -14917,31 +14801,19 @@ impl TypeChecker {
                 parameter.unwrap = declaration
             fi
         fi
+        std::List[common::Location]::new = alternatives
         operation.value match
             common::OpValue::IsCheck(variant) => {
-                if name variant.binding_locations.get_str std::Option::Some(location) is then
-                    location.clone = declaration
-                else
-                    return
-                fi
+                name variant.clone common::PatternValue::EnumVariant pattern::find_binding match
+                    std::Option::Some(location) => location = declaration
+                    std::Option::None => return
+                end
             }
             common::OpValue::MatchArm(arm) => {
-                arm.pattern_value match
-                    common::PatternValue::EnumVariant(variant) => {
-                        if name variant.binding_locations.get_str std::Option::Some(location) is then
-                            location.clone = declaration
-                        else
-                            return
-                        fi
-                    }
-                    common::PatternValue::Struct(pattern) => {
-                        if name pattern.binding_locations.get_str std::Option::Some(location) is then
-                            location.clone = declaration
-                        else
-                            return
-                        fi
-                    }
-                    _ => return
+                name arm.pattern_value pattern::binding_locations = alternatives
+                name arm.pattern_value pattern::find_binding match
+                    std::Option::Some(location) => location = declaration
+                    std::Option::None => return
                 end
             }
             _ => {
@@ -14953,7 +14825,7 @@ impl TypeChecker {
             .declarations
             .length = identity
         declaration self.get_binding_visibility = visibility
-        false typ resolve_numeric_literal_default visibility owner declaration name.to_str operation.id
+        alternatives false typ resolve_numeric_literal_default visibility owner declaration name.to_str operation.id
         name typ self.format_callable_borrow_sources binding::Binding self
             .checks
             .bindings
@@ -15294,32 +15166,40 @@ fn resolve_pattern_payload_type
     store:$common::SymbolStore
 -> std::Option[common::Type] {
     pattern_value match
+        common::PatternValue::Binding(binding) => {
+            if binding.name name == then
+                subject_type.clone std::Option::Some return
+            fi
+        }
         common::PatternValue::Struct(struct_pattern) => {
             store struct_pattern.struct_name.as_str subject_type resolve_struct_pattern_field_types match
                 std::Option::Some(types) => types
                 std::Option::None => std::Option[common::Type]::None return
             end = types
             for field in struct_pattern.bindings.iter do
-                if field.second name != then
-                    continue
-                fi
                 if field.first types.get std::Option::Some(typ) is then
-                    typ.clone std::Option::Some return
+                    if store typ name field.second resolve_pattern_payload_type std::Option::Some(found) is then
+                        found std::Option::Some return
+                    fi
                 fi
             done
         }
         common::PatternValue::EnumVariant(variant) => {
-            store variant.enum_name.as_str variant.variant_name.as_str subject_type resolve_enum_pattern_types match
-                std::Option::Some(types) => types
-                std::Option::None => std::Option[common::Type]::None return
-            end = types
+            store variant subject_type pattern::enum_payload_types = types
             0 = index: u64
-            for binding_name in variant.bindings.iter do
-                if binding_name name == index types.length < && then
-                    index types.get.clone std::Option::Some return
+            for child in variant.bindings.iter do
+                if index types.length < then
+                    if store index types.get name child resolve_pattern_payload_type std::Option::Some(found) is then
+                        found std::Option::Some return
+                    fi
                 fi
                 1 += index
             done
+        }
+        common::PatternValue::Alternatives(alternatives) => {
+            if alternatives.is_empty ! then
+                store subject_type name 0 alternatives.get resolve_pattern_payload_type return
+            fi
         }
         _ => {
         }

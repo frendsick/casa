@@ -2,6 +2,7 @@
 import "std" as std
 import "abi" as abi
 import "common" as common
+import "pattern" as pattern
 import "semantic_body" as semantic_body
 import "error" as error
 import "typechecker" as typechecker
@@ -423,10 +424,7 @@ impl FunctionPlanner {
         0
     }
 
-    fn binding_borrows_scalar self:mut$FunctionPlanner name:$str declared:$common::Type -> bool {
-        if self.state.store declared common::type_has_scalar_storage ! then
-            false return
-        fi
+    fn binding_is_borrow self:mut$FunctionPlanner name:$str -> bool {
         if self.function std::Option::Some(function) is then
             for variable in function.variables.iter do
                 if variable.name.as_str name == then
@@ -860,77 +858,6 @@ impl FunctionPlanner {
         function_name InstValue::FnCall bytecode.push
     }
 
-    fn compile_enum_pattern_destruction
-        compiler:mut$FunctionPlanner
-        store:$common::SymbolStore
-        variant:$common::EnumVariant
-        typ:$common::Type
-        bytecode:mut$std::List[InstValue]
-    {
-        if typ compiler.is_copy_aggregate then
-            InstValue::Drop bytecode.push return
-        fi
-        if typ compiler.destruction_needs_function ! then
-            InstValue::Drop bytecode.push
-            return
-        fi
-        bytecode typ compiler.compile_drop_hook
-        if typ.clone common::Type::Generic(generic) is then
-            if generic.base store.enums.get std::Option::Some(owned_enum) is then
-                if owned_enum common::has_inner_values then
-                    variant.bindings.length = skipped_count
-                    StorageKind::Heap bytecode skipped_count variant.variant_name.as_str owned_enum typ
-                    compiler.compile_enum_variant_fields
-                    return
-                fi
-            fi
-        fi
-        InstValue::Drop bytecode.push
-    }
-
-    fn compile_match_destruction
-        compiler:mut$FunctionPlanner
-        store:$common::SymbolStore
-        pattern_value:$common::PatternValue
-        typ:$common::Type
-        bytecode:mut$std::List[InstValue]
-    {
-        if typ compiler.is_copy_aggregate then
-            InstValue::Drop bytecode.push return
-        fi
-        if pattern_value common::PatternValue::EnumVariant(variant) is then
-            if pattern_value is_wildcard ! then
-                bytecode typ variant store compiler.compile_enum_pattern_destruction
-                return
-            fi
-        fi
-        if typ compiler.destruction_needs_function ! then
-            InstValue::Drop bytecode.push
-            return
-        fi
-        bytecode typ compiler.compile_drop_hook
-        if typ.clone common::Type::Generic(generic) is then
-            if generic.base store.structs.get std::Option::Some(owned_struct) is then
-                std::List[std::String]::new = skipped
-                if pattern_value common::PatternValue::Struct(struct_pattern) is then
-                    struct_pattern.bindings.keys = skipped
-                fi
-                StorageKind::Heap bytecode skipped owned_struct typ compiler.compile_struct_fields
-                return
-            fi
-            if generic.base store.enums.get std::Option::Some(owned_enum) is then
-                if owned_enum common::has_inner_values ! then
-                    InstValue::Drop bytecode.push return
-                fi
-                if pattern_value common::PatternValue::EnumVariant(variant) is then
-                    StorageKind::Heap bytecode owned_enum typ compiler.compile_enum_fields
-                    return
-                fi
-            fi
-        fi
-        InstValue::Drop bytecode.push
-    }
-
     fn owner_flag compiler:mut$FunctionPlanner name:$str -> u64 {
         if name compiler.owner_flags.get_copy_str std::Option::Some(flag) is then
             flag return
@@ -1231,61 +1158,6 @@ impl FunctionPlanner {
     }
 }
 
-# Compile if block
-impl FunctionPlanner {
-    fn emit_struct_arm
-        compiler:mut$FunctionPlanner
-        store:$common::SymbolStore
-        struct_pattern:$common::StructPattern
-        subject_type:$common::Type
-        facts:$semantic_body::OperationFacts
-        bytecode:mut$std::List[InstValue]
-    {
-        struct_pattern common::StructPattern::struct_name store.structs.get = casa_struct_opt
-        if casa_struct_opt.is_none then
-            f"Struct `{struct_pattern.struct_name}` is missing during bytecode compilation" compiler.record_failure_string
-            return
-        fi
-        casa_struct_opt.unwrap = declaration
-        subject_type.clone = owner
-        if subject_type.borrow_target std::Option::Some(target) is then
-            target.clone = owner
-        fi
-        if owner compiler.is_copy_aggregate then
-            declaration owner common::copy_storage_struct
-        else
-            declaration.clone
-        fi = casa_struct
-        casa_struct.type_vars owner common::aggregate_type_bindings = substitutions
-        0 = index: u64
-        while index casa_struct common::CasaStruct::members.length < do
-            index casa_struct common::CasaStruct::members.get = member
-            member common::Member::name.as_str = field_name: $str
-            index casa_struct compiler.get_struct_field_plan = plan
-            if
-                field_name struct_pattern common::StructPattern::bindings.get_str std::Option::Some(var_name) is
-            then
-                InstValue::Dup bytecode.push
-                if 0 plan.offset < then
-                    plan.offset i64::try_from.unwrap InstValue::Push bytecode.push
-                    InstValue::Add bytecode.push
-                fi
-                substitutions member.typ.substitute_t = member_type
-                var_name.as_str facts.resolve_storage_name = storage_name
-                if member_type storage_name.as_str compiler.binding_borrows_scalar ! then
-                    if subject_type.is_borrow then
-                        bytecode plan member_type compiler.emit_field_projection
-                    else
-                        bytecode plan member_type compiler.emit_field_load
-                    fi
-                fi
-                bytecode storage_name.as_str compiler.emit_variable_set
-            fi
-            1 += index
-        done
-    }
-}
-
 fn emit_int_eq value:$i64 bytecode:mut$std::List[InstValue] {
     value copy InstValue::Push bytecode.push
     InstValue::Eq bytecode.push
@@ -1299,145 +1171,235 @@ fn require_variant_ordinal variant:$common::EnumVariant compiler:mut$FunctionPla
     0
 }
 
-impl FunctionPlanner {
-    fn emit_literal_arm
-        compiler:mut$FunctionPlanner
-        literal_pattern:$common::LiteralPattern
-        is_last:bool
-        next_arm:mut$std::Option[u64]
-        bytecode:mut$std::List[InstValue]
-    {
-        if is_last then
-            return
-        fi
-        InstValue::Dup bytecode.push
-        literal_pattern.value match
-            common::LiteralValue::Str(str_value) => {
-                str_value.as_str compiler.intern_string = str_index
-                str_index InstValue::PushStr bytecode.push
-                InstValue::StrEq bytecode.push
-            }
-            common::LiteralValue::Int(int_value) => {
-                bytecode int_value.value emit_int_eq
-            }
-            common::LiteralValue::Char(char_value) => {
-                bytecode char_value emit_int_eq
-            }
-            common::LiteralValue::Bool(bool_value) => {
-                bytecode if bool_value then 1 else 0 fi emit_int_eq
-            }
-        end
-        if next_arm std::Option::Some(label) is then
-            label InstValue::JumpNe bytecode.push
-        else
-            "Match arm has no following label during bytecode compilation" compiler.record_failure
-        fi
-    }
+# Each projection retains its storage plan so tests can inspect fields without
+# allocating copies, while binding and destruction use the same field path.
+struct PatternField {
+    pattern: common::PatternValue
+    typ:     common::Type
+    plan:    common::FieldStoragePlan
 }
 
 impl FunctionPlanner {
-    fn emit_enum_arm
-        compiler:mut$FunctionPlanner
-        variant:$common::EnumVariant
-        is_wildcard:bool
-        is_last:bool
-        next_arm:mut$std::Option[u64]
-        facts:$semantic_body::OperationFacts
-        subject_type:$common::Type
-        bytecode:mut$std::List[InstValue]
-    {
-        if is_wildcard then
-            return
-        fi
-        variant.enum_name.as_str = enum_name: $str
-        if
-            "" enum_name.as_str != enum_name compiler
-                .state
-                .store
-                .enums
-                .has_str &&
-        then
-            enum_name compiler
-                .state
-                .store
-                .enums
-                .get_str
-                .unwrap common::has_inner_values = has_payload
-            if has_payload then
-                if is_last ! then
-                    InstValue::Dup bytecode.push
-                    InstValue::Load64 bytecode.push
-                    compiler variant require_variant_ordinal InstValue::Push bytecode.push
-                    InstValue::Eq bytecode.push
-                    if next_arm std::Option::Some(label) is then
-                        label InstValue::JumpNe bytecode.push
-                    else
-                        "Match arm has no following label during bytecode compilation" compiler.record_failure
-                    fi
+    fn pattern_fields
+        self:mut$FunctionPlanner
+        value:$common::PatternValue
+        subject:$common::Type
+    -> std::List[PatternField] {
+        std::List[PatternField]::new = fields
+        subject pattern::owned_type = owner
+        value match
+            common::PatternValue::Struct(struct_pattern) => {
+                struct_pattern.struct_name self
+                    .state
+                    .store
+                    .structs
+                    .get
+                    .unwrap = declaration
+                if owner self.is_copy_aggregate then
+                    declaration owner common::copy_storage_struct
+                else
+                    declaration.clone
+                fi = concrete
+                concrete.type_vars owner common::aggregate_type_bindings = substitutions
+                0 = index: u64
+                for member in concrete.members.iter do
+                    member.name struct_pattern.bindings.get match
+                        std::Option::Some(child) => child.clone
+                        std::Option::None => pattern::wildcard
+                    end = child
+                    index concrete self.get_struct_field_plan
+                    substitutions member.typ.substitute_t child PatternField fields.push
+                    1 += index
+                done
+            }
+            common::PatternValue::EnumVariant(variant) => {
+                if value pattern::is_wildcard then
+                    fields return
                 fi
-                enum_name compiler
+                variant.enum_name self
                     .state
                     .store
                     .enums
-                    .get_str
+                    .get
                     .unwrap = declaration
-                subject_type.clone = owner
-                if subject_type.borrow_target std::Option::Some(target) is then
-                    target.clone = owner
-                fi
-                if owner compiler.is_copy_aggregate then
+                if owner self.is_copy_aggregate then
                     declaration owner common::copy_storage_enum
                 else
                     declaration.clone
-                fi = casa_enum
-                owner facts casa_enum variant bytecode compiler.emit_enum_arm_bindings
-                return
-            fi
-        fi
+                fi = concrete
+                self.state.store variant owner pattern::enum_payload_types = types
+                0 = index: u64
+                for typ in types.iter do
+                    if index variant.bindings.length < then
+                        index variant
+                            .bindings
+                            .get
+                            .clone
+                    else
+                        pattern::wildcard
+                    fi = child
+                    index variant.variant_name.as_str concrete self.get_enum_field_plan
+                    typ.clone child PatternField fields.push
+                    1 += index
+                done
+            }
+            _ => {
+            }
+        end
+        fields
+    }
 
-        if is_last then
-            return
-        fi
-        InstValue::Dup bytecode.push
-        compiler variant require_variant_ordinal InstValue::Push bytecode.push
-        InstValue::Eq bytecode.push
-        if next_arm std::Option::Some(label) is then
-            label InstValue::JumpNe bytecode.push
-        else
-            "Match arm has no following label during bytecode compilation" compiler.record_failure
+    fn emit_pattern_field_address
+        self:mut$FunctionPlanner
+        field:$PatternField
+        subject:u64
+        bytecode:mut$std::List[InstValue]
+    {
+        subject InstValue::LocalGet bytecode.push
+        if 0 field.plan.offset != then
+            field.plan.offset i64::try_from.unwrap InstValue::Push bytecode.push
+            InstValue::Add bytecode.push
         fi
     }
-}
 
-impl FunctionPlanner {
-    fn emit_enum_arm_bindings
-        compiler:mut$FunctionPlanner
+    # Tests leave the stack unchanged on either edge. No binding owns a field
+    # until every nested test and the shared arm guard have succeeded.
+    fn emit_pattern_test
+        self:mut$FunctionPlanner
+        value:$common::PatternValue
+        typ:$common::Type
+        subject:u64
+        failure:u64
         bytecode:mut$std::List[InstValue]
-        variant:$common::EnumVariant
-        casa_enum:$common::CasaEnum
-        facts:$semantic_body::OperationFacts
-        owner:$common::Type
     {
-        casa_enum.type_vars owner common::aggregate_type_bindings = substitutions
-        variant.variant_name casa_enum
-            .variant_types
-            .get
-            .unwrap = payload_types
-        0 = index: u64
-        while index variant common::EnumVariant::bindings.length < do
-            index variant.variant_name.as_str casa_enum compiler.get_enum_field_plan = plan
-            InstValue::Dup bytecode.push
-            plan.offset i64::try_from.unwrap InstValue::Push bytecode.push
-            InstValue::Add bytecode.push
-            substitutions index payload_types.get.substitute_t = payload_type
-            index variant common::EnumVariant::bindings.get = var_name
-            var_name.as_str facts.resolve_storage_name = storage_name
-            if payload_type storage_name.as_str compiler.binding_borrows_scalar ! then
-                bytecode plan payload_type compiler.emit_field_load
+        value match
+            common::PatternValue::Literal(literal) => {
+                subject InstValue::LocalGet bytecode.push
+                literal.value match
+                    common::LiteralValue::Str(text) => {
+                        text.as_str self.intern_string InstValue::PushStr bytecode.push
+                        InstValue::StrEq bytecode.push
+                    }
+                    common::LiteralValue::Int(number) => bytecode number.value emit_int_eq
+                    common::LiteralValue::Char(character) => bytecode character emit_int_eq
+                    common::LiteralValue::Bool(boolean) => {
+                        bytecode if boolean then 1 else 0 fi emit_int_eq
+                    }
+                end
+                failure InstValue::JumpNe bytecode.push
+            }
+            common::PatternValue::EnumVariant(variant) => {
+                if value pattern::is_wildcard then
+                    return
+                fi
+                subject InstValue::LocalGet bytecode.push
+                if
+                    variant.enum_name self
+                        .state
+                        .store
+                        .enums
+                        .get
+                        .unwrap common::has_inner_values
+                then
+                    InstValue::Load64 bytecode.push
+                fi
+                self variant require_variant_ordinal InstValue::Push bytecode.push
+                InstValue::Eq bytecode.push
+                failure InstValue::JumpNe bytecode.push
+            }
+            _ => {
+            }
+        end
+        for field in typ value self.pattern_fields.iter do
+            if field.pattern common::PatternValue::Binding is field.pattern pattern::is_wildcard || then
+                continue
             fi
-            bytecode storage_name.as_str compiler.emit_variable_set
-            1 += index
+            bytecode subject field self.emit_pattern_field_address
+            bytecode field.plan field.typ self.emit_field_projection
+            if field.typ.borrow_target std::Option::Some(target) is then
+                if self.state.store target common::type_has_scalar_storage then
+                    bytecode target self.emit_typed_load
+                fi
+            fi
+            self.allocate_local = child
+            child InstValue::LocalSet bytecode.push
+            bytecode failure child field.typ field.pattern self.emit_pattern_test
         done
+    }
+
+    fn emit_pattern_bindings
+        self:mut$FunctionPlanner
+        value:$common::PatternValue
+        typ:$common::Type
+        subject:u64
+        facts:$semantic_body::OperationFacts
+        bytecode:mut$std::List[InstValue]
+    {
+        for field in typ value self.pattern_fields.iter do
+            if field.pattern pattern::binding_names.is_empty then
+                continue
+            fi
+            bytecode subject field self.emit_pattern_field_address
+            if field.pattern common::PatternValue::Binding(binding) is then
+                binding.name.as_str facts.resolve_storage_name = storage_name
+                if storage_name.as_str self.binding_is_borrow then
+                    if self.state.store field.typ common::type_has_scalar_storage ! then
+                        bytecode field.plan field.typ self.emit_field_projection
+                    fi
+                else
+                    bytecode field.plan field.typ self.emit_field_load
+                fi
+                bytecode storage_name.as_str self.emit_variable_set
+            else
+                bytecode field.plan field.typ self.emit_field_projection
+                self.allocate_local = child
+                child InstValue::LocalSet bytecode.push
+                bytecode facts child field.typ field.pattern self.emit_pattern_bindings
+            fi
+        done
+    }
+
+    # Consume the successful subject. Bound non-Copy leaves have moved. All
+    # other fields and every owned wrapper are destroyed exactly once.
+    fn compile_pattern_destruction
+        self:mut$FunctionPlanner
+        value:$common::PatternValue
+        typ:$common::Type
+        bytecode:mut$std::List[InstValue]
+        storage:StorageKind
+    {
+        if typ.is_borrow typ self.is_copy_aggregate || then
+            InstValue::Drop bytecode.push return
+        fi
+        if value common::PatternValue::Binding is then
+            InstValue::Drop bytecode.push return
+        fi
+        if value pattern::binding_names.is_empty then
+            storage bytecode typ self.compile_destruction_in_storage return
+        fi
+        bytecode typ self.compile_drop_hook
+        self.allocate_local = subject
+        subject InstValue::LocalSet bytecode.push
+        typ value self.pattern_fields = fields
+        fields.length = index
+        while 0 index != do
+            1 -= index
+            index fields.get = field
+            bytecode subject field self.emit_pattern_field_address
+            if field.typ self.is_copy_aggregate then
+                bytecode field.plan field.typ self.compile_field_destruction
+            else
+                bytecode field.plan field.typ self.emit_field_projection
+                if field.plan.stores_inline then
+                    StorageKind::Local
+                else
+                    StorageKind::Heap
+                fi
+                bytecode field.typ field.pattern self.compile_pattern_destruction
+            fi
+        done
+        subject InstValue::LocalGet bytecode.push
+        bytecode storage self.finish_destruction
     }
 }
 
@@ -1521,89 +1483,29 @@ impl FunctionPlanner {
         op:$semantic_body::OperationFacts
         bytecode:mut$std::List[InstValue]
     {
-        variant.enum_name.clone = enum_name
-        enum_name store.enums.get = casa_enum_opt
-        if casa_enum_opt.is_none then
-            f"Enum `{enum_name}` is missing during bytecode compilation" compiler.record_failure_string
-            return
-        fi
-        casa_enum_opt.unwrap = declaration
-        subject_type.clone = owner
-        if subject_type.borrow_target std::Option::Some(target) is then
-            target.clone = owner
-        fi
-        if owner compiler.is_copy_aggregate then
-            declaration owner common::copy_storage_enum
-        else
-            declaration.clone
-        fi = casa_enum
-
-        if casa_enum common::has_inner_values ! then
-            # Plain enum: compare ordinal directly
-            compiler variant require_variant_ordinal InstValue::Push bytecode.push
-            InstValue::Eq bytecode.push
-            return
-        fi
-
-        if 0 variant common::EnumVariant::bindings.length == then
-            # Data-carrying enum, no bindings: load ordinal and compare
-            InstValue::Load64 bytecode.push
-            compiler variant require_variant_ordinal InstValue::Push bytecode.push
-            InstValue::Eq bytecode.push
-            return
-        fi
-
-        # Data-carrying enum with bindings
-        compiler.allocate_local = temp_ptr
-
-        compiler.new_label = skip_bindings
-
-        # Save enum pointer
-        temp_ptr InstValue::LocalSet bytecode.push
-
-        # Load ordinal and compare
-        temp_ptr InstValue::LocalGet bytecode.push
-        InstValue::Load64 bytecode.push
-        compiler variant require_variant_ordinal InstValue::Push bytecode.push
-        InstValue::Eq bytecode.push
-
-        # Duplicate bool
-        InstValue::Dup bytecode.push
-        skip_bindings InstValue::JumpNe bytecode.push
-
-        # Extract bindings
-        variant.variant_name casa_enum
-            .variant_types
-            .get
-            .unwrap = payload_types
-        casa_enum.type_vars owner common::aggregate_type_bindings = substitutions
-        0 = index: u64
-        while index variant common::EnumVariant::bindings.length < do
-            index variant.variant_name.as_str casa_enum compiler.get_enum_field_plan = plan
-            temp_ptr InstValue::LocalGet bytecode.push
-            plan.offset i64::try_from.unwrap InstValue::Push bytecode.push
-            InstValue::Add bytecode.push
-            substitutions index payload_types.get.substitute_t = payload_type
-            bytecode plan payload_type compiler.emit_field_load
-            index variant common::EnumVariant::bindings.get = var_name
-            var_name.as_str op.resolve_storage_name = storage_name
-            bytecode storage_name.as_str compiler.emit_variable_set
-            1 += index
-        done
-
+        variant.clone common::PatternValue::EnumVariant = value
+        compiler.allocate_local = subject
+        compiler.new_label = failed
+        compiler.new_label = finished
+        subject InstValue::LocalSet bytecode.push
+        bytecode failed subject subject_type value compiler.emit_pattern_test
+        bytecode op subject subject_type value compiler.emit_pattern_bindings
         if op.effects std::Option::Some(ownership) is then
             for event in ownership.assignments.iter do
                 bytecode event.generation event.storage_name.as_str compiler.set_owner_flag
             done
             if ownership.conditional_move std::Option::Some(subject_name) is then
-                temp_ptr InstValue::LocalGet bytecode.push
-                bytecode subject_type variant store compiler.compile_enum_pattern_destruction
-                subject_name.as_str op.resolve_storage_name = subject_storage
-                bytecode 0 subject_storage.as_str compiler.set_owner_flag
+                subject InstValue::LocalGet bytecode.push
+                StorageKind::Heap bytecode subject_type value compiler.compile_pattern_destruction
+                subject_name.as_str op.resolve_storage_name = storage
+                bytecode 0 storage.as_str compiler.set_owner_flag
             fi
         fi
-
-        skip_bindings InstValue::Label bytecode.push
+        1 InstValue::Push bytecode.push
+        finished InstValue::Jump bytecode.push
+        failed InstValue::Label bytecode.push
+        0 InstValue::Push bytecode.push
+        finished InstValue::Label bytecode.push
     }
 }
 
@@ -2903,6 +2805,11 @@ impl FunctionPlanner {
             fi
             arm.pattern match
                 common::PatternValue::EnumVariant(variant) => {
+                    for child in variant.bindings.iter do
+                        if child common::PatternValue::Binding is ! child pattern::is_wildcard ! && then
+                            std::Option[EnumDispatch]::None return
+                        fi
+                    done
                     if common::MATCH_WILDCARD variant.variant_name.as_str != then
                         variant.enum_name.clone = enum_name
                     else
@@ -2950,10 +2857,12 @@ impl FunctionPlanner {
     {
         bytecode match_body.entry self.compile_facts
         self.new_label = end_label
+        self.allocate_local = subject
+        subject InstValue::LocalSet bytecode.push
         match_body self.plan_enum_dispatch = dispatch
         dispatch = dispatch_ref: $std::Option[EnumDispatch]
         if dispatch_ref std::Option::Some(plan) is then
-            InstValue::Dup bytecode.push
+            subject InstValue::LocalGet bytecode.push
             if plan.has_payload then
                 InstValue::Load64 bytecode.push
             fi
@@ -2973,18 +2882,31 @@ impl FunctionPlanner {
             if 0 index != then
                 bytecode arm.entry self.compile_facts
             fi
-            std::Option[u64]::None = next_arm
-            if is_last ! then
-                next_label std::Option::Some = next_arm
+            std::List[common::PatternValue]::new = alternatives
+            if arm.pattern common::PatternValue::Alternatives(values) is then
+                values.clone = alternatives
+            else
+                arm.pattern.clone alternatives.push
             fi
-            arm.pattern match
-                common::PatternValue::Struct(pattern) => bytecode arm.entry arm.subject_type pattern self.state.store self.emit_struct_arm
-                common::PatternValue::Literal(pattern) => bytecode next_arm is_last pattern self.emit_literal_arm
-                common::PatternValue::EnumVariant(variant) => {
-                    arm.pattern is_wildcard = wildcard
-                    bytecode arm.subject_type arm.entry next_arm is_last dispatch.is_some || wildcard variant self.emit_enum_arm
-                }
-            end
+            self.allocate_local = selected
+            self.new_label = matched
+            0 = alternative_index: u64
+            for alternative in alternatives.iter do
+                next_label = failed
+                if alternative_index 1 + alternatives.length < then
+                    self.new_label = failed
+                fi
+                bytecode failed subject arm.subject_type alternative self.emit_pattern_test
+                bytecode arm.entry subject arm.subject_type alternative self.emit_pattern_bindings
+                alternative_index i64::try_from.unwrap InstValue::Push bytecode.push
+                selected InstValue::LocalSet bytecode.push
+                matched InstValue::Jump bytecode.push
+                if alternative_index 1 + alternatives.length < then
+                    failed InstValue::Label bytecode.push
+                fi
+                1 += alternative_index
+            done
+            matched InstValue::Label bytecode.push
             if
                 arm
                     .guard
@@ -3002,7 +2924,22 @@ impl FunctionPlanner {
                     bytecode event.generation event.storage_name.as_str self.set_owner_flag
                 done
             fi
-            bytecode arm.subject_type arm.pattern self.state.store self.compile_match_destruction
+            self.new_label = committed
+            0 = destruction_index: u64
+            for alternative in alternatives.iter do
+                self.new_label = next_destruction
+                if destruction_index 1 + alternatives.length < then
+                    selected InstValue::LocalGet bytecode.push
+                    bytecode destruction_index i64::try_from.unwrap emit_int_eq
+                    next_destruction InstValue::JumpNe bytecode.push
+                fi
+                subject InstValue::LocalGet bytecode.push
+                StorageKind::Heap bytecode arm.subject_type alternative self.compile_pattern_destruction
+                committed InstValue::Jump bytecode.push
+                next_destruction InstValue::Label bytecode.push
+                1 += destruction_index
+            done
+            committed InstValue::Label bytecode.push
             bytecode arm.body self.compile_body
             if is_last then
                 bytecode match_body.exit self.compile_facts
@@ -6257,12 +6194,4 @@ fn escape_string s:$str -> std::String {
         1 += index
     done
     builder
-}
-
-fn is_wildcard pattern_value:$common::PatternValue -> bool {
-    if pattern_value common::PatternValue::EnumVariant(variant) is then
-        variant.variant_name.as_str "_" == variant.bindings.is_empty &&
-    else
-        false
-    fi
 }

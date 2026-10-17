@@ -1,68 +1,295 @@
-# Phase-independent match-pattern inspection.
-#
-# Compiler phases use these helpers without re-reading operation metadata.
+# Shared recursive pattern inspection and structural coverage.
 import "std" as std
 import "common" as common
 
-# pattern_is_wildcard: true only for a bare `_` wildcard arm.
-# Currently stored as an EnumVariant whose variant_name is "_".
-pub fn pattern_is_wildcard op:$common::Op -> bool {
-    op common::pattern_value_of match
-        common::PatternValue::EnumVariant(variant) => {
-            common::MATCH_WILDCARD variant.variant_name.as_str ==
-        }
-        common::PatternValue::Struct => false
-        common::PatternValue::Literal => false
-    end
+pub fn is_wildcard value:$common::PatternValue -> bool {
+    if value common::PatternValue::EnumVariant(variant) is then
+        common::MATCH_WILDCARD variant.variant_name.as_str == return
+    fi
+    false
 }
 
-# pattern_is_guarded — true when the arm carries a guard expression.
-# Guarded arms never cover their pattern for duplicate-arm and
-# exhaustiveness analysis (they may still fail at runtime).
+pub fn pattern_is_wildcard op:$common::Op -> bool { op common::pattern_value_of is_wildcard }
+
 pub fn pattern_is_guarded op:$common::Op -> bool { op common::pattern_guard_ops.length 0 != }
 
-# pattern_covered_key: stable key used for duplicate-arm detection and for
-# exhaustiveness bookkeeping. Mirrors the `__covered:{...}` keys the
-# operation semantics already produces.
-pub fn pattern_covered_key op:$common::Op -> std::String {
-    if op pattern_is_guarded then
-        "".to_str return
-    fi
-    op common::pattern_value_of match
-        common::PatternValue::Struct(struct_pat) => {
-            f"__covered:{struct_pat.struct_name}"
-        }
-        common::PatternValue::Literal(literal_pat) => {
-            f"__covered:{literal_pat.raw}"
-        }
+pub fn make_binding_patterns names:$std::List[std::String] -> std::List[common::PatternValue] {
+    std::List[common::PatternValue]::new = patterns
+    for name in names.iter do
+        common::empty_location name.clone common::PatternBinding common::PatternValue::Binding patterns.push
+    done
+    patterns
+}
+
+pub fn collect_bindings value:$common::PatternValue -> std::List[common::PatternBinding] {
+    std::List[common::PatternBinding]::new = bindings
+    value match
+        common::PatternValue::Binding(binding) => binding.clone bindings.push
         common::PatternValue::EnumVariant(variant) => {
-            f"__covered:{variant.variant_name}"
+            for child in variant.bindings.iter do
+                child collect_bindings bindings.append
+            done
         }
+        common::PatternValue::Struct(pattern) => {
+            for field in pattern.bindings.iter do
+                field.second collect_bindings bindings.append
+            done
+        }
+        common::PatternValue::Alternatives(alternatives) => {
+            # All alternatives declare the same binding contract.
+            if alternatives.is_empty ! then
+                0 alternatives.get collect_bindings bindings.append
+            fi
+        }
+        common::PatternValue::Literal(_) => {
+        }
+    end
+    bindings
+}
+
+pub fn binding_names value:$common::PatternValue -> std::List[std::String] {
+    std::List[std::String]::new = names
+    for binding in value collect_bindings.iter do
+        binding.name.clone names.push
+    done
+    names
+}
+
+pub fn pattern_bindings op:$common::Op -> std::List[std::String] {
+    op common::pattern_value_of binding_names
+}
+
+pub fn find_binding value:$common::PatternValue name:$str -> std::Option[common::Location] {
+    for binding in value collect_bindings.iter do
+        if name binding.name.as_str == then
+            binding.location.clone std::Option::Some return
+        fi
+    done
+    std::Option[common::Location]::None
+}
+
+pub fn owned_type subject:$common::Type -> common::Type {
+    if subject.borrow_target std::Option::Some(target) is then
+        target.clone return
+    fi
+    subject.clone
+}
+
+pub fn enum_payload_types
+    subject:$common::Type
+    variant:$common::EnumVariant
+    store:$common::SymbolStore
+-> std::List[common::Type] {
+    std::List[common::Type]::new = types
+    if variant.enum_name store.enums.get std::Option::Some(declaration) is then
+        declaration.type_vars subject owned_type common::aggregate_type_bindings = substitutions
+        if variant.variant_name declaration.variant_types.get std::Option::Some(payloads) is then
+            for payload in payloads.iter do
+                substitutions payload.substitute_t types.push
+            done
+        fi
+    fi
+    types
+}
+
+# Constructor matrices keep payload correlations. A zero constructor count is
+# an open literal domain, which requires a default row for exhaustiveness.
+pub struct CoveragePattern derives std::Clone {
+    pub constructor: std::String
+    pub domain_size: u64
+    pub children:    std::List[CoveragePattern]
+}
+
+impl CoveragePattern {
+    pub fn any -> CoveragePattern { std::List[CoveragePattern]::new 0 "".to_str CoveragePattern }
+
+    pub fn is_any self:$CoveragePattern -> bool { self.constructor.is_empty }
+}
+
+pub fn coverage_pattern
+    value:$common::PatternValue
+    subject:$common::Type
+    store:$common::SymbolStore
+-> CoveragePattern {
+    std::List[CoveragePattern]::new = children
+    value match
+        common::PatternValue::EnumVariant(variant) => {
+            if value is_wildcard then
+                CoveragePattern::any return
+            fi
+            store variant subject enum_payload_types = types
+            0 = index: u64
+            for typ in types.iter do
+                if index variant.bindings.length < then
+                    store typ index variant.bindings.get coverage_pattern
+                else
+                    CoveragePattern::any
+                fi children.push
+                1 += index
+            done
+            0 = count: u64
+            if variant.enum_name store.enums.get std::Option::Some(declaration) is then
+                declaration.variants.length = count
+            fi
+            children count f"enum:{variant.enum_name}::{variant.variant_name}" CoveragePattern
+        }
+        common::PatternValue::Struct(pattern) => {
+            if pattern.struct_name store.structs.get std::Option::Some(declaration) is then
+                declaration.type_vars subject owned_type common::aggregate_type_bindings = substitutions
+                for member in declaration.members.iter do
+                    if member.name pattern.bindings.get std::Option::Some(child) is then
+                        store substitutions member.typ.substitute_t child coverage_pattern
+                    else
+                        CoveragePattern::any
+                    fi children.push
+                done
+            fi
+            children 1 f"struct:{pattern.struct_name}" CoveragePattern
+        }
+        common::PatternValue::Literal(literal) => {
+            0 = count: u64
+            literal.value match
+                common::LiteralValue::Bool(boolean) => {
+                    2 = count: u64 f"bool:{boolean}"
+                }
+                common::LiteralValue::Char(character) => f"char:{character}"
+                common::LiteralValue::Int(number) => f"int:{number.value}"
+                common::LiteralValue::Str(text) => f"str:{text}"
+            end = constructor
+            children count constructor CoveragePattern
+        }
+        _ => CoveragePattern::any
     end
 }
 
-# pattern_bindings: names this pattern introduces into the enclosing scope.
-# Struct patterns bind field aliases; enum variants bind payload names;
-# literals and wildcards bind nothing.
-pub fn pattern_bindings op:$common::Op -> std::List[std::String] {
-    std::List[std::String]::new = out
-    op common::pattern_value_of match
-        common::PatternValue::Struct(struct_pat) => {
-            struct_pat.bindings.keys = field_names
-            for field_name in field_names.iter do
-                if field_name struct_pat.bindings.get std::Option::Some(bound_name) is then
-                    bound_name.clone out.push
-                fi
+pub struct CoverageRow derives std::Clone {
+    pub columns: std::List[CoveragePattern]
+}
+
+impl CoverageRow {
+    pub fn single pattern:CoveragePattern -> CoverageRow {
+        std::List[CoveragePattern]::new = columns
+        pattern columns.push
+        columns CoverageRow
+    }
+
+    fn specialize self:$CoverageRow constructor:$CoveragePattern -> std::Option[CoverageRow] {
+        0 self.columns.get = head
+        std::List[CoveragePattern]::new = columns
+        if head.is_any then
+            for child in constructor.children.iter do
+                CoveragePattern::any columns.push
             done
-        }
-        common::PatternValue::EnumVariant(variant) => {
-            variant.bindings = names: $std::List[std::String]
-            for name in names.iter do
-                name.clone out.push
-            done
-        }
-        common::PatternValue::Literal => {
-        }
-    end
-    out
+        elif head.constructor constructor.constructor == then
+            head.children.clone columns.append
+        else
+            std::Option[CoverageRow]::None return
+        fi
+        1 = index: u64
+        while index self.columns.length < do
+            index self
+                .columns
+                .get
+                .clone columns.push
+            1 += index
+        done
+        columns CoverageRow std::Option::Some
+    }
+
+    fn tail self:$CoverageRow -> CoverageRow {
+        std::List[CoveragePattern]::new = columns
+        1 = index: u64
+        while index self.columns.length < do
+            index self
+                .columns
+                .get
+                .clone columns.push
+            1 += index
+        done
+        columns CoverageRow
+    }
+}
+
+fn specialize_rows
+    rows:$std::List[CoverageRow]
+    constructor:$CoveragePattern
+-> std::List[CoverageRow] {
+    std::List[CoverageRow]::new = specialized
+    for row in rows.iter do
+        if constructor row.specialize std::Option::Some(value) is then
+            value specialized.push
+        fi
+    done
+    specialized
+}
+
+pub fn is_useful candidate:$CoverageRow rows:$std::List[CoverageRow] -> bool {
+    if rows.is_empty then
+        true return
+    fi
+    if candidate.columns.is_empty then
+        false return
+    fi
+    0 candidate.columns.get = head
+    if head.is_any ! then
+        head rows specialize_rows = specialized
+        specialized head candidate.specialize.unwrap is_useful return
+    fi
+    std::Map[std::String CoveragePattern]::new = constructors
+    for row in rows.iter do
+        0 row.columns.get = first
+        if first.is_any ! then
+            first.clone first.constructor.clone constructors.set
+        fi
+    done
+    for entry in constructors.iter do
+        entry.second = constructor
+        if 0 constructor.domain_size == constructors.length constructor.domain_size != || then
+            break
+        fi
+        constructor rows specialize_rows = specialized
+        if specialized constructor candidate.specialize.unwrap is_useful then
+            true return
+        fi
+    done
+    if constructors.is_empty ! then
+        constructors.values = values
+        0 values.get = first
+        if 0 first.domain_size != constructors.length first.domain_size == && then
+            false return
+        fi
+    fi
+    std::List[CoverageRow]::new = defaults
+    for row in rows.iter do
+        if
+            0 row
+                .columns
+                .get
+                .is_any
+        then
+            row.tail defaults.push
+        fi
+    done
+    defaults candidate.tail is_useful
+}
+
+pub fn wildcard -> common::PatternValue {
+    std::Option[i64]::None common::MATCH_WILDCARD.to_str "".to_str common::EnumVariant::new
+    common::PatternValue::EnumVariant
+}
+
+pub fn binding_locations value:$common::PatternValue name:$str -> std::List[common::Location] {
+    std::List[common::Location]::new = locations
+    if value common::PatternValue::Alternatives(alternatives) is then
+        for alternative in alternatives.iter do
+            name alternative binding_locations locations.append
+        done
+    else
+        for binding in value collect_bindings.iter do
+            if name binding.name.as_str == then
+                binding.location.clone locations.push
+            fi
+        done
+    fi
+    locations
 }

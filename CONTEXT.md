@@ -316,6 +316,7 @@ _Avoid_: Release lint, tag lint
 - Generic bounds appear before the **Stack effect**, such as `[T: Display] T -> None`. Bounds are constraints, not stack values.
 - Multiple bounds on one type variable use `+`, such as `[T: Copy + Display]`. Every listed bound is required and their order has no semantic meaning.
 - An owned binding is definitely available at a control-flow join only when every continuing incoming path owns or reinitialized it. Terminating paths do not participate.
+- Patterns compose recursively in enum payloads and struct fields. Match arm alternatives use `|`, bind the same names and types, and share one guard and body. Coverage tracks nested combinations across unguarded alternatives.
 - Pattern payload bindings follow the subject capability. A successful `if … is` conditionally moves non-`Copy` payloads from an owned subject, while shared and exclusive subjects produce matching borrows. Failed checks retain the complete subject, and `Copy` payload bindings do not consume it.
 - `ptr` is a nullable, non-owning, `Copy` raw address. Existing load/store intrinsics and pointer arithmetic require [unsafe](docs/functions-and-lambdas.md#unsafe-boundaries). Only explicit `ptr::as_ref[T]` and `ptr::as_mut[T]` form typed borrows.
 - An inherent method wins over defaults from explicitly implemented traits. Without one, more than one applicable default-method declaration is a compile-time ambiguity rather than a declaration-order choice.
