@@ -131,6 +131,12 @@ source names for diagnostics and separate checked storage identities for layout.
 Closure signatures receive the concrete argument and result types established
 by checking.
 
+Source construction lowers `for` to a loop that consumes each `next` result
+through an `Option` match. This avoids a separate option binding and `unwrap`
+call per element. The source-only yield assignment retains the payload's borrow
+capability and updates an existing outer binding when present. Checking lowers
+it to an ordinary assignment before specialization and backend planning.
+
 `CheckedProgram` can be constructed only after all reachable bodies, signatures,
 local and capture types, storage references, and dispatch targets are complete.
 It also owns the selected copy behavior, value categories, and concrete drop
