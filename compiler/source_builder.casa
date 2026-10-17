@@ -5821,28 +5821,27 @@ pub fn handle_question_operator token:$common::Token ops:mut$std::List[common::O
 # handle_keyword_for - parse `for <ident> in <expr> do <body> done`
 #
 # The for-loop is desugared at parse time into a `while` loop over the
-# iterator's `next` method. The synthesized ops use only existing op kinds,
-# so no new typechecker or bytecode support is required.
+# iterator's `next` method. Matching consumes its Option result. AssignYield
+# retains the payload capability when assigning it to the source loop binding.
 #
 # Source `for x in <iter> do <body> done` lowers to roughly:
 #
-#     <iter_expr_ops>
-#     = $for_iter_FILE_N
-#     while
-#         $for_iter_FILE_N .next
-#         = $for_opt_FILE_N
-#         $for_opt_FILE_N .is_some
-#     do
-#         $for_opt_FILE_N .unwrap
-#         = x
-#         <body_ops>
+#     <iter_expr_ops> = $for_iter_FILE_N
+#     while true do
+#         $for_iter_FILE_N .next match
+#             Option::Some($for_value_FILE_N) => {
+#                 $for_value_FILE_N = x
+#                 <body_ops>
+#             }
+#             Option::None => break
+#         end
 #     done
 #     $for_iter_FILE_N drop
 #
-# The hidden variable names embed the source offset so nested for-loops do
-# not collide. Nested `while`/`for` inside the body or the iterable
-# expression are detected via depth counting on `while`/`for` openers and
-# `done` closers so the enclosing `do`/`done` pair is identified correctly.
+# Consuming the option directly avoids an unwrap call and a separate option
+# owner at each iteration. Keep the source binding as an assignment so an
+# existing outer binding still receives the yielded value.
+# The hidden names include the file and source offset to distinguish nested loops.
 pub fn handle_keyword_for
     parser:mut$Parser
     token:$common::Token
@@ -5858,7 +5857,7 @@ pub fn handle_keyword_for
     for_loc common::Location::span common::Span::offset = for_offset
     for_loc.file.as_str std::str_hash = for_file_hash
     f"$for_iter_{for_file_hash}_{for_offset}" = hidden_iter_name
-    f"$for_opt_{for_file_hash}_{for_offset}" = hidden_opt_name
+    f"$for_value_{for_file_hash}_{for_offset}" = hidden_value_name
 
     # Iterable-expression phase — emit ops until the matching `do`. These ops
     # leave the iterator value on the stack, which the synthesized
@@ -5895,19 +5894,21 @@ pub fn handle_keyword_for
         ops function_name cursor peeked_token parser token_to_op
     done
 
-    # Loop preamble: store iterator into hidden local, then open the while
-    # loop with the `next`/`is_some` condition.
+    # Store the source once and consume each next result through a match.
     for_loc.clone hidden_iter_name.clone common::OpValue::AssignVar common::Op::new ops.push
     for_loc.clone common::OpValue::WhileStart common::Op::new ops.push
+    for_loc.clone 1 common::OpValue::PushBool common::Op::new ops.push
+    body_origin common::OpValue::WhileCondition common::Op::new ops.push
     for_loc.clone hidden_iter_name.clone common::OpValue::PushVar common::Op::new ops.push
     for_loc.clone "next".to_str common::OpValue::MethodCall common::Op::new ops.push
-    for_loc.clone hidden_opt_name.clone common::OpValue::AssignVar common::Op::new ops.push
-    for_loc.clone hidden_opt_name.clone common::OpValue::PushVar common::Op::new ops.push
-    for_loc.clone "is_some".to_str common::OpValue::MethodCall common::Op::new ops.push
-    body_origin common::OpValue::WhileCondition common::Op::new ops.push
-    for_loc.clone hidden_opt_name common::OpValue::PushVar common::Op::new ops.push
-    for_loc.clone "unwrap".to_str common::OpValue::MethodCall common::Op::new ops.push
-    loop_var_token.location.clone loop_var_name common::OpValue::AssignVar common::Op::new ops.push
+    for_loc.clone common::OpValue::MatchStart common::Op::new ops.push
+    std::Option::None "Some".to_str common::STD_OPTION_TYPE.to_str common::EnumVariant::new = some
+    loop_var_token.location.clone hidden_value_name.clone common::PatternBinding
+    common::PatternValue::Binding some.bindings.push
+    std::List[common::Op]::new some common::PatternValue::EnumVariant common::MatchArm::new = arm
+    for_loc.clone arm common::OpValue::MatchArm common::Op::new ops.push
+    loop_var_token.location.clone hidden_value_name common::OpValue::PushVar common::Op::new ops.push
+    loop_var_token.location.clone loop_var_name common::OpValue::AssignYield common::Op::new ops.push
 
     # Body phase — emit ops until the matching `done`, then close the while.
     0 = body_nesting_depth
@@ -5921,6 +5922,11 @@ pub fn handle_keyword_for
         body_peek_opt.unwrap = body_token
         if "done" body_token common::Token::value.as_str == 0 body_nesting_depth == && then
             cursor.pop drop
+            std::Option::None "None".to_str common::STD_OPTION_TYPE.to_str common::EnumVariant::new = none
+            std::List[common::Op]::new none common::PatternValue::EnumVariant common::MatchArm::new = arm
+            body_token.location.clone arm common::OpValue::MatchArm common::Op::new ops.push
+            body_token.location.clone common::OpValue::WhileBreak common::Op::new ops.push
+            body_token.location.clone common::OpValue::MatchEnd common::Op::new ops.push
             body_token common::Token::location common::OpValue::WhileEnd common::Op::new ops.push
             body_token.location.clone hidden_iter_name common::OpValue::PushVar common::Op::new ops.push
             body_token.location.clone common::OpValue::Drop common::Op::new ops.push
@@ -6977,6 +6983,7 @@ pub fn gather_captures
             identifier_name.clone std::Option::Some = name_opt
         elif
             op.value common::OpValue::AssignVar is
+            op.value common::OpValue::AssignYield is ||
             op.value common::OpValue::AssignInc is ||
             op.value common::OpValue::AssignDec is ||
         then
@@ -7330,7 +7337,11 @@ fn resolve_assignment
         common::OpValue::Rejected = operation.value
         return
     fi
-    if operation.value common::OpValue::AssignVar is ! parts.length 1 > || then
+    if
+        operation.value common::OpValue::AssignVar is !
+        operation.value common::OpValue::AssignYield is ! &&
+        parts.length 1 > ||
+    then
         if
             errors allow_root_local_capture operation.location store function root.as_str
             reject_root_local_capture
@@ -7368,6 +7379,7 @@ pub fn resolve_identifiers
 
         if
             current_op.value common::OpValue::AssignVar is
+            current_op.value common::OpValue::AssignYield is ||
             current_op.value common::OpValue::AssignInc is ||
             current_op.value common::OpValue::AssignDec is ||
         then
