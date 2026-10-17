@@ -743,63 +743,37 @@ impl IntegerLiteral {
 
     pub fn from_int value:i64 -> IntegerLiteral { value value.to_str IntegerLiteral::new }
 
-    pub fn get_normalized_magnitude self:$IntegerLiteral -> std::String {
+    # Range checking must accept the raw spelling before callers use the value bits.
+    pub fn parse raw:$str -> IntegerLiteral {
         0 = start: u64
-        if 0 self.raw.length != then
-            if
-                '-' 0 self
-                    .raw
-                    .at
-                    .unwrap ==
-            then
-                1 = start: u64
-            fi
+        if raw "-" str::starts_with then
+            1 = start: u64
         fi
-        while start self.raw.length 1 - < do
-            if
-                '0' start self
-                    .raw
-                    .at
-                    .unwrap !=
-            then
-                break
-            fi
-            1 += start
-        done
-        self.raw.as_str start self.raw.length start - str::substring
+        raw start raw.length start - str::substring = magnitude
+        0 magnitude.as_str try_parse_uint_literal.unwrap_or = value
+        if 0 start != then
+            value 0.wrapping_sub = value
+        fi
+        value raw.to_str IntegerLiteral::new
     }
 
-    pub fn fits_decimal_limit self:$IntegerLiteral limit:$str -> bool {
-        self.get_normalized_magnitude = magnitude
-        limit.to_str = normalized_limit
-        if 0 limit.length != '-' 0 limit.at.unwrap == && then
-            limit 1 limit.length 1 - str::substring = normalized_limit
+    pub fn fits_magnitude_limit self:$IntegerLiteral limit:$str -> bool {
+        0 = start: u64
+        if self.raw.as_str "-" str::starts_with then
+            1 = start: u64
         fi
-        if normalized_limit.length magnitude.length > then
-            true return
-        fi
-        if normalized_limit.length magnitude.length < then
+        self.raw.as_str start self.raw.length start - str::substring = magnitude
+        magnitude.as_str try_parse_uint_literal = parsed
+        if parsed.is_none then
             false return
         fi
-        0 = index: u64
-        while index magnitude.length < do
-            index magnitude
-                .at
-                .unwrap
-                .codepoint i64::from = value_character
-            index normalized_limit
-                .at
-                .unwrap
-                .codepoint i64::from = limit_character
-            if limit_character value_character > then
-                true return
-            fi
-            if limit_character value_character < then
-                false return
-            fi
-            1 += index
-        done
-        true
+        0 = limit_start: u64
+        if limit "-" str::starts_with then
+            1 = limit_start: u64
+        fi
+        limit limit_start limit.length limit_start - str::substring = limit_magnitude
+        limit_magnitude.as_str try_parse_uint_literal.unwrap u64::wrapping_from = maximum
+        parsed.unwrap u64::wrapping_from maximum <=
     }
 
     pub fn fits self:$IntegerLiteral target:$Type -> bool {
@@ -819,9 +793,9 @@ impl IntegerLiteral {
             fi
         fi
         if negative then
-            target.get_integer_min self.fits_decimal_limit
+            target.get_integer_min self.fits_magnitude_limit
         else
-            target.get_integer_max self.fits_decimal_limit
+            target.get_integer_max self.fits_magnitude_limit
         fi
     }
 }
@@ -2369,32 +2343,46 @@ pub fn canonicalize_operation_type_vars ops:mut$std::List[Op] type_vars:$std::Se
     done
 }
 
-# Parse a non-negative integer literal, e.g. the `3` in `array[i64 3]`
-# (ADR-0152). None if `source` is empty or has a non-digit character.
+# A hexadecimal digit value, or -1 for a character outside 0-9, a-f, and A-F.
+pub fn hex_digit_value character:char -> i64 {
+    if character '0' >= character '9' <= && then
+        character.codepoint i64::from '0'.codepoint i64::from -
+    elif character 'a' >= character 'f' <= && then
+        character.codepoint i64::from 'a'.codepoint i64::from - 10 +
+    elif character 'A' >= character 'F' <= && then
+        character.codepoint i64::from 'A'.codepoint i64::from - 10 +
+    else
+        -1
+    fi
+}
+
+# Parse an unsigned decimal or 0x-prefixed magnitude. The i64 return retains
+# all u64 bits. None means missing digits, an invalid digit, or u64 overflow.
 pub fn try_parse_uint_literal source:$str -> std::Option[i64] {
-    if 0 source.length == then
+    10 = base: u64
+    0 = index: u64
+    if source "0x" str::starts_with then
+        16 = base: u64
+        2 = index: u64
+    fi
+    if index source.length >= then
         std::Option[i64]::None return
     fi
     0 = value: u64
     18446744073709551615 = maximum: u64
-    0 = index: u64
     while index source.length < do
-        if
-            index source
-                .at
-                .unwrap
-                .is_digit !
-        then
+        index source.at.unwrap hex_digit_value = parsed_digit
+        if parsed_digit 0 < then
             std::Option[i64]::None return
         fi
-        index source
-            .at
-            .unwrap
-            .codepoint u64::from '0'.codepoint u64::from - = digit
-        if maximum digit - 10 / value < then
+        parsed_digit u64::try_from.unwrap = digit
+        if digit base >= then
             std::Option[i64]::None return
         fi
-        value 10 * digit + = value
+        if value maximum digit - base / > then
+            std::Option[i64]::None return
+        fi
+        value base * digit + = value
         1 += index
     done
     value i64::wrapping_from std::Option::Some
@@ -2435,16 +2423,14 @@ pub fn parse_type_str source:$str -> Type {
         BuiltinType::U64 const_value ConstType::concrete Type::Const return
     fi
     if source "-" str::starts_with then
-        if source.to_int std::Option::Some(const_value) is then
-            const_value source.to_str IntegerLiteral::new = literal
-            if BuiltinType::I64 Type::Builtin literal.fits then
-                if 0 const_value == then
-                    BuiltinType::U64
-                else
-                    BuiltinType::I64
-                fi
-                const_value ConstType::concrete Type::Const return
+        source IntegerLiteral::parse = literal
+        if BuiltinType::I64 Type::Builtin literal.fits then
+            if 0 literal.value == then
+                BuiltinType::U64
+            else
+                BuiltinType::I64
             fi
+            literal.value ConstType::concrete Type::Const return
         fi
     fi
     if "true" source.as_str == then

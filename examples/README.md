@@ -37,6 +37,7 @@ The examples are ordered from introductory programs to low-level system code.
 | 25 | [game_of_life.casa](game_of_life.casa) | Resizable raylib graphics and toroidal Conway simulation |
 | 26 | [root_owned_state.casa](root_owned_state.casa) | Root-owned runtime state, explicit parameters, and cleanup |
 | 27 | [foreign_function.casa](foreign_function.casa) | C ABI scalars, an aggregate return, and native library linking |
+| 28 | [hexadecimal.casa](hexadecimal.casa) | Hexadecimal integer literals, contextual widths, and an alignment mask |
 
 The [borrow lookup example](borrow_lookup.casa) reuses map and JSON lookup keys
 while the returned values remain borrowed from their collections.
