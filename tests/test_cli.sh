@@ -101,6 +101,25 @@ if matches_filter process_exit "$@"; then
     fi
 fi
 
+if matches_filter unrelated_fault "$@"; then
+    matched=true
+    # The return stack guard handler must keep the default action for other faults.
+    printf 'unsafe { 1 ptr::null store8 }\n' >"$CLI_TMP/unrelated_fault.casa"
+    "$COMPILER" "$CLI_TMP/unrelated_fault.casa" -o "$CLI_TMP/unrelated_fault"
+    set +e
+    "$CLI_TMP/unrelated_fault" 2>"$CLI_TMP/unrelated_fault.err"
+    actual_status=$?
+    set -e
+    if [ "$actual_status" -ne 139 ]; then
+        echo "null write exited with status $actual_status, expected SIGSEGV" >&2
+        exit 1
+    fi
+    if grep -q 'return stack overflow' "$CLI_TMP/unrelated_fault.err"; then
+        echo "null write was reported as return stack overflow" >&2
+        exit 1
+    fi
+fi
+
 if matches_filter sealed_scalar "$@"; then
     matched=true
     scalar_binary="$CLI_TMP/sealed_scalar"

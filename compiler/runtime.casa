@@ -2,12 +2,23 @@
 # Language helpers return through r14. Internal allocator entries use native call/ret.
 pub const HEAP_GROWTH_SIZE 67108864
 pub const ASSEMBLY ".equ CASA_RETURN_STACK_SIZE, 1048576
+.equ CASA_RETURN_STACK_GUARD_SIZE, 65536
+.equ CASA_PAGE_SIZE, 4096
 .equ CASA_SMALL_ALLOC_LIMIT, 512
 .equ CASA_HEAP_CHUNK_HEADER_SIZE, 16
 .equ CASA_HEAP_GROWTH_SIZE, 67108864
 .equ CASA_MMAP_SYSCALL, 9
 .equ CASA_MMAP_PROT_READ_WRITE, 3
 .equ CASA_MMAP_PRIVATE_ANONYMOUS, 34
+.equ CASA_MPROTECT_SYSCALL, 10
+.equ CASA_MPROTECT_PROT_NONE, 0
+.equ CASA_RT_SIGACTION_SYSCALL, 13
+.equ CASA_RT_SIGRETURN_SYSCALL, 15
+.equ CASA_SIGSEGV, 11
+.equ CASA_SIGSET_SIZE, 8
+# SA_SIGINFO | SA_RESTORER | SA_RESETHAND
+.equ CASA_GUARD_SIGACTION_FLAGS, 0x84000004
+.equ CASA_SIGINFO_ADDRESS_OFFSET, 16
 .equ CASA_WRITE_SYSCALL, 1
 .equ CASA_EXIT_SYSCALL, 60
 .equ CASA_EINTR_RESULT, -4
@@ -16,7 +27,11 @@ pub const ASSEMBLY ".equ CASA_RETURN_STACK_SIZE, 1048576
 .equ CASA_FAILURE_STATUS, 1
 
 .section .bss
+# Accesses past the return stack fault in the guard region. The emitter checks
+# reservations that could skip past it.
+.balign CASA_PAGE_SIZE
 return_stack: .skip CASA_RETURN_STACK_SIZE
+return_stack_guard: .skip CASA_RETURN_STACK_GUARD_SIZE
 env_stack: .skip CASA_RETURN_STACK_SIZE
 env_sp: .skip 8
 current_env: .skip 8
@@ -41,6 +56,8 @@ return_stack_overflow_msg: .ascii \"error: return stack overflow\\n\"
 .equ return_stack_overflow_msg_len, . - return_stack_overflow_msg
 env_stack_overflow_msg: .ascii \"error: env stack overflow\\n\"
 .equ env_stack_overflow_msg_len, . - env_stack_overflow_msg
+return_stack_guard_failure_msg: .ascii \"fatal: return stack guard setup failed\\n\"
+.equ return_stack_guard_failure_msg_len, . - return_stack_guard_failure_msg
 allocation_failure_msg: .ascii \"fatal: allocation failed\\n\"
 .equ allocation_failure_msg_len, . - allocation_failure_msg
 
@@ -184,9 +201,6 @@ heap_alloc_native:
     movq $CASA_STDERR_FD, %rdi
     leaq allocation_failure_msg(%rip), %rsi
     movq $allocation_failure_msg_len, %rdx
-    leaq return_stack+CASA_RETURN_STACK_SIZE-8(%rip), %rcx
-    cmpq %rcx, %r14
-    ja return_stack_overflow
     addq $8, %r14
     call write_all
 .Lruntime_allocation_failure_write_done:
@@ -317,9 +331,6 @@ print_int:
     leaq print_buf+32(%rip), %rdx
     subq %rsi, %rdx
     movq $CASA_STDOUT_FD, %rdi
-    leaq return_stack+CASA_RETURN_STACK_SIZE-8(%rip), %rcx
-    cmpq %rcx, %r14
-    ja return_stack_overflow
     addq $8, %r14
     call write_all
 .Lruntime_print_int_write_done:
@@ -350,9 +361,6 @@ print_uint:
     leaq print_buf+32(%rip), %rdx
     subq %rsi, %rdx
     movq $CASA_STDOUT_FD, %rdi
-    leaq return_stack+CASA_RETURN_STACK_SIZE-8(%rip), %rcx
-    cmpq %rcx, %r14
-    ja return_stack_overflow
     addq $8, %r14
     call write_all
 .Lruntime_print_uint_write_done:
@@ -366,9 +374,6 @@ print_str:
     movq (%rdi), %rdx
     leaq 8(%rdi), %rsi
     movq $CASA_STDOUT_FD, %rdi
-    leaq return_stack+CASA_RETURN_STACK_SIZE-8(%rip), %rcx
-    cmpq %rcx, %r14
-    ja return_stack_overflow
     addq $8, %r14
     call write_all
 .Lruntime_print_str_write_done:
@@ -496,9 +501,6 @@ primitive_to_str:
     movq $5, %rdx
     jmp .Lpts_copy
 .Lpts_char:
-    leaq return_stack+CASA_RETURN_STACK_SIZE-8(%rip), %rcx
-    cmpq %rcx, %r14
-    ja return_stack_overflow
     addq $8, %r14
     call encode_char
 .Lruntime_pts_char_encoded:
@@ -520,9 +522,6 @@ primitive_to_str:
     movq %rdx, %rdi
     addq $9, %rdi
     jc .Lheap_alloc_oom
-    leaq return_stack+CASA_RETURN_STACK_SIZE-8(%rip), %rcx
-    cmpq %rcx, %r14
-    ja return_stack_overflow
     addq $8, %r14
     call heap_alloc
 .Lruntime_primitive_string_data_done:
@@ -535,9 +534,6 @@ primitive_to_str:
     rep movsb
     movb $0, (%rdi)
     movq $8, %rdi
-    leaq return_stack+CASA_RETURN_STACK_SIZE-8(%rip), %rcx
-    cmpq %rcx, %r14
-    ja return_stack_overflow
     addq $8, %r14
     call heap_alloc
 .Lruntime_primitive_string_wrapper_done:
@@ -568,9 +564,6 @@ str_concat:
     movq %r10, %rdi
     addq $9, %rdi
     jc .Lheap_alloc_oom
-    leaq return_stack+CASA_RETURN_STACK_SIZE-8(%rip), %rcx
-    cmpq %rcx, %r14
-    ja return_stack_overflow
     addq $8, %r14
     call heap_alloc
 .Lruntime_concat_string_data_done:
@@ -601,16 +594,10 @@ str_concat:
     movq (%r12, %rcx, 8), %rbx
     pushq %rcx
     movq (%rbx), %rdi
-    leaq return_stack+CASA_RETURN_STACK_SIZE-8(%rip), %rcx
-    cmpq %rcx, %r14
-    ja return_stack_overflow
     addq $8, %r14
     call heap_free
 .Lruntime_concat_part_data_free_done:
     movq %rbx, %rdi
-    leaq return_stack+CASA_RETURN_STACK_SIZE-8(%rip), %rcx
-    cmpq %rcx, %r14
-    ja return_stack_overflow
     addq $8, %r14
     call heap_free
 .Lruntime_concat_part_wrapper_free_done:
@@ -619,9 +606,6 @@ str_concat:
     jmp .Lsc_free_loop
 .Lsc_free_done:
     movq $8, %rdi
-    leaq return_stack+CASA_RETURN_STACK_SIZE-8(%rip), %rcx
-    cmpq %rcx, %r14
-    ja return_stack_overflow
     addq $8, %r14
     call heap_alloc
 .Lruntime_concat_string_wrapper_done:
@@ -638,14 +622,64 @@ arithmetic_error:
     leaq arithmetic_error_msg(%rip), %rsi
     movq $arithmetic_error_msg_len, %rdx
     movq $CASA_STDERR_FD, %rdi
-    leaq return_stack+CASA_RETURN_STACK_SIZE-8(%rip), %rcx
-    cmpq %rcx, %r14
-    ja return_stack_overflow
     addq $8, %r14
     call write_all
 .Lruntime_arithmetic_error_write_done:
     movq $CASA_FAILURE_STATUS, %rdi
     movq $CASA_EXIT_SYSCALL, %rax
+    syscall
+
+# Internal native helper: make the guard region inaccessible and report its
+# faults as return stack overflow. Other faults keep the default action.
+return_stack_guard_init:
+    # Kernel sigaction layout: handler, flags, restorer, and signal mask.
+    subq $32, %rsp
+    leaq return_stack_guard_fault(%rip), %rax
+    movq %rax, (%rsp)
+    movabsq $CASA_GUARD_SIGACTION_FLAGS, %rax
+    movq %rax, 8(%rsp)
+    leaq return_stack_guard_restore(%rip), %rax
+    movq %rax, 16(%rsp)
+    movq $0, 24(%rsp)
+    movq $CASA_RT_SIGACTION_SYSCALL, %rax
+    movq $CASA_SIGSEGV, %rdi
+    movq %rsp, %rsi
+    xorq %rdx, %rdx
+    movq $CASA_SIGSET_SIZE, %r10
+    syscall
+    addq $32, %rsp
+    testq %rax, %rax
+    jnz .Lreturn_stack_guard_failure
+    movq $CASA_MPROTECT_SYSCALL, %rax
+    leaq return_stack_guard(%rip), %rdi
+    movq $CASA_RETURN_STACK_GUARD_SIZE, %rsi
+    movq $CASA_MPROTECT_PROT_NONE, %rdx
+    syscall
+    testq %rax, %rax
+    jnz .Lreturn_stack_guard_failure
+    ret
+.Lreturn_stack_guard_failure:
+    leaq return_stack_guard_failure_msg(%rip), %rsi
+    movq $return_stack_guard_failure_msg_len, %rdx
+    movq $CASA_STDERR_FD, %rdi
+    movq $CASA_WRITE_SYSCALL, %rax
+    syscall
+    movq $CASA_FAILURE_STATUS, %rdi
+    movq $CASA_EXIT_SYSCALL, %rax
+    syscall
+
+# SIGSEGV handler: fault address in siginfo at %rsi.
+return_stack_guard_fault:
+    movq CASA_SIGINFO_ADDRESS_OFFSET(%rsi), %rax
+    leaq return_stack_guard(%rip), %rcx
+    subq %rcx, %rax
+    cmpq $CASA_RETURN_STACK_GUARD_SIZE, %rax
+    jb return_stack_overflow
+    # SA_RESETHAND restored the default action, so the fault repeats on return.
+    ret
+
+return_stack_guard_restore:
+    movq $CASA_RT_SIGRETURN_SYSCALL, %rax
     syscall
 
 # Return stack overflow handler: write error to fd 2 and exit(1).
@@ -664,9 +698,6 @@ env_stack_overflow:
     leaq env_stack_overflow_msg(%rip), %rsi
     movq $env_stack_overflow_msg_len, %rdx
     movq $CASA_STDERR_FD, %rdi
-    leaq return_stack+CASA_RETURN_STACK_SIZE-8(%rip), %rcx
-    cmpq %rcx, %r14
-    ja return_stack_overflow
     addq $8, %r14
     call write_all
 .Lruntime_env_stack_overflow_write_done:
