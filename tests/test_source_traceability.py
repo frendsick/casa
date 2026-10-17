@@ -41,6 +41,8 @@ true sample::identity print
     assembly = Path(str(binary) + ".s").read_text()
     assert run(str(binary)) == "42true7901"
     assert ".generic_" not in assembly
+    # A record followed directly by another record would describe no instruction.
+    assert not re.search(r"^\.loc .*\n\.loc ", assembly, re.MULTILINE)
     # Repeated requests use the same file numbering, names, and line directives.
     run(compiler, str(source), "-o", str(root / "repeated"), "--keep-asm")
     assert assembly == (root / "repeated.s").read_text()

@@ -87,8 +87,8 @@ order. Source markers become a parallel location table before instruction
 selection, so they do not affect leaf eligibility or peephole matching. Expanded
 leaf instructions retain their declaration's source, and subsequent caller
 instructions restore the call site's source. A fused instruction uses the source
-of its first input instruction. Operations removed by optimization have no
-instruction address.
+of its first input instruction. Operations that emit no instructions, including
+those removed by optimization, have no line record.
 
 Generated helpers without a source location and the fixed runtime use the
 synthetic file `<casa-generated>`. Line tables map addresses to source locations.
