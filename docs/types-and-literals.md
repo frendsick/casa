@@ -25,6 +25,25 @@ select another width:
 42 typeof print # i64
 ```
 
+Integer literals use decimal digits or a lowercase `0x` prefix followed by one
+or more hexadecimal digits (`0` through `9`, `a` through `f`, or `A` through `F`).
+Both forms allow a leading minus sign and use the same contextual typing and
+range checks. Hexadecimal literals represent values, so `0xFF` is 255 and does
+not fit `i8`. Use `-0x1` for negative one.
+
+```casa
+0xFF = byte: u8
+0xFFFFFFFFFFFFFFF8 = alignment_mask: u64
+-0x80 = minimum: i8
+0x2a typeof print # i64
+```
+
+An unconstrained hexadecimal literal must fit `i64`. An annotation or another
+integer context permits values through `0xFFFFFFFFFFFFFFFF` for `u64`.
+Missing digits, invalid hexadecimal digits, and values outside the selected
+type's range are compile-time errors. Integer literals have no separators or
+type suffixes. Hexadecimal floating-point literals are not supported.
+
 Floating-point values use partial equality and ordering because NaN is
 unordered. Integer values use total equality and ordering.
 
