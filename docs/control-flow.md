@@ -82,7 +82,7 @@ The loop borrows its stored iterator for each `next` call and gives the body
 each `Some` payload. `None` ends the loop.
 
 For counted loops, [`std::Range`](collections.md#integer-ranges) yields ascending
-integers from an inclusive start to an exclusive stop:
+`u64` integers from an inclusive start to an exclusive stop:
 
 ```casa
 import "std"

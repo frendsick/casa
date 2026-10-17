@@ -812,42 +812,44 @@ and examples. Use [Bytes](#bytes) for binary data.
 
 ## Integer ranges
 
-`Range` is a single-pass iterator over ascending `i64` values. Its fields are
+`Range` is a single-pass iterator over ascending `u64` values. Its fields are
 private. Construct it with `Range::new`:
 
 ```casa
 import "std"
 
+[10, 20, 30] = values
 # Named calls take their first argument from the top: push stop, then start.
-for value in 3 -2 std::Range::new do
-    value print "\n" print # -2, -1, 0, 1, 2
+for index in values.length 0 std::Range::new do
+    index values.nth print "\n" print # 10, 20, 30
 done
 ```
 
 | Method | Signature | Description |
 |---|---|---|
-| [new](#rangenew) | `fn new start:i64 stop:i64 -> Range` | Ascending half-open range `[start, stop)` |
-| [next](#rangenext) | `fn next self:mut$Range -> Option[i64]` | Advance and return the next integer |
+| [new](#rangenew) | `fn new start:u64 stop:u64 -> Range` | Ascending half-open range `[start, stop)` |
+| [next](#rangenext) | `fn next self:mut$Range -> Option[u64]` | Advance and return the next integer |
 
 ### Range::new
 
 ```text
-fn new start:i64 stop:i64 -> Range
+fn new start:u64 stop:u64 -> Range
 ```
 
 Includes `start` and excludes `stop`, advancing by one. If `start >= stop`, the
-range is empty. Reversed bounds do not select descending iteration. Both bounds
-can be negative. Calls use `stop start std::Range::new`.
+range is empty. Reversed bounds do not select descending iteration. Bounds and
+yielded values use the same `u64` type as collection lengths and indices.
+Calls use `stop start std::Range::new`.
 
-Bounds accept the complete `i64` domain. Advancing never overflows because the
-cursor increments only below `stop`. The maximum `i64` can be an exclusive stop,
+Bounds accept the complete `u64` domain. Advancing never overflows because the
+cursor increments only below `stop`. The maximum `u64` can be an exclusive stop,
 but cannot be yielded. There are no inclusive, descending, stepped, or other
 integer-width variants. Use a condition-controlled loop for those cases.
 
 ### Range::next
 
 ```text
-fn next self:mut$Range -> Option[i64]
+fn next self:mut$Range -> Option[u64]
 ```
 
 Returns `Some(value)` and advances the cursor, or `None` when exhausted. All
@@ -855,7 +857,7 @@ later calls after exhaustion return `None`. Values are owned integers and do
 not borrow the cursor. A loop over a borrowed range can stop with `break` and
 leave the remaining values available to the caller.
 
-`Range` implements `Iterable[i64]`, so it supports the lazy and terminal
+`Range` implements `Iterable[u64]`, so it supports the lazy and terminal
 operations below, including `filter`, `map`, `collect`, and `fold`. Direct
 advancement needs no heap allocation. Iterator call overhead remains
 tracked in [#829](https://github.com/frendsick/casa/issues/829).

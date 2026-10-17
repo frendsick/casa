@@ -1,7 +1,7 @@
 # Integer ranges are ascending half-open cursors
 
-The standard library provides an ascending `i64` range through `Range::new` and
-`Iterable[i64]`. It includes the start and excludes the stop. Equal or reversed
+The standard library provides an ascending `u64` range through `Range::new` and
+`Iterable[u64]`. It includes the start and excludes the stop. Equal or reversed
 bounds produce an empty iterator. Reversed bounds never change direction.
 
 The FizzBuzz example previously needed a mutable counter, a loop condition,
@@ -13,14 +13,16 @@ as required by the demonstrated-need constraint in
 Half-open bounds match the library's slice bounds and express zero iterations
 without a special case. Fixed ascending traversal makes reversed bounds empty
 instead of turning a mistaken bound into a descending loop. Incrementing only
-below the exclusive stop avoids overflow across the complete signed domain
+below the exclusive stop avoids overflow across the complete unsigned domain
 without subtracting bounds or storing a separate exhaustion flag.
 
 The cursor uses the existing `next` contract and iterator defaults. It needs
 no new syntax, compiler special case, closure wrapper, or numeric trait. The
-initial type uses Casa's default integer type. Other widths, inclusive stops,
-descending traversal, and arbitrary steps remain deferred until a concrete
-program needs them.
+type uses `u64` to match collection lengths and indices from
+[ADR-0125](0125-x86-64-casa-uses-fixed-width-size-types.md). Counted index loops
+can pass their bounds and use yielded indices without numeric conversions.
+Signed ranges, other widths, inclusive stops, descending traversal, and
+arbitrary steps remain deferred until a concrete program needs them.
 
 This addition does not justify replacing hot counted loops. Iterator overhead
 is tracked separately in [#829](https://github.com/frendsick/casa/issues/829).
