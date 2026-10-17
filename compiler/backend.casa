@@ -3626,6 +3626,11 @@ fn intrinsic_to_inst value:$semantic_body::IntrinsicKind -> std::Option[InstValu
 const INT32_MAX 2147483647
 const INT32_MIN -2147483648
 const RETURN_STACK_SIZE 1048576
+
+# A function advances r14 by at most one unchecked frame reservation, and then
+# accesses at most this many bytes past r14. Both fit in the runtime's 64 KiB
+# return stack guard region.
+const UNCHECKED_RETURN_STACK_BYTES 32768
 const HEAP_CHUNK_HEADER_SIZE 16
 const EXIT_SYSCALL 60
 const STDOUT_FD 1
@@ -3673,9 +3678,9 @@ struct Emitter {
 impl Emitter {
     fn new sources:$lexer::SourceStore -> Emitter {
         ".section .text\n".to_str = header
-        RETURN_STACK_SIZE common::WORD_SIZE - = call_limit
         common::WORD_SIZE = word_size
-        f"    cmpq $return_stack+{call_limit}, %r14\n    ja return_stack_overflow\n    addq ${word_size}, %r14\n" = call_prefix
+        # The callee writes its return slot first, which faults in the guard region.
+        f"    addq ${word_size}, %r14\n" = call_prefix
         std::Option[std::String]::None false std::Set[std::String]::new std::Set[i64]::new
         false 0
         std::List[StaticArray]::new
@@ -4230,6 +4235,7 @@ impl Emitter {
         "addq $1, %rcx" self.indent
         "leaq 8(%rsp,%rcx,8), %rax" self.indent
         "movq %rax, __envp(%rip)" self.indent
+        "call return_stack_guard_init" self.indent
         true locations bytecode self.emit_bytecode
         "movq $60, %rax" self.indent
         "xorq %rdi, %rdi" self.indent
@@ -4719,7 +4725,17 @@ impl Emitter {
     }
 
     # Check available return and local stack capacity without advancing r14.
+    # Reading the last required word faults in the guard region on overflow.
     fn emit_return_stack_check self:mut$Emitter byte_count:u64 {
+        if UNCHECKED_RETURN_STACK_BYTES byte_count >= then
+            f"testq %rax, {byte_count common::WORD_SIZE -}(%r14)" self.indent_string
+            return
+        fi
+        byte_count self.emit_return_stack_comparison
+    }
+
+    # Larger ranges could reach memory past the guard region.
+    fn emit_return_stack_comparison self:mut$Emitter byte_count:u64 {
         if RETURN_STACK_SIZE byte_count < then
             "jmp return_stack_overflow" self.indent
             return
@@ -4729,9 +4745,12 @@ impl Emitter {
         "ja return_stack_overflow" self.indent
     }
 
-    # Reserve space only after the complete range passes the capacity check.
+    # Small reservations rely on the guard region. A frame that overflows faults
+    # when it accesses a slot past the return stack or makes a call.
     fn emit_return_stack_reservation self:mut$Emitter byte_count:u64 {
-        byte_count self.emit_return_stack_check
+        if UNCHECKED_RETURN_STACK_BYTES byte_count < then
+            byte_count self.emit_return_stack_comparison
+        fi
         if RETURN_STACK_SIZE byte_count < then
             return
         fi
