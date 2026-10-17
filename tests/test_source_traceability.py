@@ -14,7 +14,7 @@ def run(*arguments):
 
 def decode_specialization(symbol):
     encoded = symbol.removeprefix("fn_.specialized_")
-    return re.sub(r"_(\d+)_", lambda match: chr(int(match[1])), encoded)
+    return re.sub(r"\.(\d+)\.", lambda match: chr(int(match[1])), encoded)
 
 
 def test_traceability(compiler, root):

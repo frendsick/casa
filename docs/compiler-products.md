@@ -76,10 +76,11 @@ address, and `objdump -d -l program` displays source lines with disassembly.
 
 Specialized function symbols start with `fn_.specialized_` and encode the complete
 semantic identity, including the declaration name and type and constant bindings.
-ASCII letters and digits remain unchanged. Other characters use `_DECIMAL_`,
-where `DECIMAL` is the Unicode code point. For example, `T=3:i64` becomes
-`T_61_3_58_i64`. This encoding is reversible and distinguishes binding names and
-values that produce the same text under ordinary punctuation replacement.
+ASCII letters, digits, and underscores remain unchanged. Other characters use
+`.DECIMAL.`, where `DECIMAL` is the Unicode code point. For example, `T=3:i64`
+becomes `T.61.3.58.i64`. This encoding is reversible and distinguishes binding
+names and values that produce the same text under ordinary punctuation
+replacement.
 
 The backend borrows the compilation's source store to convert byte offsets to
 one-based lines and byte columns. File numbers follow deterministic first-use

@@ -52,12 +52,13 @@ pub fn test_sanitize_name {
     "space" selector.register_function
     "space " selector.register_function
     "generic :_" selector.register_function
-    "generic _58__" selector.register_function
+    "generic .58._" selector.register_function
     "space" selector.function_label = source
     "space " selector.function_label = generated
     "generated namespace is distinct" source generated != test::assert_true
     "generic :_" selector.function_label.to_str = escaped
-    "generic _58__" selector.function_label = literal
+    "readable reversible label" ".specialized_generic.32..58._" escaped.as_str test::assert_str_eq
+    "generic .58._" selector.function_label = literal
     "generated identities stay distinct" escaped literal != test::assert_true
     "generic :_" selector.register_function
     "registration is idempotent" escaped.as_str "generic :_" selector.function_label test::assert_str_eq
