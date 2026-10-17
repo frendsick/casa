@@ -61,6 +61,8 @@ success and native failure, replacing an existing file at that explicit output
 path. Ordinary builds leave `<output>.s` unchanged. Each ordinary build atomically
 creates a private directory beside the output, writes its assembly there, and
 removes the assembly and directory on write or native failure and on success.
+The adapter writes directly from the borrowed assembly text without making a
+complete copy of its contents.
 Concurrent ordinary builds use separate assembly files, even with the same binary
 output path. The compiler creates no intermediate object file.
 
