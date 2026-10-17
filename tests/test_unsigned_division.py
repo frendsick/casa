@@ -70,8 +70,8 @@ def test_fallback_results(compiler, root):
         ])
         expected.extend([f"1:{maximum % 3}:{maximum // 3}:{(1 << (width - 1)) - 1}\n", "-2:-1\n"])
     output, assembly = compile_program(compiler, root, "fallback", "\n".join(source))
-    assert "divq %rbx" in assembly, assembly
-    assert "idivq %rbx" in assembly, assembly
+    assert "divq %rcx" in assembly, assembly
+    assert "idivq %rcx" in assembly, assembly
     assert "jz arithmetic_error" in assembly, assembly
     result = subprocess.run([output], check=True, capture_output=True, text=True, timeout=10)
     assert result.stdout == "".join(expected), result.stdout
