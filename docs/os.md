@@ -48,6 +48,7 @@ Prefer the high-level functions:
 | `os::file::remove path:$cstr -> Result[Unit IoError]` | Remove a file |
 | `os::file::stat path:$cstr -> Result[FileStat IoError]` | File metadata |
 | `os::file::write_all path:$cstr content:$Bytes -> Result[Unit IoError]` | Create or replace a file |
+| `os::file::write_text path:$cstr content:$str -> Result[Unit IoError]` | Create or replace a text file without copying the content |
 
 Handle the operation result directly. A separate existence check can become
 stale before the next file operation:
@@ -75,6 +76,22 @@ descriptor on success or error.
 
 Reads can block until data or EOF is available. The result must fit in memory.
 Concurrent file changes can affect the returned bytes, so this is not a snapshot.
+
+### os::file::write_text
+
+```text
+fn write_text path:$cstr content:$str -> Result[Unit IoError]
+```
+
+`write_text` creates or truncates `path` and writes all UTF-8 bytes from the
+borrowed text view. It accepts string literals and `String.as_str` without
+allocating a copy of the content. Embedded NUL bytes are preserved, and the
+storage's trailing NUL is excluded. Empty content creates or truncates the file.
+
+The function completes partial writes and returns `Error` if opening or writing
+fails. A zero-byte write before completion returns `IoError::Other(5)` (EIO).
+It closes the file descriptor on success or write error. As with `write_all`,
+close errors are ignored, and a write error can leave a partial file.
 
 ### FileStat
 

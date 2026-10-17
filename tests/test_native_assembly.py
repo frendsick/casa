@@ -2,6 +2,8 @@
 """Check assembly preservation, cleanup, and overlapping native driver calls."""
 import json
 from pathlib import Path
+import resource
+import signal
 import subprocess
 import sys
 import tempfile
@@ -55,6 +57,35 @@ def test_preservation(compiler, root):
                     assert target.read_bytes() == b"keep this file\n"
                 else:
                     assert not target.exists()
+
+
+def test_write_errors(compiler, root):
+    source = root / "write-error.casa"
+    source.write_text("")
+
+    def limit_file_size():
+        resource.setrlimit(resource.RLIMIT_FSIZE, (1024, 1024))
+        signal.signal(signal.SIGXFSZ, signal.SIG_IGN)
+
+    for keep_asm in (False, True):
+        folder = root / f"write-error-{keep_asm}"
+        folder.mkdir()
+        output = folder / "app"
+        command = [compiler, str(source), "-o", str(output)]
+        if keep_asm:
+            command.append("--keep-asm")
+        result = subprocess.run(command, capture_output=True, text=True, timeout=20,
+                                preexec_fn=limit_file_size)
+        assert result.returncode != 0, result.stderr
+        assert "error: cannot write " in result.stderr, result.stderr
+        assert "errno 27" in result.stderr, result.stderr
+        assert not output.exists()
+        if keep_asm:
+            assembly = Path(str(output) + ".s")
+            assert set(folder.iterdir()) == {assembly}
+            assert assembly.stat().st_size == 1024
+        else:
+            assert not list(folder.iterdir()), list(folder.iterdir())
 
 
 def test_concurrent_builds(compiler, root):
@@ -138,6 +169,7 @@ def main(compiler):
     with tempfile.TemporaryDirectory(prefix="casa native assembly ") as temporary:
         root = Path(temporary)
         test_preservation(compiler, root)
+        test_write_errors(compiler, root)
         test_concurrent_builds(compiler, root)
 
 
