@@ -117,6 +117,14 @@ repeatability in the checked closure body. Callable summaries describe
 possible returned function targets, returned origins, and cleanup-observed
 origins. A call substitutes its actual argument facts into that summary.
 
+Within `semantics.casa`, each `TypeChecker` owns an `OwnershipChecker`. The
+ownership checker holds move history, binding loans, remaining uses, and cleanup
+events. Stack checking supplies the current location, diagnostics, and live
+stack, scope, and loop facts through its methods. Branch snapshots copy the
+continuing ownership state, while move locations and cleanup generations retain
+their body-wide history. Callable summaries and type resolution remain with the
+type checker.
+
 One private completion operation handles every continuing `if` and `match`
 arm in this order: transfer branch-result ownership out of branch-local
 bindings, attach and validate LIFO cleanup for owners left in the scope,

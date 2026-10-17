@@ -388,51 +388,6 @@ fn needs_storage_origin value:$TypedValue -> bool {
     false
 }
 
-# A borrowed local aliases its sources. Its own binding is not new storage.
-fn add_storage_origins
-    origins:std::Option[std::List[Origin]]
-    storage:$std::Option[Place]
-    exclusive:bool
-    loans:$std::Map[std::String BindingLoans]
--> std::Option[std::List[Origin]] {
-    if storage std::Option::Some(place) is then
-        if place.binding loans.get std::Option::Some(binding) is then
-            if binding.capability ValueCapability::Owned is ! then
-                if binding.origins std::Option::Some(sources) is then
-                    for source in sources.iter do
-                        if
-                            source.kind OriginKind::Place is source.place.binding place.binding == && source
-                                .place
-                                .fields
-                                .is_empty &&
-                        then
-                            exclusive place origins add_origin = origins
-                        else
-                            source.clone origins append_origin = origins
-                        fi
-                    done
-                    origins return
-                fi
-            fi
-        fi
-        exclusive place origins add_origin = origins
-    fi
-    origins
-}
-
-pub fn merge_destination_origins
-    target:std::Option[std::List[Origin]]
-    value:$TypedValue
-    expected:$common::Type
-    loans:$std::Map[std::String BindingLoans]
--> std::Option[std::List[Origin]] {
-    value.origins target merge_origins = target
-    if expected.is_borrow value.origins.is_none value needs_storage_origin || && then
-        loans expected.is_exclusive_borrow value.place target add_storage_origins = target
-    fi
-    target
-}
-
 pub fn has_origin_descendant origin:$Origin origins:$std::List[Origin] -> bool {
     for other in origins.iter do
         if other.exclusive other.kind OriginKind::Place is && then
@@ -1476,6 +1431,672 @@ enum ExpectationContext {
     Parameter(ParameterContext)
 }
 
+# Per-body ownership proof state. Stack checking supplies live stack and scope
+# facts through methods and never accesses these collections directly.
+struct OwnershipChecker {
+    moved_owners:             std::List[std::String]
+    # Latest move sites persist after reinitialization and flow restores.
+    # Read them only while the owner is moved.
+    move_locations:           std::Map[std::String common::Location]
+    reported_move_conflicts:  std::List[std::String]
+    owner_events:             std::List[common::OwnerEvent]
+    next_owner_generation:    u64
+    moved_operations:         std::Set[i64]
+    binding_loans:            std::Map[std::String BindingLoans]
+    remaining_uses:           std::Map[std::String u64]
+    remaining_observing_uses: std::Map[std::String u64]
+    cleanup_only_use_offsets: std::Set[i64]
+    last_use_locations:       std::Map[std::String common::Location]
+}
+
+impl OwnershipChecker {
+    fn new -> OwnershipChecker {
+        std::Map[std::String common::Location]::new # last_use_locations
+        std::Set[i64]::new # cleanup_only_use_offsets
+        std::Map[std::String u64]::new # remaining_observing_uses
+        std::Map[std::String u64]::new # remaining_uses
+        std::Map[std::String BindingLoans]::new # binding_loans
+        std::Set[i64]::new # moved_operations
+        0 # next_owner_generation
+        std::List[common::OwnerEvent]::new # owner_events
+        std::List[std::String]::new # reported_move_conflicts
+        std::Map[std::String common::Location]::new # move_locations
+        std::List[std::String]::new # moved_owners
+        OwnershipChecker
+    }
+
+    pub fn owner_is_moved self:$OwnershipChecker name:$str -> bool {
+        name self.moved_owners common::string_list_contains
+    }
+
+    pub fn set_owner_moved self:mut$OwnershipChecker name:$str moved:bool {
+        name self.moved_owners common::string_list_index = index
+        if moved then
+            if 0 index > then
+                name.clone self.moved_owners.push_str
+            fi
+            return
+        fi
+        if 0 index <= then
+            self.moved_owners.pop = last
+            if self.moved_owners.length index u64::try_from.unwrap > then
+                last index u64::try_from.unwrap self.moved_owners.set
+            fi
+        fi
+    }
+
+    pub fn use_binding self:mut$OwnershipChecker name:$str op:$common::Op {
+        name self.remaining_uses decrement_binding_use
+        if
+            op
+                .location
+                .span
+                .offset i64::try_from.unwrap self.cleanup_only_use_offsets.has
+        then
+            return
+        fi
+        name self.remaining_observing_uses decrement_binding_use
+    }
+
+    pub fn binding_is_live self:$OwnershipChecker name:$str -> bool {
+        if name self.remaining_observing_uses.get_str std::Option::Some(count) is then
+            0 count != return
+        fi
+        false
+    }
+
+    fn make_loan_conflict
+        self:$OwnershipChecker
+        binding:std::Option[std::String]
+        fallback_origin:$common::Location
+    -> LoanConflict {
+        fallback_origin.clone std::Option::Some = origin
+        std::Option[common::Location]::None = later_use
+        if binding.clone std::Option::Some(name) is then
+            if name.as_str self.binding_loans.get_str std::Option::Some(loans) is then
+                if loans.location std::Option::Some(location) is then
+                    location.clone std::Option::Some = origin
+                fi
+            fi
+            if name.as_str self.binding_is_live then
+                if name.as_str self.last_use_locations.get_str std::Option::Some(location) is then
+                    location.clone std::Option::Some = later_use
+                fi
+            fi
+        fi
+        later_use origin binding LoanConflict
+    }
+
+    fn make_stacked_loan_conflict
+        self:$OwnershipChecker
+        value:$TypedValue
+        matched_origin:std::Option[Origin]
+    -> LoanConflict {
+        value self.loan_binding_for_value = binding
+        std::Option[common::Location]::None = origin
+        std::Option[common::Location]::None = later_use
+        false = has_tracked_origin
+        if matched_origin std::Option::Some(matched) is then
+            if
+                matched value.loan_spans.get
+                std::Option::Some(tracked_span) is
+            then
+                true = has_tracked_origin
+                if tracked_span std::Option::Some(span) is then
+                    span.origin.clone std::Option::Some = origin
+                    span.later_use.clone std::Option::Some = later_use
+                fi
+            fi
+        fi
+        if has_tracked_origin ! then
+            value.origin.clone std::Option::Some = origin
+        fi
+        later_use origin binding LoanConflict
+    }
+
+    fn loan_binding_for_value self:$OwnershipChecker value:$TypedValue -> std::Option[std::String] {
+        if value.place std::Option::Some(value_place) is then
+            value_place.binding.clone = root
+            if value.loan_spans.is_empty ! root.as_str self.binding_loans.has_str || then
+                root std::Option::Some return
+            fi
+        fi
+        std::Option[std::String]::None
+    }
+
+    fn find_value_loan_conflict
+        self:$OwnershipChecker
+        value:$TypedValue
+        place:$Place
+        exclusive:bool
+        ignored_bindings:$std::List[std::String]
+    -> std::Option[LoanConflict] {
+        if value.binding std::Option::Some(binding_name) is then
+            if
+                place.fields.is_empty place.binding.as_str binding_name.as_str == &&
+                binding_name.as_str ignored_bindings common::string_list_contains ||
+            then
+                std::Option[LoanConflict]::None return
+            fi
+        fi
+        if value.place std::Option::Some(value_place) is then
+            if place value_place.eq value.type_value.is_borrow exclusive ! || && then
+                std::Option[LoanConflict]::None return
+            fi
+        fi
+        if value.capability ValueCapability::Owned is ! then
+            if value.place std::Option::Some(value_place) is then
+                if
+                    place value_place.overlaps
+                    value.capability ValueCapability::Exclusive is exclusive || &&
+                then
+                    std::Option[Origin]::None value self.make_stacked_loan_conflict
+                    std::Option::Some return
+                fi
+            fi
+        fi
+        exclusive place value self.find_value_origin_conflict
+    }
+
+    # Report a loan that a value holds on an overlapping place.
+    fn find_value_origin_conflict
+        self:$OwnershipChecker
+        value:$TypedValue
+        place:$Place
+        exclusive:bool
+    -> std::Option[LoanConflict] {
+        if value.origins std::Option::Some(origins) is then
+            for origin in origins.iter do
+                if
+                    place origin.overlaps
+                    origin.exclusive exclusive || &&
+                then
+                    origin.clone std::Option::Some value self.make_stacked_loan_conflict
+                    std::Option::Some return
+                fi
+            done
+        fi
+        std::Option[LoanConflict]::None
+    }
+
+    pub fn owner_cleanups_for_names
+        self:mut$OwnershipChecker
+        names:mut$std::List[std::String]
+    -> std::List[common::OwnerEvent] {
+        std::List[common::OwnerEvent]::new = cleanups
+        self.owner_events.length = event_index
+        while 0 event_index != do
+            1 -= event_index
+            event_index self.owner_events.get = event
+            if event.name.as_str names common::string_list_contains then
+                event.clone cleanups.push
+            fi
+        done
+        cleanups
+    }
+
+    pub fn remove_owner_events_for_names
+        self:mut$OwnershipChecker
+        names:mut$std::List[std::String]
+    {
+        std::List[common::OwnerEvent]::new = remaining
+        self.owner_events.reverse
+        while self.owner_events.is_empty ! do
+            self.owner_events.pop = event
+            if event.name.as_str names common::string_list_contains ! then
+                event remaining.push
+            fi
+        done
+        remaining = self.owner_events
+    }
+
+    fn describe_loan self:$OwnershipChecker conflict:$LoanConflict -> std::String {
+        "loan starts here".to_str = explanation
+        if conflict.binding std::Option::Some(name) is then
+            if name.as_str self.binding_loans.get_str std::Option::Some(loans) is then
+                loans.format_sources = sources
+                if sources.is_empty ! then
+                    f" (borrow sources: {sources})".as_str explanation.append
+                fi
+            fi
+        fi
+        explanation
+    }
+
+    # Mark an initialized owner as moved at the current location.
+    pub fn record_owner_move self:mut$OwnershipChecker location:$common::Location name:$str {
+        true name self.set_owner_moved
+        location.clone name.to_str self.move_locations.set
+    }
+
+    pub fn record_binding_origins
+        self:mut$OwnershipChecker
+        current_location:$common::Location
+        name:$str
+        origins:mut$std::Option[std::List[Origin]]
+        cleanup_origins:mut$std::Option[std::List[Origin]]
+        capability:$ValueCapability
+    {
+        if origins.is_some cleanup_origins.is_some || then
+            std::Option[common::Location]::None = location
+            if origins.is_some then
+                current_location.clone std::Option::Some = location
+            fi
+            location cleanup_origins.clone origins.clone capability copy BindingLoans
+            name.to_str self.binding_loans.set
+        elif name self.binding_loans.has_str then
+            name self.binding_loans.delete_str
+        fi
+    }
+
+    pub fn report_moved_owner
+        self:$OwnershipChecker
+        diagnostics:mut$error::Diagnostics
+        location:$common::Location
+        name:$str
+    {
+        location.clone f"Owner `{name}` was already moved" common::ErrorKind::InvalidVariable
+        error::CasaError::new = diagnostic
+        if name self.move_locations.get_str std::Option::Some(moved_at) is then
+            moved_at.clone f"`{name}` moved here" error::CasaNote diagnostic.notes.push
+        fi
+        diagnostic diagnostics.push_error
+    }
+
+    fn report_loan_conflict
+        self:$OwnershipChecker
+        diagnostics:mut$error::Diagnostics
+        current_location:$common::Location
+        message:std::String
+        conflict:$LoanConflict
+    {
+        current_location.clone message common::ErrorKind::InvalidVariable error::CasaError::new
+        = diagnostic
+        if conflict.origin std::Option::Some(location) is then
+            if "" location.file.as_str != then
+                conflict self.describe_loan = explanation
+                location.clone explanation error::CasaNote = note
+                note diagnostic.notes.push
+            fi
+        fi
+        if conflict.later_use std::Option::Some(location) is then
+            if "" location.file.as_str != then
+                if conflict.binding std::Option::Some(binding) is then
+                    f"later use of `{binding}` keeps this loan active"
+                else
+                    "later use keeps this loan active".to_str
+                fi = note_message
+                location.clone note_message error::CasaNote = note
+                note diagnostic.notes.push
+            fi
+        fi
+        diagnostic diagnostics.push_error
+    }
+
+    fn find_conflicting_loan_except
+        self:$OwnershipChecker
+        stack:$TypedStack
+        scope:$block_scope::BlockScope
+        enclosing_stacks:$std::List[TypedStack]
+        branches:$std::List[BranchFrame]
+        place:$Place
+        stack_depth:u64
+        exclusive:bool
+        ignored_bindings:$std::List[std::String]
+    -> std::Option[LoanConflict] {
+        0 = index: u64
+        while index stack_depth < do
+            index stack.values.get = value
+            ignored_bindings exclusive place value self.find_value_loan_conflict = conflict
+            if conflict.is_some then
+                conflict return
+            fi
+            1 += index
+        done
+        # Borrows held below an f-string expression stay live while it runs.
+        for enclosing in enclosing_stacks.iter do
+            for value in enclosing.values.iter do
+                exclusive place value self.find_value_origin_conflict = conflict
+                if conflict.is_some then
+                    conflict return
+                fi
+            done
+        done
+        for
+            binding in self
+                .binding_loans
+                .iter
+        do
+            binding.first = binding_name
+            if
+                place.binding.as_str binding_name.as_str ==
+                binding_name.as_str ignored_bindings common::string_list_contains ||
+                binding_name.as_str scope
+                    .has_binding ! ||
+            then
+                continue
+            fi
+            binding.second = loans
+            if binding_name.as_str self.binding_is_live then
+                loans.origins
+            elif binding_name.as_str self.owner_is_moved ! then
+                loans.cleanup_origins
+            else
+                continue
+            fi = active_origins: $std::Option[std::List[Origin]]
+            if active_origins std::Option::Some(origins) is then
+                for origin in origins.iter do
+                    if
+                        place origin.overlaps
+                        origin.exclusive exclusive || &&
+                    then
+                        common::empty_location binding_name.clone std::Option::Some self.make_loan_conflict
+                        std::Option::Some return
+                    fi
+                done
+            fi
+        done
+        for frame in branches.iter do
+            if frame BranchFrame::BranchWhile(while_ctx) is then
+                for
+                    pair in while_ctx
+                        .flow_before
+                        .bindings
+                        .iter
+                do
+                    if
+                        place.binding.as_str pair.first.as_str ==
+                        pair.first.as_str ignored_bindings common::string_list_contains ||
+                        pair.first.as_str scope
+                            .has_binding ! ||
+                    then
+                        continue
+                    fi
+                    if pair.first while_ctx.live_bindings.has then
+                        pair.second.origins
+                    else
+                        pair.second.cleanup_origins
+                    fi match
+                        std::Option::Some(origins) => origins
+                        std::Option::None => continue
+                    end = loop_origins: $std::List[Origin]
+                    for origin in loop_origins.iter do
+                        if
+                            place origin.overlaps
+                            origin.exclusive exclusive || &&
+                        then
+                            common::empty_location = loan_origin
+                            if pair.second.location std::Option::Some(location) is then
+                                location.clone = loan_origin
+                            fi
+                            std::Option[common::Location]::None
+                            loan_origin std::Option::Some
+                            pair.first.clone std::Option::Some LoanConflict
+                            std::Option::Some return
+                        fi
+                    done
+                done
+            fi
+        done
+        std::Option[LoanConflict]::None
+    }
+
+    pub fn current_ownership_flow
+        self:$OwnershipChecker
+        scope:$block_scope::BlockScope
+        callables:$std::Map[std::String std::Set[std::String]]
+    -> OwnershipFlow {
+        std::List[std::String]::new = moved
+        for name in self.moved_owners.iter do
+            if
+                name.as_str scope
+                    .lookup
+                    .is_some
+            then
+                name.clone moved.push
+            fi
+        done
+        std::Map[std::String BindingLoans]::new = bindings
+        for pair in self.binding_loans.iter do
+            if
+                pair.first.as_str scope
+                    .lookup
+                    .is_some
+            then
+                pair.second.clone pair.first.clone bindings.set
+            fi
+        done
+        std::Map[std::String std::Set[std::String]]::new = copied_callables
+        for pair in callables.iter do
+            pair.second.clone pair.first.clone copied_callables.set
+        done
+        self.reported_move_conflicts.clone = reported_move_conflicts
+        copied_callables bindings reported_move_conflicts moved OwnershipFlow
+    }
+
+    pub fn restore_ownership_flow self:mut$OwnershipChecker flow:$OwnershipFlow {
+        flow.moved.clone = self.moved_owners
+        flow.reported_move_conflicts.clone = self.reported_move_conflicts
+        flow.bindings.clone = self.binding_loans
+    }
+
+    pub fn remove_flow_names self:mut$OwnershipChecker names:$std::List[std::String] {
+        for name in names.iter do
+            false name.as_str self.set_owner_moved
+            name.as_str self.reported_move_conflicts common::string_list_index = conflict_index
+            if 0 conflict_index <= then
+                self.reported_move_conflicts.pop = last_conflict
+                if self.reported_move_conflicts.length conflict_index u64::try_from.unwrap > then
+                    last_conflict conflict_index u64::try_from.unwrap self.reported_move_conflicts.set
+                fi
+            fi
+            if name.as_str self.binding_loans.has_str then
+                name.as_str self.binding_loans.delete_str
+            fi
+        done
+    }
+
+    # A borrowed local aliases its sources. Its own binding is not new storage.
+    fn add_storage_origins
+        self:$OwnershipChecker
+        origins:std::Option[std::List[Origin]]
+        storage:$std::Option[Place]
+        exclusive:bool
+    -> std::Option[std::List[Origin]] {
+        if storage std::Option::Some(place) is then
+            if place.binding self.binding_loans.get std::Option::Some(binding) is then
+                if binding.capability ValueCapability::Owned is ! then
+                    if binding.origins std::Option::Some(sources) is then
+                        for source in sources.iter do
+                            if
+                                source.kind OriginKind::Place is source.place.binding place.binding == && source
+                                    .place
+                                    .fields
+                                    .is_empty &&
+                            then
+                                exclusive place origins add_origin = origins
+                            else
+                                source.clone origins append_origin = origins
+                            fi
+                        done
+                        origins return
+                    fi
+                fi
+            fi
+            exclusive place origins add_origin = origins
+        fi
+        origins
+    }
+
+    fn merge_destination_origins
+        self:$OwnershipChecker
+        target:std::Option[std::List[Origin]]
+        value:$TypedValue
+        expected:$common::Type
+    -> std::Option[std::List[Origin]] {
+        value.origins target merge_origins = target
+        if expected.is_borrow value.origins.is_none value needs_storage_origin || && then
+            expected.is_exclusive_borrow value.place target self.add_storage_origins = target
+        fi
+        target
+    }
+
+    fn materialize_declared_return_borrow
+        self:$OwnershipChecker
+        value:mut$TypedValue
+        declared:$common::Type
+    {
+        if declared.is_borrow ! value.capability ValueCapability::Owned is || then
+            return
+        fi
+        value needs_storage_origin = borrows_storage
+        value.type_value.clone = target
+        if value.type_value.borrow_target std::Option::Some(borrowed_target) is then
+            borrowed_target.clone = target
+        fi
+        if declared.is_exclusive_borrow then
+            common::EXCLUSIVE_BORROW_TYPE
+        else
+            common::SHARED_BORROW_TYPE
+        fi
+        target common::apply_borrow_type = value.type_value
+        std::Option[std::List[Origin]]::None = origins
+        if value.origins std::Option::Some(current_origins) is then
+            for origin in current_origins.iter do
+                declared.is_exclusive_borrow origin.with_capability = adjusted
+                adjusted origins append_origin = origins
+            done
+        fi
+        if origins.is_none borrows_storage || then
+            declared.is_exclusive_borrow value.place origins self.add_storage_origins = origins
+        fi
+        origins = value.origins
+    }
+
+    # A generic input can become a borrow at a concrete callable boundary.
+    fn resolve_input_storage_origin
+        self:$OwnershipChecker
+        effect:$common::StackEffect
+        dependency:$Origin
+        origins:std::Option[std::List[Origin]]
+        value:$TypedValue
+    -> std::Option[std::List[Origin]] {
+        for parameter in effect.parameters.iter do
+            if parameter.name dependency.place.binding == parameter.typ.is_borrow && then
+                parameter.typ.is_exclusive_borrow value.place origins self.add_storage_origins return
+            fi
+        done
+        origins
+    }
+
+    fn record_assignment
+        self:mut$OwnershipChecker
+        op:mut$common::Op
+        name:$str
+        typ:$common::Type
+        scope:$block_scope::BlockScope
+    {
+        1 += self.next_owner_generation
+        self.next_owner_generation typ name common::OwnerEvent::new = event
+        if name scope.resolve_binding_reference std::Option::Some(binding) is then
+            binding.storage_name.clone = event.storage_name
+        fi
+        event.clone op
+            .ensure_ownership
+            .assignments
+            .push
+        event self.owner_events.push
+    }
+
+    fn all_owner_cleanups
+        self:$OwnershipChecker
+    -> std::List[common::OwnerEvent] std::List[std::String] {
+        self.owner_events.clone = cleanups
+        cleanups.reverse
+        std::List[std::String]::new = ending_names
+        for event in cleanups.iter do
+            if event.name.as_str ending_names common::string_list_contains ! then
+                event.name.clone ending_names.push
+            fi
+        done
+        for
+            name in self
+                .binding_loans
+                .keys
+                .iter
+        do
+            if name.as_str ending_names common::string_list_contains ! then
+                name.clone ending_names.push
+            fi
+        done
+        cleanups ending_names
+    }
+
+    fn has_owner_cleanups self:$OwnershipChecker -> bool { self.owner_events.is_empty ! }
+
+    fn has_reported_move_conflict self:$OwnershipChecker name:$str -> bool {
+        name self.reported_move_conflicts common::string_list_contains
+    }
+
+    fn record_move_conflict self:mut$OwnershipChecker name:$str {
+        if name self.has_reported_move_conflict ! then
+            name.to_str self.reported_move_conflicts.push
+        fi
+    }
+
+    fn record_operation_move self:mut$OwnershipChecker operation:i64 {
+        operation self.moved_operations.add
+    }
+
+    fn attach_body_moves self:$OwnershipChecker body:mut$body_builder::Builder {
+        self.moved_operations = moved: $std::Set[i64]
+        {
+            = operation: mut$common::Op
+            if operation.id moved.has then
+                true = operation.ensure_ownership.moves_owner
+            fi
+        } = visitor
+        visitor body.visit_operations_mut
+    }
+
+    fn set_variable_uses self:mut$OwnershipChecker uses:$VariableUses {
+        uses.counts.clone = self.remaining_uses
+        uses.observing_counts.clone = self.remaining_observing_uses
+        uses.cleanup_only_use_offsets.clone = self.cleanup_only_use_offsets
+        uses.last_locations.clone = self.last_use_locations
+    }
+
+    fn binding_has_remaining_uses self:$OwnershipChecker name:$std::String -> bool {
+        if name self.remaining_uses.get std::Option::Some(count) is then
+            0 count != return
+        fi
+        false
+    }
+
+    fn find_binding_loans self:$OwnershipChecker name:$str -> std::Option[$BindingLoans] {
+        name self.binding_loans.get_str
+    }
+
+    # Move sites outlive branch restores, but a guard checks its own moves.
+    fn inherit_move_locations self:mut$OwnershipChecker parent:$OwnershipChecker {
+        parent.move_locations.clone = self.move_locations
+    }
+
+    fn validate_guard_moves
+        self:$OwnershipChecker
+        parent:$OwnershipChecker
+        location:$common::Location
+        diagnostics:mut$error::Diagnostics
+    {
+        for name in self.moved_owners.iter do
+            if name.as_str parent.owner_is_moved ! then
+                location f"Match guard cannot move owner `{name}`"
+                common::ErrorKind::InvalidVariable diagnostics.record_error_string
+            fi
+        done
+    }
+}
+
 struct TypeChecker {
     stack:                      TypedStack
     parameters:                 std::List[common::Parameter]
@@ -1490,22 +2111,10 @@ struct TypeChecker {
     store:                      mut$common::SymbolStore
     param_cap:                  std::Option[u64]
     underflow_reported_this_op: bool
+    ownership:                  OwnershipChecker
     scope:                      block_scope::BlockScope
-    moved_owners:               std::List[std::String]
-    # Latest move site per owner. Entries persist after reinitialization and
-    # flow restores, so read them only while the owner is moved.
-    move_locations:             std::Map[std::String common::Location]
-    reported_move_conflicts:    std::List[std::String]
-    owner_events:               std::List[common::OwnerEvent]
-    next_owner_generation:      u64
-    moved_operations:           std::Set[i64]
     scalar_inputs:              std::List[common::ScalarInput]
     operation_stack_depth:      u64
-    binding_loans:              std::Map[std::String BindingLoans]
-    remaining_uses:             std::Map[std::String u64]
-    remaining_observing_uses:   std::Map[std::String u64]
-    cleanup_only_use_offsets:   std::Set[i64]
-    last_use_locations:         std::Map[std::String common::Location]
     current_trait_bounds:       std::Map[std::String std::List[common::TraitBound]]
     unsafe_depth:               u64
     # Scope depth of the innermost f-string expression, or zero outside one.
@@ -2279,20 +2888,10 @@ impl TypeChecker {
         0 # format_scope_depth
         0 # unsafe_depth
         std::Map[std::String std::List[common::TraitBound]]::new # current_trait_bounds
-        std::Map[std::String common::Location]::new # last_use_locations
-        std::Set[i64]::new # cleanup_only_use_offsets
-        std::Map[std::String u64]::new # remaining_observing_uses
-        std::Map[std::String u64]::new # remaining_uses
-        std::Map[std::String BindingLoans]::new # binding_loans
         0 # operation_stack_depth
         std::List[common::ScalarInput]::new # scalar_inputs
-        std::Set[i64]::new # moved_operations
-        0 # next_owner_generation
-        std::List[common::OwnerEvent]::new # owner_events
-        std::List[std::String]::new # reported_move_conflicts
-        std::Map[std::String common::Location]::new # move_locations
-        std::List[std::String]::new # moved_owners
         block_scope::BlockScope::new # scope
+        OwnershipChecker::new # ownership
         false # underflow_reported_this_op
         std::Option[u64]::None # param_cap
         store # store
@@ -2474,63 +3073,20 @@ impl TypeChecker {
         self.scope.exit
     }
 
-    pub fn current_ownership_flow tc:mut$TypeChecker -> OwnershipFlow {
-        std::List[std::String]::new = moved
-        for name in tc.moved_owners.iter do
-            if
-                name.as_str tc
-                    .scope
-                    .lookup
-                    .is_some
-            then
-                name.clone moved.push
-            fi
-        done
-        std::Map[std::String BindingLoans]::new = bindings
-        for pair in tc.binding_loans.iter do
-            if
-                pair.first.as_str tc
-                    .scope
-                    .lookup
-                    .is_some
-            then
-                pair.second.clone pair.first.clone bindings.set
-            fi
-        done
-        std::Map[std::String std::Set[std::String]]::new = callables
-        for pair in tc.callable_bindings.iter do
-            pair.second.clone pair.first.clone callables.set
-        done
-        tc.reported_move_conflicts.clone = reported_move_conflicts
-        callables bindings reported_move_conflicts moved OwnershipFlow
+    pub fn current_ownership_flow self:$TypeChecker -> OwnershipFlow {
+        self.callable_bindings self.scope self.ownership.current_ownership_flow
     }
 
-    pub fn restore_ownership_flow tc:mut$TypeChecker flow:$OwnershipFlow {
-        flow.moved.clone = tc.moved_owners
-        flow.reported_move_conflicts.clone = tc.reported_move_conflicts
-        flow.bindings.clone = tc.binding_loans
-        std::Map[std::String std::Set[std::String]]::new = callables
-        for pair in flow.callables.iter do
-            pair.second.clone pair.first.clone callables.set
-        done
-        callables = tc.callable_bindings
+    pub fn restore_ownership_flow self:mut$TypeChecker flow:$OwnershipFlow {
+        flow self.ownership.restore_ownership_flow
+        flow.callables.clone = self.callable_bindings
     }
 
-    pub fn remove_flow_names tc:mut$TypeChecker names:$std::List[std::String] {
+    pub fn remove_flow_names self:mut$TypeChecker names:$std::List[std::String] {
+        names self.ownership.remove_flow_names
         for name in names.iter do
-            false name.as_str tc.set_owner_moved
-            name.as_str tc.reported_move_conflicts common::string_list_index = conflict_index
-            if 0 conflict_index <= then
-                tc.reported_move_conflicts.pop = last_conflict
-                if tc.reported_move_conflicts.length conflict_index u64::try_from.unwrap > then
-                    last_conflict conflict_index u64::try_from.unwrap tc.reported_move_conflicts.set
-                fi
-            fi
-            if name.as_str tc.binding_loans.has_str then
-                name.as_str tc.binding_loans.delete_str
-            fi
-            if name.as_str tc.callable_bindings.has_str then
-                name.as_str tc.callable_bindings.delete_str
+            if name.as_str self.callable_bindings.has_str then
+                name.as_str self.callable_bindings.delete_str
             fi
         done
     }
@@ -2646,44 +3202,9 @@ impl TypeChecker {
         done
     }
 
-    pub fn owner_is_moved tc:$TypeChecker name:$str -> bool {
-        name tc.moved_owners common::string_list_contains
-    }
-
-    pub fn set_owner_moved tc:mut$TypeChecker name:$str moved:bool {
-        name tc.moved_owners common::string_list_index = index
-        if moved then
-            if 0 index > then
-                name.clone tc.moved_owners.push_str
-            fi
-            return
-        fi
-        if 0 index <= then
-            tc.moved_owners.pop = last
-            if tc.moved_owners.length index u64::try_from.unwrap > then
-                last index u64::try_from.unwrap tc.moved_owners.set
-            fi
-        fi
-    }
-
-    # Mark an initialized owner as moved at the current location.
-    pub fn record_owner_move tc:mut$TypeChecker name:$str {
-        true name tc.set_owner_moved
-        tc.current_location.clone name.to_str tc.move_locations.set
-    }
-
-    pub fn report_moved_owner tc:mut$TypeChecker location:$common::Location name:$str {
-        location.clone f"Owner `{name}` was already moved" common::ErrorKind::InvalidVariable
-        error::CasaError::new = diagnostic
-        if name tc.move_locations.get_str std::Option::Some(moved_at) is then
-            moved_at.clone f"`{name}` moved here" error::CasaNote diagnostic.notes.push
-        fi
-        diagnostic tc.diagnostics.push_error
-    }
-
     pub fn record_conditional_move tc:mut$TypeChecker op:mut$common::Op name:$str {
         name op tc.record_named_binding
-        name tc.record_owner_move
+        name tc.current_location tc.ownership.record_owner_move
         name.to_str std::Option::Some = op.ensure_ownership.conditional_move
         tc
             .branched_stacks
@@ -2691,45 +3212,6 @@ impl TypeChecker {
             .into_if = if_ctx
         name.to_str if_ctx.conditional_moves.push
         if_ctx BranchFrame::BranchIf tc.branched_stacks.push
-    }
-
-    pub fn use_binding tc:mut$TypeChecker name:$str op:$common::Op {
-        name tc.remaining_uses decrement_binding_use
-        if
-            op
-                .location
-                .span
-                .offset i64::try_from.unwrap tc.cleanup_only_use_offsets.has
-        then
-            return
-        fi
-        name tc.remaining_observing_uses decrement_binding_use
-    }
-
-    pub fn binding_is_live tc:$TypeChecker name:$str -> bool {
-        if name tc.remaining_observing_uses.get_str std::Option::Some(count) is then
-            0 count != return
-        fi
-        false
-    }
-
-    pub fn record_binding_origins
-        tc:mut$TypeChecker
-        name:$str
-        origins:mut$std::Option[std::List[Origin]]
-        cleanup_origins:mut$std::Option[std::List[Origin]]
-        capability:$ValueCapability
-    {
-        if origins.is_some cleanup_origins.is_some || then
-            std::Option[common::Location]::None = location
-            if origins.is_some then
-                tc.current_location.clone std::Option::Some = location
-            fi
-            location cleanup_origins.clone origins.clone capability copy BindingLoans
-            name.to_str tc.binding_loans.set
-        elif name tc.binding_loans.has_str then
-            name tc.binding_loans.delete_str
-        fi
     }
 
     fn record_enum_pattern_origins
@@ -2754,129 +3236,15 @@ impl TypeChecker {
             if copied then
                 subject.place subject.origins std::Option[std::List[Origin]]::None merge_contained_origins = origins
             elif subject.capability ValueCapability::Owned is ! then
-                self.binding_loans subject.capability ValueCapability::Exclusive is subject.place origins add_storage_origins = origins
+                subject.capability ValueCapability::Exclusive is subject.place origins self.ownership.add_storage_origins = origins
             fi
             subject.cleanup_origins.clone = cleanup_origins
             std::List[std::String]::new = visiting
             if visiting self.store typ does_cleanup_observe_borrow then
                 origins cleanup_origins merge_origins = cleanup_origins
             fi
-            typ type_capability cleanup_origins origins name.as_str self.record_binding_origins
+            typ type_capability cleanup_origins origins name.as_str self.current_location self.ownership.record_binding_origins
         done
-    }
-
-    fn make_loan_conflict
-        self:$TypeChecker
-        binding:std::Option[std::String]
-        fallback_origin:$common::Location
-    -> LoanConflict {
-        fallback_origin.clone std::Option::Some = origin
-        std::Option[common::Location]::None = later_use
-        if binding.clone std::Option::Some(name) is then
-            if name.as_str self.binding_loans.get_str std::Option::Some(loans) is then
-                if loans.location std::Option::Some(location) is then
-                    location.clone std::Option::Some = origin
-                fi
-            fi
-            if name.as_str self.binding_is_live then
-                if name.as_str self.last_use_locations.get_str std::Option::Some(location) is then
-                    location.clone std::Option::Some = later_use
-                fi
-            fi
-        fi
-        later_use origin binding LoanConflict
-    }
-
-    fn make_stacked_loan_conflict
-        self:$TypeChecker
-        value:$TypedValue
-        matched_origin:std::Option[Origin]
-    -> LoanConflict {
-        value self.loan_binding_for_value = binding
-        std::Option[common::Location]::None = origin
-        std::Option[common::Location]::None = later_use
-        false = has_tracked_origin
-        if matched_origin std::Option::Some(matched) is then
-            if
-                matched value.loan_spans.get
-                std::Option::Some(tracked_span) is
-            then
-                true = has_tracked_origin
-                if tracked_span std::Option::Some(span) is then
-                    span.origin.clone std::Option::Some = origin
-                    span.later_use.clone std::Option::Some = later_use
-                fi
-            fi
-        fi
-        if has_tracked_origin ! then
-            value.origin.clone std::Option::Some = origin
-        fi
-        later_use origin binding LoanConflict
-    }
-
-    fn loan_binding_for_value self:$TypeChecker value:$TypedValue -> std::Option[std::String] {
-        if value.place std::Option::Some(value_place) is then
-            value_place.binding.clone = root
-            if value.loan_spans.is_empty ! root.as_str self.binding_loans.has_str || then
-                root std::Option::Some return
-            fi
-        fi
-        std::Option[std::String]::None
-    }
-
-    fn find_value_loan_conflict
-        self:$TypeChecker
-        value:$TypedValue
-        place:$Place
-        exclusive:bool
-        ignored_bindings:$std::List[std::String]
-    -> std::Option[LoanConflict] {
-        if value.binding std::Option::Some(binding_name) is then
-            if
-                place.fields.is_empty place.binding.as_str binding_name.as_str == &&
-                binding_name.as_str ignored_bindings common::string_list_contains ||
-            then
-                std::Option[LoanConflict]::None return
-            fi
-        fi
-        if value.place std::Option::Some(value_place) is then
-            if place value_place.eq value.type_value.is_borrow exclusive ! || && then
-                std::Option[LoanConflict]::None return
-            fi
-        fi
-        if value.capability ValueCapability::Owned is ! then
-            if value.place std::Option::Some(value_place) is then
-                if
-                    place value_place.overlaps
-                    value.capability ValueCapability::Exclusive is exclusive || &&
-                then
-                    std::Option[Origin]::None value self.make_stacked_loan_conflict
-                    std::Option::Some return
-                fi
-            fi
-        fi
-        exclusive place value self.find_value_origin_conflict
-    }
-
-    # Report a loan that a value holds on an overlapping place.
-    fn find_value_origin_conflict
-        self:$TypeChecker
-        value:$TypedValue
-        place:$Place
-        exclusive:bool
-    -> std::Option[LoanConflict] {
-        if value.origins std::Option::Some(origins) is then
-            for origin in origins.iter do
-                if
-                    place origin.overlaps
-                    origin.exclusive exclusive || &&
-                then
-                    origin.clone std::Option::Some value self.make_stacked_loan_conflict
-                    std::Option::Some return
-                fi
-            done
-        fi
-        std::Option[LoanConflict]::None
     }
 
     fn find_conflicting_loan_except
@@ -2886,106 +3254,9 @@ impl TypeChecker {
         exclusive:bool
         ignored_bindings:$std::List[std::String]
     -> std::Option[LoanConflict] {
-        0 = index: u64
-        while index stack_depth < do
-            index self
-                .stack
-                .values
-                .get = value
-            ignored_bindings exclusive place value self.find_value_loan_conflict = conflict
-            if conflict.is_some then
-                conflict return
-            fi
-            1 += index
-        done
-        # Borrows held below an f-string expression stay live while it runs.
-        for enclosing in self.format_enclosing_stacks.iter do
-            for value in enclosing.values.iter do
-                exclusive place value self.find_value_origin_conflict = conflict
-                if conflict.is_some then
-                    conflict return
-                fi
-            done
-        done
-        for
-            binding in self
-                .binding_loans
-                .iter
-        do
-            binding.first = binding_name
-            if
-                place.binding.as_str binding_name.as_str ==
-                binding_name.as_str ignored_bindings common::string_list_contains ||
-                binding_name.as_str self
-                    .scope
-                    .has_binding ! ||
-            then
-                continue
-            fi
-            binding.second = loans
-            if binding_name.as_str self.binding_is_live then
-                loans.origins
-            elif binding_name.as_str self.owner_is_moved ! then
-                loans.cleanup_origins
-            else
-                continue
-            fi = active_origins: $std::Option[std::List[Origin]]
-            if active_origins std::Option::Some(origins) is then
-                for origin in origins.iter do
-                    if
-                        place origin.overlaps
-                        origin.exclusive exclusive || &&
-                    then
-                        common::empty_location binding_name.clone std::Option::Some self.make_loan_conflict
-                        std::Option::Some return
-                    fi
-                done
-            fi
-        done
-        for frame in self.branched_stacks.iter do
-            if frame BranchFrame::BranchWhile(while_ctx) is then
-                for
-                    pair in while_ctx
-                        .flow_before
-                        .bindings
-                        .iter
-                do
-                    if
-                        place.binding.as_str pair.first.as_str ==
-                        pair.first.as_str ignored_bindings common::string_list_contains ||
-                        pair.first.as_str self
-                            .scope
-                            .has_binding ! ||
-                    then
-                        continue
-                    fi
-                    if pair.first while_ctx.live_bindings.has then
-                        pair.second.origins
-                    else
-                        pair.second.cleanup_origins
-                    fi match
-                        std::Option::Some(origins) => origins
-                        std::Option::None => continue
-                    end = loop_origins: $std::List[Origin]
-                    for origin in loop_origins.iter do
-                        if
-                            place origin.overlaps
-                            origin.exclusive exclusive || &&
-                        then
-                            common::empty_location = loan_origin
-                            if pair.second.location std::Option::Some(location) is then
-                                location.clone = loan_origin
-                            fi
-                            std::Option[common::Location]::None
-                            loan_origin std::Option::Some
-                            pair.first.clone std::Option::Some LoanConflict
-                            std::Option::Some return
-                        fi
-                    done
-                done
-            fi
-        done
-        std::Option[LoanConflict]::None
+        ignored_bindings exclusive stack_depth place
+        self.branched_stacks self.format_enclosing_stacks self.scope self.stack
+        self.ownership.find_conflicting_loan_except
     }
 
     pub fn find_conflicting_loan
@@ -3124,44 +3395,7 @@ impl TypeChecker {
         if tc.path_continues ! then
             return
         fi
-        1 += tc.next_owner_generation
-        tc.next_owner_generation typ name common::OwnerEvent::new = event
-        if name tc.scope.resolve_binding_reference std::Option::Some(binding) is then
-            binding.storage_name.clone = event.storage_name
-        fi
-        event.clone op
-            .ensure_ownership
-            .assignments
-            .push
-        event tc.owner_events.push
-    }
-
-    pub fn owner_cleanups_for_names
-        tc:mut$TypeChecker
-        names:mut$std::List[std::String]
-    -> std::List[common::OwnerEvent] {
-        std::List[common::OwnerEvent]::new = cleanups
-        tc.owner_events.length = event_index
-        while 0 event_index != do
-            1 -= event_index
-            event_index tc.owner_events.get = event
-            if event.name.as_str names common::string_list_contains then
-                event.clone cleanups.push
-            fi
-        done
-        cleanups
-    }
-
-    pub fn remove_owner_events_for_names tc:mut$TypeChecker names:mut$std::List[std::String] {
-        std::List[common::OwnerEvent]::new = remaining
-        tc.owner_events.reverse
-        while tc.owner_events.is_empty ! do
-            tc.owner_events.pop = event
-            if event.name.as_str names common::string_list_contains ! then
-                event remaining.push
-            fi
-        done
-        remaining = tc.owner_events
+        tc.scope typ name op tc.ownership.record_assignment
     }
 
     fn validate_owner_cleanups
@@ -3179,8 +3413,8 @@ impl TypeChecker {
                 continue
             fi
             if
-                event.name.as_str tc.owner_is_moved !
-                event.name.as_str tc.reported_move_conflicts common::string_list_contains ! &&
+                event.name.as_str tc.ownership.owner_is_moved !
+                event.name.as_str tc.ownership.has_reported_move_conflict ! &&
             then
                 if
                     ending_names true tc
@@ -3190,8 +3424,8 @@ impl TypeChecker {
                     tc.find_conflicting_loan_except std::Option::Some(conflict) is
                 then
                     conflict f"Cannot destroy owner `{event.name}` while it is borrowed"
-                    tc.report_loan_conflict
-                    event.name.clone tc.reported_move_conflicts.push
+                    tc.current_location tc.diagnostics tc.ownership.report_loan_conflict
+                    event.name.as_str tc.ownership.record_move_conflict
                 fi
             fi
             event.name.clone checked.push
@@ -3204,7 +3438,7 @@ impl TypeChecker {
         names:mut$std::List[std::String]
         remove:bool
     {
-        names tc.owner_cleanups_for_names = cleanups
+        names tc.ownership.owner_cleanups_for_names = cleanups
         names cleanups op tc.validate_owner_cleanups
         cleanups.reverse
         while cleanups.is_empty ! do
@@ -3214,7 +3448,7 @@ impl TypeChecker {
                 .push
         done
         if remove then
-            names tc.remove_owner_events_for_names
+            names tc.ownership.remove_owner_events_for_names
         fi
     }
 
@@ -3224,24 +3458,7 @@ impl TypeChecker {
     }
 
     pub fn attach_all_owner_cleanups tc:mut$TypeChecker op:mut$common::Op {
-        tc.owner_events.clone = cleanups
-        cleanups.reverse
-        std::List[std::String]::new = ending_names
-        for event in cleanups.iter do
-            if event.name.as_str ending_names common::string_list_contains ! then
-                event.name.clone ending_names.push
-            fi
-        done
-        for
-            name in tc
-                .binding_loans
-                .keys
-                .iter
-        do
-            if name.as_str ending_names common::string_list_contains ! then
-                name.clone ending_names.push
-            fi
-        done
+        tc.ownership.all_owner_cleanups = ending_names = cleanups
         ending_names cleanups op tc.validate_owner_cleanups
         for event in cleanups.iter do
             event.clone op
@@ -3297,8 +3514,8 @@ impl TypeChecker {
             if function_opt type_value tc.type_is_duplicable ! then
                 # A reported use pushes an unbound value so the consuming
                 # operation does not report the same use again.
-                if name.as_str tc.owner_is_moved then
-                    name.as_str op.location tc.report_moved_owner
+                if name.as_str tc.ownership.owner_is_moved then
+                    name.as_str op.location tc.diagnostics tc.ownership.report_moved_owner
                 else
                     name.to_str std::Option::Some = binding
                     op.id std::Option::Some = source
@@ -3312,7 +3529,7 @@ impl TypeChecker {
         std::Option[std::List[Origin]]::None = cleanup_origins
         std::Map[Origin std::Option[LoanSpan]]::new = loan_spans
         name tc.does_binding_own_callable_captures = owns_callable_captures
-        if name tc.binding_loans.get_str std::Option::Some(loans) is then
+        if name tc.ownership.find_binding_loans std::Option::Some(loans) is then
             loans.origins.clone = origins
             loans.cleanup_origins.clone = cleanup_origins
             if type_value common::Type::Function(_) is cleanup_origins.is_some && then
@@ -3495,43 +3712,6 @@ impl TypeChecker {
         true
     }
 
-    fn describe_loan self:$TypeChecker conflict:$LoanConflict -> std::String {
-        "loan starts here".to_str = explanation
-        if conflict.binding std::Option::Some(name) is then
-            if name.as_str self.binding_loans.get_str std::Option::Some(loans) is then
-                loans.format_sources = sources
-                if sources.is_empty ! then
-                    f" (borrow sources: {sources})".as_str explanation.append
-                fi
-            fi
-        fi
-        explanation
-    }
-
-    fn report_loan_conflict self:mut$TypeChecker message:std::String conflict:$LoanConflict {
-        self.current_location.clone message common::ErrorKind::InvalidVariable error::CasaError::new
-        = diagnostic
-        if conflict.origin std::Option::Some(location) is then
-            if "" location.file.as_str != then
-                conflict self.describe_loan = explanation
-                location.clone explanation error::CasaNote = note
-                note diagnostic.notes.push
-            fi
-        fi
-        if conflict.later_use std::Option::Some(location) is then
-            if "" location.file.as_str != then
-                if conflict.binding std::Option::Some(binding) is then
-                    f"later use of `{binding}` keeps this loan active"
-                else
-                    "later use keeps this loan active".to_str
-                fi = note_message
-                location.clone note_message error::CasaNote = note
-                note diagnostic.notes.push
-            fi
-        fi
-        diagnostic self.diagnostics.push_error
-    }
-
     pub fn consume_value tc:mut$TypeChecker value:$TypedValue {
         if value.capability ValueCapability::Owned is ! then
             value tc.clone_hint = hint
@@ -3549,8 +3729,8 @@ impl TypeChecker {
             return
         fi
         if value.binding std::Option::Some(name) is then
-            if name.as_str tc.owner_is_moved then
-                name.as_str tc.current_location.clone tc.report_moved_owner
+            if name.as_str tc.ownership.owner_is_moved then
+                name.as_str tc.current_location.clone tc.diagnostics tc.ownership.report_moved_owner
                 return
             fi
             if
@@ -3559,23 +3739,21 @@ impl TypeChecker {
                     .values
                     .length name.as_str Place::new tc.find_conflicting_loan std::Option::Some(conflict) is
             then
-                conflict f"Cannot move owner `{name}` while it is borrowed" tc.report_loan_conflict
-                if name.as_str tc.reported_move_conflicts common::string_list_contains ! then
-                    name.clone tc.reported_move_conflicts.push
-                fi
+                conflict f"Cannot move owner `{name}` while it is borrowed" tc.current_location tc.diagnostics tc.ownership.report_loan_conflict
+                name.as_str tc.ownership.record_move_conflict
                 return
             fi
-            name.as_str tc.record_owner_move
+            name.as_str tc.current_location tc.ownership.record_owner_move
             if value.source std::Option::Some(source_op) is then
-                source_op tc.moved_operations.add
+                source_op tc.ownership.record_operation_move
             fi
         fi
     }
 
     pub fn release_value tc:mut$TypeChecker value:$TypedValue {
         if value.binding std::Option::Some(name) is then
-            if name.as_str tc.owner_is_moved then
-                name.as_str tc.current_location.clone tc.report_moved_owner
+            if name.as_str tc.ownership.owner_is_moved then
+                name.as_str tc.current_location.clone tc.diagnostics tc.ownership.report_moved_owner
             fi
         fi
     }
@@ -3592,7 +3770,7 @@ impl TypeChecker {
     pub fn materialize_copy_escape self:mut$TypeChecker value:$TypedValue {
         if value.type_value self.uses_copy_storage then
             if value.source std::Option::Some(source_op) is then
-                source_op self.moved_operations.add
+                source_op self.ownership.record_operation_move
             fi
         fi
     }
@@ -4589,8 +4767,8 @@ impl TypeChecker {
             argument.cleanup_origins cleanup_origins merge_origins = cleanup_origins
             argument.origins cleanup_origins merge_origins = cleanup_origins
             if parameter_type.is_borrow argument.origins.is_none argument needs_storage_origin || && then
-                tc.binding_loans parameter_type.is_exclusive_borrow argument.place origins add_storage_origins = origins
-                tc.binding_loans parameter_type.is_exclusive_borrow argument.place cleanup_origins add_storage_origins = cleanup_origins
+                parameter_type.is_exclusive_borrow argument.place origins tc.ownership.add_storage_origins = origins
+                parameter_type.is_exclusive_borrow argument.place cleanup_origins tc.ownership.add_storage_origins = cleanup_origins
             fi
             1 += index
         done
@@ -4728,7 +4906,7 @@ impl TypeChecker {
                     then
                         if parameter_type.is_exclusive_borrow then " exclusively" else "" fi = qualifier
                         conflict f"Cannot borrow `{place.format}`{qualifier} while it is borrowed"
-                        tc.report_loan_conflict
+                        tc.current_location tc.diagnostics tc.ownership.report_loan_conflict
                     fi
                 fi
             fi
@@ -4956,12 +5134,12 @@ impl TypeChecker {
         # An exclusive field borrow lends through the receiver. It cannot be
         # copied out like a shared payload while the receiver remains usable.
         if value_type.is_exclusive_borrow then
-            self.binding_loans true projected_place origins add_storage_origins = origins
+            true projected_place origins self.ownership.add_storage_origins = origins
         fi
         origins = value.origins
         if projected_place std::Option::Some(place) is then
             place.clone std::Option::Some = value.place
-            if place.binding self.binding_loans.get std::Option::Some(binding) is then
+            if place.binding.as_str self.ownership.find_binding_loans std::Option::Some(binding) is then
                 if binding.capability ValueCapability::Owned is ! then
                     false = has_local_storage
                     if binding.origins std::Option::Some(sources) is then
@@ -5200,7 +5378,7 @@ impl TypeChecker {
                         .variables
                         .set
                 fi
-                false name.as_str tc.set_owner_moved
+                false name.as_str tc.ownership.set_owner_moved
 
                 leading_values parameter_index + = depth
                 depth name.clone common::TemporaryBinding = binding
@@ -5258,7 +5436,7 @@ impl TypeChecker {
             fi
             false binding.name.as_str tc.scope.assign
             value.type_value binding.name.as_str tc.scope.set_type drop
-            false binding.name.as_str tc.set_owner_moved
+            false binding.name.as_str tc.ownership.set_owner_moved
             false function_opt value.type_value binding.name.as_str op tc.record_owner_assignment
             stack_index tc
                 .stack
@@ -6729,7 +6907,7 @@ impl TypeChecker {
                 origins.is_none value needs_storage_origin ||
                 typ.is_borrow value.capability ValueCapability::Owned is ! || &&
             then
-                tc.binding_loans value.capability ValueCapability::Exclusive is value.place origins add_storage_origins = origins
+                value.capability ValueCapability::Exclusive is value.place origins tc.ownership.add_storage_origins = origins
             fi
         fi
         if origins.is_some then
@@ -6983,7 +7161,7 @@ impl TypeChecker {
         function_opt:mut$std::Option[common::Function]
     {
         if
-            name tc.owner_is_moved
+            name tc.ownership.owner_is_moved
             typ.is_borrow ||
             function_opt typ tc.type_is_duplicable ||
             tc.store typ common::type_needs_destruction_in_store ! ||
@@ -6998,7 +7176,7 @@ impl TypeChecker {
             std::Option::Some(conflict) is
         then
             conflict f"Cannot replace owner `{name}` while it is borrowed"
-            tc.report_loan_conflict
+            tc.current_location tc.diagnostics tc.ownership.report_loan_conflict
         fi
     }
 
@@ -7126,7 +7304,7 @@ impl TypeChecker {
                     true = was_initialized
                 fi
             fi
-            if was_initialized var_name.as_str tc.owner_is_moved ! && then
+            if was_initialized var_name.as_str tc.ownership.owner_is_moved ! && then
                 if function_opt var_name.as_str tc.local_var_type std::Option::Some(previous_type) is then
                     function_opt previous_type var_name.as_str op tc.validate_owner_replacement
                 fi
@@ -7156,9 +7334,9 @@ impl TypeChecker {
                 tc.get_assignment_cleanup_origins
                 = cleanup_origins
                 effective_type_t tc.expect_type_t
-                assigned_capability cleanup_origins origins var_name.as_str tc.record_binding_origins
+                assigned_capability cleanup_origins origins var_name.as_str tc.current_location tc.ownership.record_binding_origins
                 if is_global ! then
-                    false var_name.as_str tc.set_owner_moved
+                    false var_name.as_str tc.ownership.set_owner_moved
                     is_global function_opt unified_scoped var_name.as_str op tc.record_owner_assignment
                 fi
                 return
@@ -7188,9 +7366,9 @@ impl TypeChecker {
                 tc.get_assignment_cleanup_origins
                 = cleanup_origins
                 effective_type_t tc.expect_type_t
-                assigned_capability cleanup_origins origins var_name.as_str tc.record_binding_origins
+                assigned_capability cleanup_origins origins var_name.as_str tc.current_location tc.ownership.record_binding_origins
                 if is_global ! then
-                    false var_name.as_str tc.set_owner_moved
+                    false var_name.as_str tc.ownership.set_owner_moved
                     is_global function_opt unified_local var_name.as_str op tc.record_owner_assignment
                 fi
                 if function_opt std::Option::Some(function) is then
@@ -7217,8 +7395,8 @@ impl TypeChecker {
                 tc.get_assignment_cleanup_origins
                 = cleanup_origins
                 effective_type_t tc.expect_type_t
-                assigned_capability cleanup_origins origins var_name.as_str tc.record_binding_origins
-                false var_name.as_str tc.set_owner_moved
+                assigned_capability cleanup_origins origins var_name.as_str tc.current_location tc.ownership.record_binding_origins
+                false var_name.as_str tc.ownership.set_owner_moved
                 unified_capture drop
                 return
             fi
@@ -7237,9 +7415,9 @@ impl TypeChecker {
                 tc.get_assignment_cleanup_origins
                 = cleanup_origins
                 effective_type_t tc.expect_type_t
-                assigned_capability cleanup_origins origins var_name.as_str tc.record_binding_origins
+                assigned_capability cleanup_origins origins var_name.as_str tc.current_location tc.ownership.record_binding_origins
                 if is_global ! var_name.as_str common::is_internal_variable_name || then
-                    false var_name.as_str tc.set_owner_moved
+                    false var_name.as_str tc.ownership.set_owner_moved
                 fi
                 global_var.typ.clone = global_type
                 global_type var_name.as_str tc.scope.set_type drop
@@ -7257,9 +7435,9 @@ impl TypeChecker {
             tc.get_assignment_cleanup_origins
             = cleanup_origins
             effective_type_t tc.expect_type_t
-            assigned_capability cleanup_origins origins var_name.as_str tc.record_binding_origins
+            assigned_capability cleanup_origins origins var_name.as_str tc.current_location tc.ownership.record_binding_origins
             if is_global ! then
-                false var_name.as_str tc.set_owner_moved
+                false var_name.as_str tc.ownership.set_owner_moved
             fi
             effective_type_t.clone std::Option::Some = op.type_hint
             is_global function_opt effective_type_t var_name.as_str op tc.record_owner_assignment
@@ -7497,7 +7675,7 @@ impl TypeChecker {
     {
         op.value.clone = push_value
         if push_value common::OpValue::PushCapture(capture_name) is then
-            op capture_name.as_str tc.use_binding
+            op capture_name.as_str tc.ownership.use_binding
             std::Option[common::Type]::None = capture_type_opt
             if function_opt std::Option::Some(function) is then
                 capture_name.as_str function common::Function::captures common::variable_list_index = capture_index
@@ -7523,7 +7701,7 @@ impl TypeChecker {
         # PUSH_VARIABLE
         if push_value common::OpValue::PushVar(var_name) is then
             var_name.as_str op tc.record_named_binding
-            op var_name.as_str tc.use_binding
+            op var_name.as_str tc.ownership.use_binding
             if var_name.as_str tc.scope.is_expired then
                 op common::Op::location f"Variable `{var_name}` is not accessible outside its block scope" common::ErrorKind::UndefinedName tc.diagnostics.record_error_string
                 common::make_unknown_type tc.stack_push_type
@@ -7820,10 +7998,8 @@ impl TypeChecker {
                     .bindings
                     .iter
             do
-                if binding.first tc.remaining_uses.get std::Option::Some(remaining) is then
-                    if 0 remaining != then
-                        binding.first.clone while_ctx.live_bindings.add
-                    fi
+                if binding.first tc.ownership.binding_has_remaining_uses then
+                    binding.first.clone while_ctx.live_bindings.add
                 fi
             done
             tc.path_continues = while_ctx.entry_continues
@@ -9310,7 +9486,7 @@ impl TypeChecker {
                 .set
             if capture.typ.is_borrow then
                 self.store capture.name.as_str capture.typ make_borrowed_input_origins = origins
-                capture.typ type_capability std::Option[std::List[Origin]]::None origins capture.name.as_str self.record_binding_origins
+                capture.typ type_capability std::Option[std::List[Origin]]::None origins capture.name.as_str self.current_location self.ownership.record_binding_origins
                 continue
             fi
             if self.store capture.typ type_has_borrow ! then
@@ -9325,7 +9501,7 @@ impl TypeChecker {
                 exclusive OriginKind::InputCleanup capture.name.as_str Place::new Origin
                 cleanup_origins append_origin = cleanup_origins
             fi
-            ValueCapability::Owned cleanup_origins origins capture.name.as_str self.record_binding_origins
+            ValueCapability::Owned cleanup_origins origins capture.name.as_str self.current_location self.ownership.record_binding_origins
         done
     }
 
@@ -9334,7 +9510,7 @@ impl TypeChecker {
             return
         fi
         for capture_name in function.owned_captures.iter do
-            if capture_name.as_str self.owner_is_moved then
+            if capture_name.as_str self.ownership.owner_is_moved then
                 self.current_location
                 f"Repeatable closure does not restore captured owner `{capture_name}`"
                 common::ErrorKind::InvalidVariable self.diagnostics.record_error_string
@@ -9402,7 +9578,7 @@ impl TypeChecker {
                     .length capture_name.as_str Place::new tc.find_conflicting_loan std::Option::Some(conflict) is
             then
                 conflict f"Cannot capture owner `{capture_name}` while it is borrowed"
-                tc.report_loan_conflict
+                tc.current_location tc.diagnostics tc.ownership.report_loan_conflict
             fi
             captured_value tc.release_value
             capture_exclusive capture_name.as_str Place::new closure_origins add_origin = closure_origins
@@ -9453,7 +9629,7 @@ impl TypeChecker {
         op.value.clone = question_move
         if question_move common::OpValue::QuestionMove(hidden_name) is then
             hidden_name.as_str op checker.record_named_binding
-            if hidden_name.as_str checker.owner_is_moved then
+            if hidden_name.as_str checker.ownership.owner_is_moved then
                 return
             fi
             if
@@ -9464,10 +9640,10 @@ impl TypeChecker {
                 std::Option::Some(conflict) is
             then
                 conflict "Question-mark payload cannot borrow from its consumed source".to_str
-                checker.report_loan_conflict
+                checker.current_location checker.diagnostics checker.ownership.report_loan_conflict
                 return
             fi
-            hidden_name.as_str checker.record_owner_move
+            hidden_name.as_str checker.current_location checker.ownership.record_owner_move
         fi
     }
 
@@ -10379,7 +10555,7 @@ impl TypeChecker {
                                     fi
                                 done
                             fi
-                            self.binding_loans binding_type.is_exclusive_borrow binding_place std::Option::Some origins add_storage_origins = origins
+                            binding_type.is_exclusive_borrow binding_place std::Option::Some origins self.ownership.add_storage_origins = origins
                         fi
                     fi
                     match_cleanup_origins.clone = cleanup_origins
@@ -10391,7 +10567,7 @@ impl TypeChecker {
                     if match_subject_type.is_borrow copied ! && then
                         match_subject_type type_capability = capability
                     fi
-                    capability cleanup_origins origins binding_name.as_str self.record_binding_origins
+                    capability cleanup_origins origins binding_name.as_str self.current_location self.ownership.record_binding_origins
                 fi
             fi
         done
@@ -10527,24 +10703,17 @@ impl TypeChecker {
                 self.current_trait_bounds.clone = guard_checker.current_trait_bounds
                 guard_scope = guard_checker.scope
                 guard_flow guard_checker.restore_ownership_flow
-                self.move_locations.clone = guard_checker.move_locations
+                self.ownership guard_checker.ownership.inherit_move_locations
                 self.contextual_callables.clone = guard_checker.contextual_callables
                 VariableUses::new guard_body collect_source_variable_uses = variable_uses
-                variable_uses.counts.clone = guard_checker.remaining_uses
-                variable_uses.observing_counts.clone = guard_checker.remaining_observing_uses
-                variable_uses.cleanup_only_use_offsets.clone = guard_checker.cleanup_only_use_offsets
-                variable_uses.last_locations.clone = guard_checker.last_use_locations
+                variable_uses guard_checker.ownership.set_variable_uses
                 body_builder::Builder::new = guard_ops
                 std::List[common::Op]::new = pending
                 function_opt guard_ops pending guard_body guard_checker.check_source_sequence
                 guard_checker.path_continues = guard_continues
                 if guard_continues then
-                    for name in guard_checker.moved_owners.iter do
-                        if name.as_str self.moved_owners common::string_list_contains ! then
-                            op.location f"Match guard cannot move owner `{name}`"
-                            common::ErrorKind::InvalidVariable guard_checker.diagnostics.record_error_string
-                        fi
-                    done
+                    guard_checker.diagnostics op.location self.ownership
+                    guard_checker.ownership.validate_guard_moves
                     guard_checker.stack.get_types = guard_stack
                     false = guard_ok
                     if 1 guard_stack.length == then
@@ -10557,7 +10726,7 @@ impl TypeChecker {
                         op common::Op::location "Guard expression must leave a single `bool` on the stack" common::ErrorKind::TypeMismatch guard_checker.diagnostics.record_error
                     fi
                 fi
-                guard_checker.moved_operations guard_ops attach_body_moves
+                guard_ops guard_checker.ownership.attach_body_moves
                 if op.value common::OpValue::MatchArm(arm) is then
                     guard_checker
                         .current_location
@@ -10621,7 +10790,7 @@ impl TypeChecker {
                 .variables
                 .set
         fi
-        false name.as_str self.set_owner_moved
+        false name.as_str self.ownership.set_owner_moved
 
         0 name.clone common::TemporaryBinding = binding
         op.location.clone binding common::OpValue::BindTemporary common::Op::new = bind_op
@@ -10720,8 +10889,8 @@ impl TypeChecker {
                         std::Option::Some(conflict) is
                     then
                         conflict f"Cannot move owner `{subject_name}` while it is borrowed"
-                        tc.report_loan_conflict
-                    elif subject_name.as_str tc.owner_is_moved ! then
+                        tc.current_location tc.diagnostics tc.ownership.report_loan_conflict
+                    elif subject_name.as_str tc.ownership.owner_is_moved ! then
                         subject_name.as_str op tc.record_conditional_move
                     fi
                 fi
@@ -10737,7 +10906,7 @@ pub fn set_binding_type
     field_type:$common::Type
     function_opt:mut$std::Option[common::Function]
 {
-    false var_name.as_str tc.set_owner_moved
+    false var_name.as_str tc.ownership.set_owner_moved
     field_type var_name.as_str tc.scope.set_type = scope_updated
     if function_opt.is_none then
         var_name.as_str tc
@@ -10962,7 +11131,7 @@ impl TypeChecker {
             self.current_location "Generic callback field hides a borrowed result in a type parameter"
             common::ErrorKind::TypeMismatch self.diagnostics.record_error
         fi
-        self.binding_loans resolved_expected value origins merge_destination_origins = origins
+        resolved_expected value origins self.ownership.merge_destination_origins = origins
         value.cleanup_origins cleanup_origins merge_origins = cleanup_origins
         value resolved_expected self.expect_value_type_t
         origins cleanup_origins
@@ -12238,7 +12407,7 @@ impl TypeChecker {
         if dependency.kind OriginKind::InputOrigins is then
             true dependency.exclusive value.origins resolved TypeChecker::merge_dependency_origins = resolved
             if value needs_storage_origin then
-                self.binding_loans value resolved dependency effect resolve_input_storage_origin return
+                value resolved dependency effect self.ownership.resolve_input_storage_origin return
             fi
             resolved return
         fi
@@ -12249,7 +12418,7 @@ impl TypeChecker {
         then
             resolved return
         fi
-        self.binding_loans dependency.exclusive value.place resolved add_storage_origins
+        dependency.exclusive value.place resolved self.ownership.add_storage_origins
     }
 
     fn resolve_origin_dependencies
@@ -13257,38 +13426,6 @@ impl TypeChecker {
     }
 }
 
-pub fn materialize_declared_return_borrow
-    value:mut$TypedValue
-    declared:$common::Type
-    loans:$std::Map[std::String BindingLoans]
-{
-    if declared.is_borrow ! value.capability ValueCapability::Owned is || then
-        return
-    fi
-    value needs_storage_origin = borrows_storage
-    value.type_value.clone = target
-    if value.type_value.borrow_target std::Option::Some(borrowed_target) is then
-        borrowed_target.clone = target
-    fi
-    if declared.is_exclusive_borrow then
-        common::EXCLUSIVE_BORROW_TYPE
-    else
-        common::SHARED_BORROW_TYPE
-    fi
-    target common::apply_borrow_type = value.type_value
-    std::Option[std::List[Origin]]::None = origins
-    if value.origins std::Option::Some(current_origins) is then
-        for origin in current_origins.iter do
-            declared.is_exclusive_borrow origin.with_capability = adjusted
-            adjusted origins append_origin = origins
-        done
-    fi
-    if origins.is_none borrows_storage || then
-        loans declared.is_exclusive_borrow value.place origins add_storage_origins = origins
-    fi
-    origins = value.origins
-}
-
 impl TypeChecker {
     pub fn resolve_declared_return_borrow_capabilities
         self:mut$TypeChecker
@@ -13313,7 +13450,7 @@ impl TypeChecker {
                 .stack
                 .values
                 .get_mut = value
-            self.binding_loans declared value materialize_declared_return_borrow
+            declared value self.ownership.materialize_declared_return_borrow
             1 += index
         done
     }
@@ -13440,7 +13577,7 @@ fn analyze_ops
             .trait_bounds
             .clone = checker.current_trait_bounds
         for variable in the_function.variables.iter do
-            true variable.name.as_str checker.set_owner_moved
+            true variable.name.as_str checker.ownership.set_owner_moved
         done
         for parameter in the_function common::Function::stack_effect.parameters.iter do
             parameter.typ.clone checker.contextual_parameters.push
@@ -13467,16 +13604,13 @@ fn analyze_ops
             .keys = global_names
         for global_name in global_names.iter do
             if global_name.as_str common::is_internal_variable_name then
-                true global_name.as_str checker.set_owner_moved
+                true global_name.as_str checker.ownership.set_owner_moved
             fi
         done
     fi
     budget = checker.param_cap
     VariableUses::new source collect_source_variable_uses = variable_uses
-    variable_uses.counts.clone = checker.remaining_uses
-    variable_uses.observing_counts.clone = checker.remaining_observing_uses
-    variable_uses.cleanup_only_use_offsets.clone = checker.cleanup_only_use_offsets
-    variable_uses.last_locations.clone = checker.last_use_locations
+    variable_uses checker.ownership.set_variable_uses
     checker.diagnostics.error_count = errors_before_ops
     std::List[common::Op]::new = pending
     function_opt ops pending source checker.check_source_sequence
@@ -13539,7 +13673,7 @@ fn analyze_ops
     if function_opt std::Option::Some(function) is then
         function checker.validate_capture_restoration
     fi
-    if 0 checker.owner_events.length != then
+    if checker.ownership.has_owner_cleanups then
         checker.current_location.clone common::OpValue::OwnerCleanup common::Op::new = cleanup_op
         cleanup_op checker.assign_op_id
         cleanup_op checker.attach_all_owner_cleanups
@@ -13547,7 +13681,7 @@ fn analyze_ops
     fi
     function_opt checker.close_source_function
     checker.resolve_return_literals
-    checker.moved_operations ops attach_body_moves
+    ops checker.ownership.attach_body_moves
     checker.literal_resolutions ops apply_body_literal_hints
     std::Option[common::Type]::None checker.diagnostics ops.resolve_literals
 
@@ -14183,16 +14317,6 @@ impl common::Function {
     }
 }
 
-fn attach_body_moves body:mut$body_builder::Builder moved:$std::Set[i64] {
-    {
-        = operation: mut$common::Op
-        if operation.id moved.has then
-            true = operation.ensure_ownership.moves_owner
-        fi
-    } = visitor
-    visitor body.visit_operations_mut
-}
-
 fn apply_body_literal_hints body:mut$body_builder::Builder resolutions:$std::Map[i64 common::Type] {
     {
         = operation: mut$common::Op
@@ -14373,22 +14497,6 @@ fn copy_parameter_names target:mut$common::StackEffect source:$common::StackEffe
         fi
         1 += index
     done
-}
-
-# A generic input can become a borrow at a concrete callable boundary.
-fn resolve_input_storage_origin
-    effect:$common::StackEffect
-    dependency:$Origin
-    origins:std::Option[std::List[Origin]]
-    value:$TypedValue
-    loans:$std::Map[std::String BindingLoans]
--> std::Option[std::List[Origin]] {
-    for parameter in effect.parameters.iter do
-        if parameter.name dependency.place.binding == parameter.typ.is_borrow && then
-            loans parameter.typ.is_exclusive_borrow value.place origins add_storage_origins return
-        fi
-    done
-    origins
 }
 
 fn resolve_pattern_payload_type
