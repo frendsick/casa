@@ -271,6 +271,13 @@ without a type-name prefix is acceptable.
 
 ---
 
+## Integer notation
+
+Use hexadecimal literals for bit patterns and masks. Keep counts, capacities,
+and other naturally decimal quantities in decimal.
+
+---
+
 ## No magic values
 
 - **MUST NOT** hard-code numeric or string literals whose meaning is not
