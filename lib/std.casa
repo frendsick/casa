@@ -2871,15 +2871,22 @@ impl i64: Hashable + Ord + Display {
 }
 
 # Map[K V] - Hash map with separate chaining
-# Entry layout is the key bytes, value bytes, then the next pointer.
+# Entry layout is eight-byte-aligned key storage, value storage, then the next pointer.
+# Entries come from Map-owned blocks. Removed slots are reused before allocating
+# another block. Storage follows the peak live entry count and is released on drop.
+# Revisit block retention if long-lived maps need to release a large historical peak.
 # Bucket array: capacity * 8 bytes (each slot is a ptr to entry or 0).
 # Nonempty bucket arrays have power-of-two capacity.
 pub const MAP_INITIAL_CAP 16
+const MAP_INITIAL_BLOCK_CAP 8
+const MAP_ALIGNMENT_MASK: u64 18446744073709551608
 
 pub struct Map {
-    buckets:  ptr
-    size:     u64
-    capacity: u64
+    buckets:   ptr
+    blocks:    ptr
+    available: ptr
+    size:      u64
+    capacity:  u64
 }
 
 impl[K V] Map[K V] {
@@ -2898,8 +2905,8 @@ impl[K V] Map[K V] {
     }
 
     pub fn drop self:mut$Map[K V] {
-        size_of[K] = key_size
-        size_of[V] = value_size
+        size_of[K] 7 + MAP_ALIGNMENT_MASK & = key_size
+        size_of[V] 7 + MAP_ALIGNMENT_MASK & = value_size
         key_size value_size + = next_offset
         # SAFETY: Every bucket link identifies one initialized node owned by this Map.
         unsafe {
@@ -2910,12 +2917,19 @@ impl[K V] Map[K V] {
                     current_entry next_offset + read_pointer = next_entry
                     current_entry ptr::read[K] drop
                     current_entry key_size + ptr::read[V] drop
-                    current_entry free
                     next_entry = current_entry
                 done
                 1 += bucket_index
             done
             self.buckets free
+            self.blocks = block
+            while ptr::null block != do
+                block read_pointer = next_block
+                block free
+                next_block = block
+            done
+            ptr::null = self.blocks
+            ptr::null = self.available
             ptr::null = self.buckets
             0 = self.size
             0 = self.capacity
@@ -2925,7 +2939,7 @@ impl[K V] Map[K V] {
 
 impl[K: Hashable, V] Map[K V] {
     # Empty maps acquire buckets on the first insertion.
-    pub fn new -> Map[K V] { 0 0 ptr::null Map }
+    pub fn new -> Map[K V] { 0 0 ptr::null ptr::null ptr::null Map }
 
     pub fn length self:$Map[K V] -> u64 { self.size }
 
@@ -2935,8 +2949,8 @@ impl[K: Hashable, V] Map[K V] {
         if self.is_empty then
             Option[$V]::None return
         fi
-        size_of[K] = key_size
-        size_of[V] = value_size
+        size_of[K] 7 + MAP_ALIGNMENT_MASK & = key_size
+        size_of[V] 7 + MAP_ALIGNMENT_MASK & = value_size
         key_size value_size + = next_offset
         key K::hash u64::wrapping_from self.capacity 1 - & = bucket_index
         # SAFETY: Bucket links point to initialized key, value, and next fields.
@@ -2957,8 +2971,8 @@ impl[K: Hashable, V] Map[K V] {
         if self.is_empty then
             Option[mut$V]::None return
         fi
-        size_of[K] = key_size
-        size_of[V] = value_size
+        size_of[K] 7 + MAP_ALIGNMENT_MASK & = key_size
+        size_of[V] 7 + MAP_ALIGNMENT_MASK & = value_size
         key_size value_size + = next_offset
         key K::hash u64::wrapping_from self.capacity 1 - & = bucket_index
         # SAFETY: The exclusive Map borrow and bucket links identify one initialized value.
@@ -2981,8 +2995,8 @@ impl[K: Hashable, V] Map[K V] {
         if 0 self.capacity == then
             self.resize
         fi
-        size_of[K] = key_size
-        size_of[V] = value_size
+        size_of[K] 7 + MAP_ALIGNMENT_MASK & = key_size
+        size_of[V] 7 + MAP_ALIGNMENT_MASK & = value_size
         key_size value_size + = next_offset
         key K::hash u64::wrapping_from self.capacity 1 - & = bucket_index
         # SAFETY: Entry sizes define disjoint key, value, and link fields in every node.
@@ -2998,8 +3012,11 @@ impl[K: Hashable, V] Map[K V] {
                 fi
                 current_entry next_offset + read_pointer = current_entry
             done
-            # New entry
-            next_offset 8 + alloc = new_node
+            if ptr::null self.available == then
+                self.allocate_block
+            fi
+            self.available = new_node
+            new_node next_offset + ptr::read[ptr] = self.available
             key new_node ptr::write[K]
             value new_node key_size + ptr::write[V]
             self.buckets bucket_index 8 * + read_pointer new_node next_offset + ptr::write[ptr]
@@ -3016,8 +3033,8 @@ impl[K: Hashable, V] Map[K V] {
         if self.is_empty then
             Option[V]::None return
         fi
-        size_of[K] = key_size
-        size_of[V] = value_size
+        size_of[K] 7 + MAP_ALIGNMENT_MASK & = key_size
+        size_of[V] 7 + MAP_ALIGNMENT_MASK & = value_size
         key_size value_size + = next_offset
         key K::hash u64::wrapping_from self.capacity 1 - & = bucket_index
         ptr::null = prev_entry
@@ -3040,7 +3057,9 @@ impl[K: Hashable, V] Map[K V] {
                 1 -= self.size
                 current_entry ptr::read[K] drop
                 current_entry key_size + ptr::read[V] = removed
-                current_entry free
+                current_entry next_offset + ptr::read[ptr] drop
+                self.available current_entry next_offset + ptr::write[ptr]
+                current_entry = self.available
                 removed Option::Some return
             done
             Option[V]::None
@@ -3049,9 +3068,33 @@ impl[K: Hashable, V] Map[K V] {
 
     pub fn delete self:mut$Map[K V] key:$K { key self.remove drop }
 
+    fn allocate_block self:mut$Map[K V] {
+        size_of[K] 7 + MAP_ALIGNMENT_MASK & size_of[V] 7 + MAP_ALIGNMENT_MASK & + = next_offset
+        next_offset 8 + = stride
+        if self.size MAP_INITIAL_BLOCK_CAP < then
+            MAP_INITIAL_BLOCK_CAP
+        else
+            self.size
+        fi = count
+        # SAFETY: The block owns a header and count disjoint entry slots. Only links
+        # are initialized here. set initializes each slot's key and value before linking it.
+        unsafe {
+            count stride * 8 + alloc = block
+            self.blocks block ptr::write[ptr]
+            block = self.blocks
+            0 = index: u64
+            while index count < do
+                block 8 + index stride * + = entry
+                self.available entry next_offset + ptr::write[ptr]
+                entry = self.available
+                1 += index
+            done
+        }
+    }
+
     pub fn resize self:mut$Map[K V] {
-        size_of[K] = key_size
-        size_of[V] = value_size
+        size_of[K] 7 + MAP_ALIGNMENT_MASK & = key_size
+        size_of[V] 7 + MAP_ALIGNMENT_MASK & = value_size
         key_size value_size + = next_offset
         self.capacity 2 * = new_capacity
         if 0 new_capacity == then
@@ -3085,8 +3128,8 @@ impl[K: Hashable, V] Map[K V] {
     }
 
     pub fn iter self:$Map[K V] -> Iter[Pair[$K $V]] {
-        size_of[K] = key_size
-        size_of[V] = value_size
+        size_of[K] 7 + MAP_ALIGNMENT_MASK & = key_size
+        size_of[V] 7 + MAP_ALIGNMENT_MASK & = value_size
         key_size value_size + = next_offset
         0 = bucket_index: u64
         ptr::null = current_entry
@@ -3110,7 +3153,7 @@ impl[K: Hashable, V] Map[K V] {
     }
 
     pub fn iter_keys self:$Map[K V] -> Iter[$K] {
-        size_of[K] size_of[V] + = next_offset
+        size_of[K] 7 + MAP_ALIGNMENT_MASK & size_of[V] 7 + MAP_ALIGNMENT_MASK & + = next_offset
         0 = bucket_index: u64
         ptr::null = current_entry
         {
@@ -3140,7 +3183,7 @@ impl[V] Map[String V] {
             Option[$V]::None return
         fi
         size_of[String] = key_size
-        size_of[V] = value_size
+        size_of[V] 7 + MAP_ALIGNMENT_MASK & = value_size
         key_size value_size + = next_offset
         key str_hash u64::wrapping_from self.capacity 1 - & = bucket_index
         # SAFETY: Bucket links delimit initialized String and V entries owned by the Map.
@@ -3162,7 +3205,7 @@ impl[V] Map[String V] {
             Option[mut$V]::None return
         fi
         size_of[String] = key_size
-        size_of[V] = value_size
+        size_of[V] 7 + MAP_ALIGNMENT_MASK & = value_size
         key_size value_size + = next_offset
         key str_hash u64::wrapping_from self.capacity 1 - & = bucket_index
         # SAFETY: The exclusive Map borrow permits an exclusive borrow of the matched value.
@@ -3186,7 +3229,7 @@ impl[V] Map[String V] {
             Option[V]::None return
         fi
         size_of[String] = key_size
-        size_of[V] = value_size
+        size_of[V] 7 + MAP_ALIGNMENT_MASK & = value_size
         key_size value_size + = next_offset
         key str_hash u64::wrapping_from self.capacity 1 - & = bucket_index
         ptr::null = prev_entry
@@ -3209,7 +3252,9 @@ impl[V] Map[String V] {
                 1 -= self.size
                 current_entry ptr::read[String] drop
                 current_entry key_size + ptr::read[V] = removed
-                current_entry free
+                current_entry next_offset + ptr::read[ptr] drop
+                self.available current_entry next_offset + ptr::write[ptr]
+                current_entry = self.available
                 removed Option::Some return
             done
             Option[V]::None
