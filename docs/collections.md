@@ -18,6 +18,7 @@ Run complete examples from the repository root with
 | [Iterators](#iterator-sources) | Process a sequence |
 | [List](lists.md) | Growable sequence |
 | [Map](#maps) | Key-value lookup |
+| [Range](#integer-ranges) | Count through integers |
 | [RawBuffer](#raw-buffers) | Untyped allocation for low-level code |
 | [Set](#sets) | Unique values |
 | [Slice](#slices) | Borrowed sequence range |
@@ -809,6 +810,58 @@ Removes and destroys the matching key, if present. Removal does not allocate.
 The [text reference](strings-and-io.md#owned-strings) documents its methods
 and examples. Use [Bytes](#bytes) for binary data.
 
+## Integer ranges
+
+`Range` is a single-pass iterator over ascending `i64` values. Its fields are
+private. Construct it with `Range::new`:
+
+```casa
+import "std"
+
+# Named calls take their first argument from the top: push stop, then start.
+for value in 3 -2 std::Range::new do
+    value print "\n" print # -2, -1, 0, 1, 2
+done
+```
+
+| Method | Signature | Description |
+|---|---|---|
+| [new](#rangenew) | `fn new start:i64 stop:i64 -> Range` | Ascending half-open range `[start, stop)` |
+| [next](#rangenext) | `fn next self:mut$Range -> Option[i64]` | Advance and return the next integer |
+
+### Range::new
+
+```text
+fn new start:i64 stop:i64 -> Range
+```
+
+Includes `start` and excludes `stop`, advancing by one. If `start >= stop`, the
+range is empty. Reversed bounds do not select descending iteration. Both bounds
+can be negative. Calls use `stop start std::Range::new`.
+
+Bounds accept the complete `i64` domain. Advancing never overflows because the
+cursor increments only below `stop`. The maximum `i64` can be an exclusive stop,
+but cannot be yielded. There are no inclusive, descending, stepped, or other
+integer-width variants. Use a condition-controlled loop for those cases.
+
+### Range::next
+
+```text
+fn next self:mut$Range -> Option[i64]
+```
+
+Returns `Some(value)` and advances the cursor, or `None` when exhausted. All
+later calls after exhaustion return `None`. Values are owned integers and do
+not borrow the cursor. A loop over a borrowed range can stop with `break` and
+leave the remaining values available to the caller.
+
+`Range` implements `Iterable[i64]`, so it supports the lazy and terminal
+operations below, including `filter`, `map`, `collect`, and `fold`. Direct
+advancement needs no heap allocation. Iterator call overhead remains
+tracked in [#829](https://github.com/frendsick/casa/issues/829).
+
+See [examples/fizzbuzz.casa](../examples/fizzbuzz.casa) for a counted loop.
+
 ## Iterator sources
 
 `.iter` creates a stateful, single-pass iterator:
@@ -825,6 +878,9 @@ and examples. Use [Bytes](#bytes) for binary data.
 
 A [for loop](control-flow.md#for-loops) consumes the iterator. Create another iterator to traverse the
 source again. A borrowed iterator remains available after its loop ends.
+
+[`Range::new`](#integer-ranges) constructs an integer iterator directly, without
+an `.iter` call.
 
 Lists also provide [`iter_mut`](lists.md#listtiter_mut), which lends one mutable
 element at a time, and [`into_iter`](lists.md#listtinto_iter), which consumes
