@@ -294,6 +294,7 @@ independent owner. `as_str` returns a [borrowed view](ownership.md#return-a-borr
 | [new](#stringnew) | `fn new -> String` | Empty owned text |
 | [push](#stringpush) | `fn push self:mut$String character:char` | Append one Unicode scalar value |
 | [reserve](#stringreserve) | `fn reserve self:mut$String additional:u64` | Reserve space after the current text |
+| [truncate](#stringtruncate) | `fn truncate self:mut$String length:u64` | Shorten to a byte length and retain capacity |
 | [with_capacity](#stringwith_capacity) | `fn with_capacity capacity:u64 -> String` | Empty text with reserved byte capacity |
 
 ### String::append
@@ -393,6 +394,18 @@ fn reserve self:mut$String additional:u64
 ```
 
 `reserve` reserves space after the current text.
+
+### String::truncate
+
+```text
+fn truncate self:mut$String length:u64
+```
+
+`truncate` shortens the text to `length` bytes and retains capacity. A length at
+or beyond the current length leaves the text unchanged. The new end must be a
+UTF-8 boundary. An invalid boundary terminates the program.
+
+Call `3 text.truncate` to keep the first three bytes of `text`.
 
 ### String::with_capacity
 

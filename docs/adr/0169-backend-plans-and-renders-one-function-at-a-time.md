@@ -9,12 +9,13 @@ separate Casa module. Linux x86-64 is the implemented target.
 
 ## Checked input and target planning
 
-Only the private `CheckedProgram` enters the backend. Name and
-type resolution, stack effects, ownership and borrowing, moves and copies,
-cleanup obligations, structured control flow, concrete specialization, and
-trait dispatch are complete. Bodies reference concrete declarations in the same
-product. The backend neither queries trait conformance nor infers source-level
-behavior from type names.
+The private `CheckedProgram` supplies semantic input to the backend. The backend
+also borrows the compilation source store to resolve instruction locations for
+deterministic line tables. Name and type resolution, stack effects, ownership and
+borrowing, moves and copies, cleanup obligations, structured control flow,
+concrete specialization, and trait dispatch are complete. Bodies reference
+concrete declarations in the same product. The backend neither queries trait
+conformance nor infers source-level behavior from type names.
 
 The closed platform policy owns physical layout, field and value storage,
 `size_of` values, calling conventions, runtime symbols, and assembly spelling.

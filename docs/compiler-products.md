@@ -67,6 +67,35 @@ output path. The compiler creates no intermediate object file.
 The CLI passes the assembly product to the native driver and retains its report
 until diagnostics have been presented. It does not coordinate compiler phases.
 
+## Generated source attribution
+
+Assembly includes ELF function types and sizes, plus DWARF line tables from
+`.file` and `.loc` directives. The native binary retains these tables without
+`--keep-asm`. For example, `addr2line -e program 0xADDRESS` resolves an instruction
+address, and `objdump -d -l program` displays source lines with disassembly.
+
+Specialized function symbols start with `fn_.specialized_` and encode the complete
+semantic identity, including the declaration name and type and constant bindings.
+ASCII letters, digits, and underscores remain unchanged. Other characters use
+`.DECIMAL.`, where `DECIMAL` is the Unicode code point. For example, `T=3:i64`
+becomes `T.61.3.58.i64`. This encoding is reversible and distinguishes binding
+names and values that produce the same text under ordinary punctuation
+replacement.
+
+The backend borrows the compilation's source store to convert byte offsets to
+one-based lines and byte columns. File numbers follow deterministic first-use
+order. Source markers become a parallel location table before instruction
+selection, so they do not affect leaf eligibility or peephole matching. Expanded
+leaf instructions retain their declaration's source, and subsequent caller
+instructions restore the call site's source. A fused instruction uses the source
+of its first input instruction. Operations that emit no instructions, including
+those removed by optimization, have no line record.
+
+Generated helpers without a source location and the fixed runtime use the
+synthetic file `<casa-generated>`. Line tables map addresses to source locations.
+They do not describe local variable storage or provide stack unwinding. Casa
+return addresses remain on the `%r14` return stack.
+
 ## Source construction and semantic checking
 
 `SourceProgram` owns declaration metadata and structured source bodies. Function

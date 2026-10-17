@@ -1,7 +1,8 @@
 import "test" as test
 
 fn assert_invalid_reference instruction:InstValue {
-    Emitter::new = selector
+    lexer::SourceStore::new = sources
+    sources Emitter::new = selector
     std::List[InstValue]::new = actions
     instruction actions.push
     0 actions FunctionPlan::new = plan
@@ -19,7 +20,8 @@ fn test_invalid_machine_references {
     "missing".to_str InstValue::FnCall assert_invalid_reference
     "native".to_str InstValue::ExternCall assert_invalid_reference
 
-    Emitter::new = selector
+    lexer::SourceStore::new = sources
+    sources Emitter::new = selector
     "missing" selector.register_function
     std::List[InstValue]::new = actions
     "missing".to_str InstValue::FnCall actions.push
@@ -29,7 +31,8 @@ fn test_invalid_machine_references {
 
 fn test_invalid_static_references {
     "invalid static references" test::test_start
-    Emitter::new = selector
+    lexer::SourceStore::new = sources
+    sources Emitter::new = selector
     std::List[StaticArrayElement]::new = elements
     0 StaticArrayElement::String elements.push
     elements StaticArray selector.static_arrays.push
@@ -44,16 +47,18 @@ pub fn test_sanitize_name {
     "multiple" "A__B__C" "A::B::C" sanitize_name.as_str test::assert_str_eq
     "no colons" "hello_world" "hello_world" sanitize_name.as_str test::assert_str_eq
     "single colon preserved" "a:b" "a:b" sanitize_name.as_str test::assert_str_eq
-    Emitter::new = selector
+    lexer::SourceStore::new = sources
+    sources Emitter::new = selector
     "space" selector.register_function
     "space " selector.register_function
     "generic :_" selector.register_function
-    "generic _58__" selector.register_function
+    "generic .58._" selector.register_function
     "space" selector.function_label = source
     "space " selector.function_label = generated
     "generated namespace is distinct" source generated != test::assert_true
     "generic :_" selector.function_label.to_str = escaped
-    "generic _58__" selector.function_label = literal
+    "readable reversible label" ".specialized_generic.32..58._" escaped.as_str test::assert_str_eq
+    "generic .58._" selector.function_label = literal
     "generated identities stay distinct" escaped literal != test::assert_true
     "generic :_" selector.register_function
     "registration is idempotent" escaped.as_str "generic :_" selector.function_label test::assert_str_eq
