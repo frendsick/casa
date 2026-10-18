@@ -9,6 +9,7 @@ import "typechecker" as typechecker
 import "runtime" as runtime
 import "local_storage" as local_storage
 import "lexer" as lexer
+import "closure_targets" as closure_targets
 
 pub struct BytecodeFailure {
     pub message: std::String
@@ -46,18 +47,20 @@ impl LocalAggregates {
 
 enum FunctionWork {
     Checked(std::String)
+    Specialized(std::String u64)
     Destruction(std::String common::Type StorageKind)
     ClosureDestruction(std::String std::String)
 }
 
 struct BackendPlanner {
-    store:         $common::SymbolStore
-    checked:       $typechecker::CheckedProgram
-    program:       Emitter
-    pending:       std::List[FunctionWork]
-    failure:       std::Option[BytecodeFailure]
-    label_counter: u64
-    layouts:       common::LayoutPlanner
+    store:           $common::SymbolStore
+    checked:         $typechecker::CheckedProgram
+    program:         Emitter
+    pending:         std::List[FunctionWork]
+    failure:         std::Option[BytecodeFailure]
+    label_counter:   u64
+    layouts:         common::LayoutPlanner
+    closure_targets: closure_targets::Plan
 }
 
 struct EnumDispatch {
@@ -82,6 +85,7 @@ struct FunctionPlanner {
     owner_flags:      std::Map[std::String u64]
     result_slot:      std::Option[u64]
     local_aggregates: LocalAggregates
+    closure_context:  u64
 }
 
 struct ResolvedStructField {
@@ -117,6 +121,7 @@ fn resolve_struct_field
 impl BackendPlanner {
     fn new checked:$typechecker::CheckedProgram sources:$lexer::SourceStore -> BackendPlanner {
         checked.get_store = store
+        checked closure_targets::analyze
         store common::LayoutPlanner::new
         0
         std::Option[BytecodeFailure]::None
@@ -145,6 +150,7 @@ impl BackendPlanner {
 impl FunctionPlanner {
     fn new state:mut$BackendPlanner -> FunctionPlanner {
         state.layouts state.checked state.store.variables index_root_variable_map = locals_count = local_slots
+        state.closure_targets.root
         LocalAggregates::new
         std::Option[u64]::None
         std::Map[std::String u64]::new
@@ -159,6 +165,11 @@ impl FunctionPlanner {
 
     fn for_function state:mut$BackendPlanner function:$common::Function -> FunctionPlanner {
         state.layouts state.checked function.variables index_local_variable_list = locals_count = local_slots
+        0 function.name state
+            .closure_targets
+            .defaults
+            .get_copy
+            .unwrap_or
         LocalAggregates::new
         std::Option[u64]::None
         std::Map[std::String u64]::new
@@ -1903,15 +1914,48 @@ impl FunctionPlanner {
         self:mut$FunctionPlanner
         typ:$common::Type
         owned:bool
+        identity:i64
         bytecode:mut$std::List[InstValue]
     {
         if typ common::Type::Function(function) is then
+            identity self.execution_context = context
+            std::String::new = symbol
+            0 = captures: u64
+            if context 0 != then
+                context 1 - self
+                    .state
+                    .closure_targets
+                    .contexts
+                    .get = target
+                target.symbol.clone = symbol
+                target.name.as_str self
+                    .state
+                    .store
+                    .get_function
+                    .unwrap
+                    .captures
+                    .length = captures
+            fi
+            if context 0 != captures 0 == && then
+                # A capture-free value uses a static record with no destructor.
+                InstValue::Drop bytecode.push
+                bytecode function.return_types self.prepare_results drop
+                symbol InstValue::FnCall bytecode.push
+                return
+            fi
             self.allocate_local = closure
             closure InstValue::LocalSet bytecode.push
             bytecode function.return_types self.prepare_results drop
-            closure InstValue::LocalGet bytecode.push
-            function.return_types function.parameters.length self.state.checked plan_register_call
-            InstValue::FnExec bytecode.push
+            if context 0 != then
+                closure InstValue::LocalGet bytecode.push
+                captures InstValue::EnvEnter bytecode.push
+                symbol InstValue::FnCall bytecode.push
+                InstValue::EnvLeave bytecode.push
+            else
+                closure InstValue::LocalGet bytecode.push
+                function.return_types function.parameters.length self.state.checked plan_register_call
+                InstValue::FnExec bytecode.push
+            fi
             if owned then
                 closure InstValue::LocalGet bytecode.push
                 InstValue::ClosureDrop bytecode.push
@@ -1921,7 +1965,62 @@ impl FunctionPlanner {
         fi
     }
 
+    fn execution_context self:$FunctionPlanner identity:i64 -> u64 {
+        if self.closure_context 0 == then
+            0 return
+        fi
+        self.closure_context 1 - self
+            .state
+            .closure_targets
+            .contexts
+            .get = context
+        0 identity context
+            .executions
+            .get_copy
+            .unwrap_or
+    }
+
+    fn compile_resolved_call
+        self:mut$FunctionPlanner
+        name:$str
+        identity:i64
+        bytecode:mut$std::List[InstValue]
+    {
+        if self.closure_context 0 != then
+            self.closure_context 1 - self
+                .state
+                .closure_targets
+                .contexts
+                .get = context
+            0 identity context
+                .calls
+                .get_copy
+                .unwrap_or = target
+            if target 0 != then
+                target 1 - self
+                    .state
+                    .closure_targets
+                    .contexts
+                    .get
+                    .symbol
+                    .clone = symbol
+                bytecode symbol.as_str name self.compile_call_target
+                return
+            fi
+        fi
+        bytecode name self.compile_call
+    }
+
     fn compile_call self:mut$FunctionPlanner name:$str bytecode:mut$std::List[InstValue] {
+        bytecode name name self.compile_call_target
+    }
+
+    fn compile_call_target
+        self:mut$FunctionPlanner
+        name:$str
+        symbol:$str
+        bytecode:mut$std::List[InstValue]
+    {
         if name self.compile_named_function then
             if
                 name self
@@ -1963,7 +2062,7 @@ impl FunctionPlanner {
                 else
                     bytecode returns self.prepare_results drop
                 fi
-                name.to_str InstValue::FnCall bytecode.push
+                symbol.to_str InstValue::FnCall bytecode.push
             fi
         fi
     }
@@ -2502,7 +2601,7 @@ impl FunctionPlanner {
                 fi
             }
             semantic_body::Action::Intrinsic(kind) => bytecode kind self.compile_intrinsic
-            semantic_body::Action::Execute(typ owned) => bytecode owned typ self.compile_execute
+            semantic_body::Action::Execute(typ owned) => bytecode leaf.facts.identity owned typ self.compile_execute
             semantic_body::Action::IntoRaw(typ) => {
                 if typ self.is_copy_aggregate then
                     bytecode typ self.emit_heap_copy
@@ -2519,7 +2618,7 @@ impl FunctionPlanner {
             semantic_body::Action::Boolean(value) => value InstValue::Push bytecode.push
             semantic_body::Action::Character(value) => value InstValue::PushChar bytecode.push
             semantic_body::Action::String(value) => value.as_str self.intern_string InstValue::PushStr bytecode.push
-            semantic_body::Action::Call(call) => bytecode call.name.as_str self.compile_call
+            semantic_body::Action::Call(call) => bytecode leaf.facts.identity call.name.as_str self.compile_resolved_call
             semantic_body::Action::Closure(call) => bytecode leaf.facts call self.state.store self.compile_closure
             semantic_body::Action::Binding(kind binding typ) => {
                 if
@@ -2849,7 +2948,10 @@ impl FunctionPlanner {
         fi
         # Checked enum arms share one declaration. Borrow its name before the
         # loop so rejected dispatch candidates retain no temporary name storage.
-        0 body.arms.get.pattern match
+        0 body
+            .arms
+            .get
+            .pattern match
             common::PatternValue::EnumVariant(variant) => variant.enum_name.as_str
             _ => std::Option[EnumDispatch]::None return
         end = enum_name
@@ -2936,7 +3038,12 @@ impl FunctionPlanner {
         fi
         false = has_guard
         for arm in match_body.arms.iter do
-            if arm.guard.get_nodes.is_empty ! then
+            if
+                arm
+                    .guard
+                    .get_nodes
+                    .is_empty !
+            then
                 true = has_guard
                 break
             fi
@@ -3132,6 +3239,28 @@ fn plan_function
             output compiler.finish_results
             function.captures.length false compiler.owner_flags compiler.locals_count output finalize_frame FunctionPlan::new
         }
+        FunctionWork::Specialized(_ context) => {
+            context 1 - state
+                .closure_targets
+                .contexts
+                .get
+                .name
+                .clone = name
+            name.as_str checked
+                .get_store
+                .get_function
+                .unwrap = function
+            name.as_str checked.find_body.unwrap = body
+            function state FunctionPlanner::for_function = compiler
+            context copy = compiler.closure_context
+            body compiler.prepare_local_aggregates
+            function.location.clone InstValue::Source output.push
+            compiler.new_label InstValue::Label output.push
+            output compiler.begin_results
+            output body compiler.compile_body
+            output compiler.finish_results
+            function.captures.length false compiler.owner_flags compiler.locals_count output finalize_frame FunctionPlan::new
+        }
         FunctionWork::Destruction(name typ storage_kind) => {
             common::empty_location name.clone common::Function::new = function
             function state FunctionPlanner::for_function = compiler
@@ -3174,6 +3303,7 @@ impl FunctionWork {
     fn get_name self:$FunctionWork -> std::String {
         self match
             FunctionWork::Checked(name) => name.clone
+            FunctionWork::Specialized(name _) => name.clone
             FunctionWork::Destruction(name) => name.clone
             FunctionWork::ClosureDestruction(name _) => name.clone
         end
@@ -3383,6 +3513,30 @@ pub fn compile_checked
             }
         end
     done
+    0 = context_index: u64
+    for
+        context in state
+            .closure_targets
+            .contexts
+            .iter
+    do
+        1 += context_index
+        if context.name context.symbol != then
+            context.symbol.as_str state.program.register_function
+            if
+                context.name state
+                    .program
+                    .register_calls
+                    .get_copy std::Option::Some(plan) is
+            then
+                plan context.symbol.clone state
+                    .program
+                    .register_calls
+                    .set
+            fi
+            context_index context.symbol.clone FunctionWork::Specialized state.pending.push
+        fi
+    done
     for name in names.iter do
         name.clone FunctionWork::Checked = work
         name.as_str checked.find_body.unwrap = body
@@ -3454,6 +3608,7 @@ pub fn compile_checked
         fi
         index state.pending.get match
             FunctionWork::Checked(value) => value.clone FunctionWork::Checked
+            FunctionWork::Specialized(value context) => context copy value.clone FunctionWork::Specialized
             FunctionWork::Destruction(value typ storage_kind) => storage_kind copy typ.clone value.clone FunctionWork::Destruction
             FunctionWork::ClosureDestruction(value lambda) => lambda.clone value.clone FunctionWork::ClosureDestruction
         end = current
@@ -3612,6 +3767,8 @@ enum InstValue {
     CaptureSet(u64)
     ClosureDrop
     ClosureRecord(u64 bool)
+    EnvEnter(u64)
+    EnvLeave
     FnPushStatic(std::String)
     # Strings
     StrEq
@@ -4698,7 +4855,7 @@ impl Emitter {
 
     # The closure record is in rax. Environment bookkeeping preserves all
     # argument and result registers and restores the caller's active capture set.
-    fn emit_execute self:mut$Emitter {
+    fn emit_enter_environment self:mut$Emitter {
         self.sync_value_stack
         "movq current_env(%rip), %rsi" self.indent
         "movq env_sp(%rip), %rcx" self.indent
@@ -4708,13 +4865,21 @@ impl Emitter {
         "addq $8, %rcx" self.indent
         "movq %rcx, env_sp(%rip)" self.indent
         "movq %rax, current_env(%rip)" self.indent
-        "movq (%rax), %rax" self.indent
-        "callq *%rax" self.indent
+    }
+
+    fn emit_leave_environment self:mut$Emitter {
         "movq env_sp(%rip), %rcx" self.indent
         "subq $8, %rcx" self.indent
         "movq %rcx, env_sp(%rip)" self.indent
         "movq env_stack(%rcx), %rax" self.indent
         "movq %rax, current_env(%rip)" self.indent
+    }
+
+    fn emit_execute self:mut$Emitter {
+        self.emit_enter_environment
+        "movq (%rax), %rax" self.indent
+        "callq *%rax" self.indent
+        self.emit_leave_environment
     }
 
     # Transfer a suffix using r8..r11 in bottom-to-top order. All four are
@@ -4751,6 +4916,18 @@ impl Emitter {
     }
 
     fn emit_scalar_or_inst self:mut$Emitter inst:$InstValue cache:mut$ScalarStack is_global:bool {
+        if inst InstValue::EnvEnter is then
+            1 cache self.refill_scalar_stack
+            cache.depth 1 - cache.get_register = closure
+            "%rax" closure "movq" self.emit_binary_registers
+            1 -= cache.depth
+            self.emit_enter_environment
+            return
+        fi
+        if inst InstValue::EnvLeave is then
+            self.emit_leave_environment
+            return
+        fi
         if inst InstValue::FnCall(name) is then
             if name self.register_calls.get_copy std::Option::Some(plan) is then
                 plan.arguments cache self.prepare_register_transfer
@@ -6112,6 +6289,11 @@ impl Emitter {
                 f"call fn_{fn_name.as_str self.function_label}" self.indent_string
             }
             InstValue::ExternCall(call) => call self.emit_extern_call
+            InstValue::EnvEnter(_) => {
+                "%rax" self.emit_pop
+                self.emit_enter_environment
+            }
+            InstValue::EnvLeave => self.emit_leave_environment
             InstValue::FnExec => {
                 "%rax" self.emit_pop
                 self.emit_execute
@@ -6351,6 +6533,8 @@ impl FunctionPlan {
 
 impl Emitter {
     fn validate_function self:$Emitter plan:$FunctionPlan -> std::Result[std::Unit std::String] {
+        std::List[u64]::new = environments
+        plan.capture_count = capture_count
         std::Set[i64]::new = labels
         0 = local_count: u64
         if plan.actions.is_empty ! then
@@ -6389,12 +6573,23 @@ impl Emitter {
                 InstValue::LocalSet(slot) => local_count slot > = valid
                 InstValue::LocalsInit(count) => local_count count == = valid
                 InstValue::LocalsUninit(count) => local_count count == = valid
-                InstValue::CaptureLoad(slot) => plan.capture_count slot > = valid
-                InstValue::CaptureAddress(slot) => plan.capture_count slot > = valid
-                InstValue::CaptureSet(slot) => plan.capture_count slot > = valid
-                InstValue::CaptureFlagLoad(slot) => plan.capture_count slot > = valid
-                InstValue::CaptureFlagMark(slot) => plan.capture_count slot > = valid
-                InstValue::CaptureFlagClear(slot) => plan.capture_count slot > = valid
+                InstValue::CaptureLoad(slot) => capture_count slot > = valid
+                InstValue::CaptureAddress(slot) => capture_count slot > = valid
+                InstValue::CaptureSet(slot) => capture_count slot > = valid
+                InstValue::CaptureFlagLoad(slot) => capture_count slot > = valid
+                InstValue::CaptureFlagMark(slot) => capture_count slot > = valid
+                InstValue::CaptureFlagClear(slot) => capture_count slot > = valid
+                InstValue::EnvEnter(count) => {
+                    capture_count environments.push
+                    count copy = capture_count
+                }
+                InstValue::EnvLeave => {
+                    if environments.is_empty then
+                        false = valid
+                    else
+                        environments.pop = capture_count
+                    fi
+                }
                 InstValue::ConstantLoad(slot) => self.constants_count slot > = valid
                 InstValue::ConstantStore(slot) => self.constants_count slot > = valid
                 _ => {
@@ -6404,6 +6599,9 @@ impl Emitter {
                 "Invalid machine reference".to_str std::Result::Error return
             fi
         done
+        if environments.is_empty ! then
+            "Unbalanced closure environment".to_str std::Result::Error return
+        fi
         std::Unit::Value std::Result::Ok
     }
 }
@@ -7663,6 +7861,8 @@ impl ScalarAnalysis {
             InstValue::FnCall => {
                 state.environment copy self.reject state self.discard_stack
             }
+            InstValue::EnvEnter(_) => index state self.enter_environment
+            InstValue::EnvLeave => index state self.leave_environment
             InstValue::FnExec => {
                 state.environment copy self.reject state self.discard_stack
             }

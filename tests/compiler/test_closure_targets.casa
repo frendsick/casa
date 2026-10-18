@@ -1,0 +1,394 @@
+import "std" as std
+import "../../lib/test.casa" as test
+import "../../compiler/backend.casa" as backend
+import "../../compiler/error.casa" as error
+import "../../compiler/lexer.casa" as lexer
+import "helpers.casa" as helpers
+
+fn first -> i64 { 11 }
+
+fn second -> i64 { 22 }
+
+fn invoke callback:$fn[-> i64] -> i64 { callback exec }
+
+fn forward callback:$fn[-> i64] -> i64 { callback invoke }
+
+struct Holder {
+    pub callback: fn[-> i64]
+}
+
+impl Holder {
+    fn replace self:mut$Holder { &second = self.callback }
+    fn next self:$Holder -> i64 { self.callback exec }
+}
+
+struct Reset {
+    target: ptr
+}
+
+impl Reset {
+    fn drop self:mut$Reset {
+        unsafe {
+            self.target ptr::as_mut[Holder] = holder
+            holder.replace
+        }
+    }
+}
+
+fn make start:i64 -> fn[-> i64] {
+    move { 1 += start start }
+}
+
+fn select flag:bool -> fn[-> i64] {
+    if flag then
+        &first
+    else
+        &second
+    fi
+}
+
+fn condition holder:mut$Holder -> bool { holder.replace false }
+
+fn recursive callback:$fn[-> i64] depth:u64 -> i64 {
+    if depth 0 == then
+        callback exec return
+    fi
+    depth 1 - callback recursive
+}
+
+fn mutual_first callback:$fn[-> i64] depth:u64 -> i64 {
+    if depth 0 == then
+        callback exec return
+    fi
+    depth 1 - callback mutual_second
+}
+
+fn mutual_second callback:$fn[-> i64] depth:u64 -> i64 {
+    if depth 0 == then
+        callback exec return
+    fi
+    depth 1 - callback mutual_first
+}
+
+fn stacked_increment left:$fn[-> i64] right:$fn[-> i64] -> i64 {
+    0 = count
+    left right 1 += count drop exec
+}
+
+fn stacked_decrement left:$fn[-> i64] right:$fn[-> i64] -> i64 {
+    1 = count
+    left right 1 -= count drop exec
+}
+
+fn propagate holder:mut$Holder value:std::Option[i64] -> std::Option[i64] {
+    unsafe { holder ptr::from_ref } Reset = reset
+    value ? std::Option::Some
+}
+
+fn test_reassignment_after_invalidation {
+    "target invalidation retains pending owner cleanup" test::test_start
+    &first Holder = dummy
+    unsafe { dummy ptr::from_ref } Reset = reset
+    unsafe { 39 syscall0 drop }
+    &first Holder = holder
+    unsafe { holder ptr::from_ref 0 + } = reset.target
+    unsafe { dummy ptr::from_ref } Reset = reset
+    "replacement destroys the previous live owner" 22 holder.next test::assert_eq
+    reset drop
+}
+
+fn subtract value:i64 -> i64 { value 3 - }
+
+fn apply callback:$fn[i64 -> i64] value:i64 -> i64 { value callback exec }
+
+fn pair left:$fn[-> i64] right:$fn[-> i64] -> $fn[-> i64] $fn[-> i64] { left right }
+
+fn test_argument_and_result_order {
+    "specialized calls preserve parameter and result order" test::test_start
+    "different parameter kinds" 7 10 &subtract apply test::assert_eq
+    &first = left
+    &second = right
+    right left pair = returned_right = returned_left
+    "first returned callback" 11 returned_left exec test::assert_eq
+    "second returned callback" 22 returned_right exec test::assert_eq
+}
+
+fn test_runtime_targets {
+    "known and uncertain closure targets preserve values" test::test_start
+    10 make = left
+    100 make = right
+    "first state" 11 left forward test::assert_eq
+    "second state" 101 right forward test::assert_eq
+    "first state resumes" 12 left forward test::assert_eq
+    "false branch target" 22 false select invoke test::assert_eq
+    "true branch target" 11 true select invoke test::assert_eq
+    "recursive fallback" 11 5 &first recursive test::assert_eq
+    "mutual fallback" 22 6 &second mutual_first test::assert_eq
+
+    &first Holder = holder
+    "stacked increment consumes its operand" 11 &second &first stacked_increment test::assert_eq
+    "stacked decrement consumes its operand" 11 &second &first stacked_decrement test::assert_eq
+    "initial field" 11 holder.next test::assert_eq
+    holder.replace
+    "field replacement" 22 holder.next test::assert_eq
+
+    &first Holder = loop_holder
+    while loop_holder condition do
+        "zero-iteration body is unreachable" false test::assert_true
+    done
+    "false loop condition preserves its mutation" 22 loop_holder.next test::assert_eq
+
+    &first Holder = break_holder
+    while true do
+        break_holder.replace
+        break
+    done
+    "break carries target replacement" 22 break_holder.next test::assert_eq
+
+    &first Holder = continue_holder
+    0 = index: u64
+    while index 2 < do
+        1 += index
+        if index 1 == then
+            continue_holder.replace continue
+        fi
+        "continue carries target replacement" 22 continue_holder.next test::assert_eq
+    done
+
+    &first Holder = cleanup_holder
+    unsafe { cleanup_holder ptr::from_ref } = address
+    if true then
+        address Reset = reset
+    fi
+    "scope cleanup can replace a target" 22 cleanup_holder.next test::assert_eq
+    &first Holder = question_holder
+    std::Option[i64]::None question_holder propagate drop
+    "propagation cleanup can replace a target" 22 question_holder.next test::assert_eq
+}
+
+fn compile code:$str -> std::String {
+    error::Diagnostics::new = diagnostics
+    diagnostics code helpers::typecheck_test_source = checked
+    "fixture parses" diagnostics.has_errors ! test::assert_true
+    "fixture checks" checked.get_diagnostics.has_errors ! test::assert_true
+    checked.into_checked_program.unwrap lexer::SourceStore::new swap backend::compile_checked.unwrap
+}
+
+fn get_function_body assembly:$std::String symbol:$str -> std::String {
+    f"{symbol}:" = start
+    assembly.as_str start.as_str str::split.unwrap = pieces
+    1 pieces.get = suffix
+    suffix.as_str ".size " str::split.unwrap = parts
+    0 parts.get.clone
+}
+
+fn test_direct_static_target {
+    "known static target omits dispatch and environment work" test::test_start
+    "fn value -> i64 { 42 } fn run -> i64 { &value exec } run print" compile = assembly
+    "fn_run" assembly get_function_body = instructions
+    "known target has no indirect execution" instructions.as_str "callq *" str::contains ! test::assert_true
+    "static closure has no environment work" instructions.as_str "current_env" str::contains ! test::assert_true
+    "static closure has no environment stack work" instructions.as_str "env_sp" str::contains ! test::assert_true
+}
+
+fn test_forwarded_targets {
+    "callbacks and returned aggregate fields retain targets" test::test_start
+    "struct Holder { pub callback:fn[-> i64] } fn value -> i64 { 42 } fn make -> Holder { &value Holder } fn invoke callback:$fn[-> i64] -> i64 { callback exec } fn run -> i64 { make = holder holder.callback invoke } run print"
+    compile = assembly
+    "forwarded callback has a specialized body" assembly.as_str "fn_invoke_closure_" str::contains test::assert_true
+    "fn_run" assembly get_function_body = instructions
+    "returned field avoids general callback entry" instructions.as_str "call fn_invoke\n" str::contains ! test::assert_true
+    "returned field needs no indirect execution" instructions.as_str "callq *" str::contains ! test::assert_true
+    "general callback entry keeps fallback" "fn_invoke" assembly get_function_body.as_str "callq *%rax" str::contains test::assert_true
+}
+
+fn assert_direct_iterator instructions:$str {
+    "iterator body has no indirect execution" instructions "callq *%rax" str::contains ! test::assert_true
+    instructions "\n" str::split.unwrap = lines
+    for line in lines.iter do
+        if line.as_str "call fn_" str::contains line.as_str "next__mono_" str::contains && then
+            "remaining next call selects a known target" line.as_str ".36.closure.36." str::contains test::assert_true
+        fi
+    done
+}
+
+fn test_loop_targets {
+    "iterator dispatch remains direct across wrapper cleanup" test::test_start
+    "import \"lib/std.casa\" as std fn cursor values:$std::List[i64] -> std::Iter[$i64] { values.iter } fn sum values:$std::List[i64] -> i64 { 0 = total for value in values cursor do value += total done total } [1, 2, 3] std::List::from_array sum print"
+    compile = assembly
+    "fn_sum" assembly get_function_body = instructions
+    instructions.as_str assert_direct_iterator
+}
+
+fn test_composed_targets {
+    "map and filter keep nested targets through returned captures" test::test_start
+    "import \"lib/std.casa\" as std fn add value:$i64 -> i64 { value 1 + } fn even value:$i64 -> bool { value 2 % 0 == } fn run values:$std::List[i64] -> i64 { 0 = total for value in &even &add values.iter.map.filter do value += total done total } [1, 2, 3, 4] std::List::from_array run print"
+    compile = assembly
+    0 = specialized: u64
+    assembly.as_str ".type fn_" str::split.unwrap = functions
+    for function in functions.iter do
+        function.as_str "\n" str::split.unwrap = lines
+        if 0 lines.get.as_str ".36.closure.36." str::contains then
+            function.as_str ".size " str::split.unwrap = parts
+            "composed target has no indirect execution" 0 parts.get.as_str "callq *%rax" str::contains ! test::assert_true
+            1 += specialized
+        fi
+    done
+    "all three iterator layers specialize" specialized 3 >= test::assert_true
+}
+
+struct Number {
+    value: i64
+}
+
+fn test_array_binding_cleanup {
+    "unmodeled element bindings retain assignment cleanup" test::test_start
+    &first Holder = dummy
+    [Number { value: unsafe { dummy ptr::from_ref } Reset = reset 1 }] drop
+    &first Holder = holder
+    unsafe { holder ptr::from_ref 0 + } = reset.target
+    unsafe { dummy ptr::from_ref } Reset = reset
+    "replacement destroys owner created in array element" 22 holder.next test::assert_eq
+    reset drop
+}
+
+fn test_owned_capture_cleanup {
+    "known closure cleanup retains custom capture effects" test::test_start
+    &first Holder = holder
+    unsafe { holder ptr::from_ref } Reset = reset
+    move { reset.target drop } = callback
+    callback drop
+    "owned capture destructor replaces callback" 22 holder.next test::assert_eq
+}
+
+fn repeat_sum repeats:u64 -> i64 {
+    std::List[i64]::new = values 1 values.push 2 values.push 3 values.push
+    0 = total
+    0 = round: u64
+    while round repeats < do
+        for value in values.iter do
+            value += total
+        done
+        1 += round
+    done
+    total
+}
+
+fn test_repeated_loop_targets {
+    "repeated traversal preserves targets after cursor cleanup" test::test_start
+    "each traversal starts with independent cursor state" 18 3 repeat_sum test::assert_eq
+    "import \"lib/std.casa\" as std fn run repeats:u64 -> i64 { std::List[i64]::new = values 1 values.push 2 values.push 3 values.push 0 = total 0 = round:u64 while round repeats < do for value in values.iter do value += total done 1 += round done total } 3 run print"
+    compile = assembly
+    "fn_run" assembly get_function_body = instructions
+    instructions.as_str assert_direct_iterator
+}
+
+fn test_context_budget {
+    "specialization growth retains a general fallback" test::test_start
+    std::String::new = source
+    "fn invoke callback:$fn[-> i64] -> i64 { callback exec } " source.append
+    0 = index: u64
+    while index 12 < do
+        f"fn value{index} -> i64 " source.append_string
+        "{ " source.append
+        index.to_str source.append_string
+        " } " source.append
+        f"&value{index} invoke print " source.append_string
+        1 += index
+    done
+    source.as_str compile = assembly
+    assembly.as_str ".type fn_invoke_closure_" str::split.unwrap = bodies
+    "per-function contexts are bounded" bodies.length 9 <= test::assert_true
+    "budget exhaustion calls the general entry" "_start" assembly get_function_body.as_str "call fn_invoke\n" str::contains test::assert_true
+    "general entry retains indirect dispatch" "fn_invoke" assembly get_function_body.as_str "callq *%rax" str::contains test::assert_true
+}
+
+fn test_deterministic_bounds {
+    "recursive analysis is bounded and repeatable" test::test_start
+    "fn invoke callback:$fn[-> i64] count:u64 -> i64 { if count 0 == then callback exec return fi count 1 - callback invoke } fn value -> i64 { 42 } 3 &value invoke print" = source
+    source compile = first_assembly
+    source compile = second_assembly
+    "same checked shapes select deterministic contexts" first_assembly.as_str second_assembly.as_str test::assert_str_eq
+}
+
+struct CopyResult derives std::Copy {
+    pub first:  i64
+    pub second: i64
+}
+
+fn apply_copy callback:$fn[i64 -> CopyResult] value:i64 -> CopyResult { value callback exec }
+
+fn select_four flag:bool -> fn[i64 i64 i64 i64 -> i64 i64 i64 i64] {
+    if flag then
+        { = first: i64 = second: i64 = third: i64 = fourth: i64 fourth third second first }
+    else
+        { = first: i64 = second: i64 = third: i64 = fourth: i64 first second third fourth }
+    fi
+}
+
+fn test_specialized_call_conventions {
+    "specialized captures retain every native call convention" test::test_start
+    &first = seed
+    0 = count: i64
+    { count drop 1 += count seed exec } = zero
+    "zero arguments" 11 zero exec test::assert_eq
+    &first = seed
+    { = value: i64 count drop 1 += count seed exec drop value 3 - } = one
+    "one argument" 17 20 one exec test::assert_eq
+    &first = seed
+    { = first: i64 = second: i64 count drop 1 += count seed exec drop second first } = two
+    98 2 1 two exec = a = b = lower
+    "two results" 1 a test::assert_eq
+    "second result" 2 b test::assert_eq
+    "lower value survives environment setup" 98 lower test::assert_eq
+    &first = seed
+    { = first: i64 = second: i64 = third: i64 count drop 1 += count seed exec drop third second first } = three
+    3 2 1 three exec = a = b = c
+    "three results" 123 a 100 * b 10 * + c + test::assert_eq
+    &first = seed
+    { = first: i64 = second: i64 = third: i64 = fourth: i64 count drop 1 += count seed exec drop fourth third second first count + } = four
+    99 4 3 2 1 four exec = a = b = c = d = lower
+    "four results" 2234 a 1000 * b 100 * + c 10 * + d + test::assert_eq
+    "lower value survives full register suffix" 99 lower test::assert_eq
+    4 3 2 1 four exec = a = b = c = d
+    "repeated specialized call keeps capture mutation" 3234 a 1000 * b 100 * + c 10 * + d + test::assert_eq
+    &first = seed
+    { = first: i64 = second: i64 = third: i64 = fourth: i64 = fifth: i64 count drop 1 += count seed exec drop fifth fourth third second first } = five
+    5 4 3 2 1 five exec = a = b = c = d = e
+    "memory ABI first argument" 1 a test::assert_eq
+    "memory ABI remaining results" 2345 b 1000 * c 100 * + d 10 * + e + test::assert_eq
+    &first = seed
+    { = value: i64 seed exec drop CopyResult { first: value second: value 7 - } } = copy_result
+    20 copy_result apply_copy = result
+    "hidden destination first field" 20 result.first test::assert_eq
+    "hidden destination second field" 13 result.second test::assert_eq
+    &first = seed
+    { = first: i64 = second: i64 = third: i64 = fourth: i64 seed exec drop
+    "zero-result argument order" 1234 first 1000 * second 100 * + third 10 * + fourth + test::assert_eq } = empty
+    97 4 3 2 1 empty exec = lower
+    "zero results preserve lower values" 97 lower test::assert_eq
+    true select_four = unknown
+    4 3 2 1 unknown exec = a = b = c = d
+    "unknown typed target uses its register contract" 1234 a 1000 * b 100 * + c 10 * + d + test::assert_eq
+    false select_four = reverse
+    4 3 2 1 reverse exec = a = b = c = d
+    "unknown alternate target uses its register contract" 4321 a 1000 * b 100 * + c 10 * + d + test::assert_eq
+}
+
+pub fn run_tests {
+    test_specialized_call_conventions
+    test_runtime_targets
+    test_owned_capture_cleanup
+    test_array_binding_cleanup
+    test_repeated_loop_targets
+    test_reassignment_after_invalidation
+    test_argument_and_result_order
+    test_direct_static_target
+    test_forwarded_targets
+    test_loop_targets
+    test_composed_targets
+    test_deterministic_bounds
+    test_context_budget
+    test::test_summary
+}
+run_tests

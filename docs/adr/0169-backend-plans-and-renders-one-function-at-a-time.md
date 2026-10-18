@@ -83,6 +83,34 @@ validation prepass, and semantic queries during backend lowering. Backend label
 allocation and private invariant checks remain. Representation tests must not
 force retention of the removed interface.
 
+## Known closure targets
+
+Before function planning, the backend propagates callable target shapes through
+checked bindings, aggregate fields, captures, arguments, and returned values.
+A shape records target identity and nested callable shapes. It contains no
+runtime values or capture storage. Each context uses the original checked body
+and its existing ownership, cleanup, and source facts.
+
+The backend emits a specialized function only when its context selects a known
+execution target or another specialized call. Capturing calls select the
+original closure record as the active environment before calling the proven
+target, then restore the previous environment. Separate closure instances keep
+separate mutable capture state. Capture-free targets use ordinary direct calls
+without environment switching or static-record destruction.
+
+Every specialized symbol inherits the original checked function's native-call
+plan for both call sites and function entry. Typed indirect execution uses that
+same eligibility rule. Environment setup and restoration preserve the register
+value stack and the argument and result registers. Generated destruction entry
+points retain the value-stack memory convention.
+
+Context counts, shape counts, recursion depth, and loop analysis have fixed
+bounds. Conflicting targets, active recursive contexts, unknown mutations, and
+exhausted budgets retain general dispatch. Joins retain only common target
+facts. Cleanup analysis consumes checked transfers and inactive-owner facts,
+and distinguishes user effects from representation-only destruction. It does
+not change borrow origins or the lifetime of yielded values.
+
 ## Aggregate storage
 
 Before register emission, the backend can replace non-escaping aggregate bodies
