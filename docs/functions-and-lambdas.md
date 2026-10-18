@@ -40,8 +40,8 @@ See [Generics and Traits](traits.md) for type parameters and trait bounds.
 
 ## Inline functions
 
-Prefix a function definition with `inline` to make its calls eligible for bounded
-inline expansion. `inline` is reserved and cannot be used as an identifier.
+Prefix a function definition with `inline` to record inline eligibility.
+`inline` is reserved and cannot be used as an identifier.
 
 ```casa
 inline fn clamp value:i64 minimum:i64 maximum:i64 -> i64 {
@@ -53,11 +53,11 @@ inline fn clamp value:i64 minimum:i64 maximum:i64 -> i64 {
 10 0 12 clamp print # 10
 ```
 
-The compiler can expand resolved named calls, including branches and early
-returns. `inline` is a best-effort request. Recursive cycles, unsupported bodies,
-and exhausted compilation or code-size budgets retain ordinary calls. Unmarked
-functions skip this expansion pass. The existing small leaf optimization also
-applies to unmarked functions.
+The current compiler recognizes this modifier and retains its eligibility metadata
+through concrete specialization. Calls remain ordinary calls except for the
+existing small leaf optimization, which also applies to unmarked functions.
+Bounded expansion of resolved named calls, including branches and early returns,
+remains unreleased and will be evaluated separately.
 
 The modifier can appear on generic functions, methods, and trait methods with a
 default body. A trait method requirement and an extern declaration cannot be
@@ -65,10 +65,10 @@ default body. A trait method requirement and an extern declaration cannot be
 both `inline unsafe fn` and `unsafe inline fn` are accepted. Calls still require
 an unsafe boundary.
 
-Inlining preserves argument order, checked failures, borrowing, and destruction.
-Taking a function reference remains valid and does not promise that indirect
-calls will be expanded. Generated closure bodies do not inherit inline eligibility
-from their enclosing function. Passed-in callbacks retain their own eligibility.
+The modifier does not change argument order, checked failures, borrowing, or
+destruction. Taking a function reference remains valid. Generated closure bodies
+do not inherit inline eligibility from their enclosing function. Passed-in
+callbacks retain their own eligibility.
 See [the inline example](../examples/inline_functions.casa).
 
 ## Root and termination contracts
