@@ -109,5 +109,10 @@ Casa is self-hosted. Build the compiler with an existing `casac`:
 ./casac casa.casa -o casac -L lib
 ```
 
-Run the test suite with `tests/test_all.sh`. The CLI tests require GDB and
-Python 3.
+Run the main test suite with `tests/test_all.sh` and Python 3. Native unwinding
+checks run in a separate CI workflow. They require GDB and a compiler built
+from the branch:
+
+```sh
+python3 tests/test_native_unwinding.py ./casac
+```
