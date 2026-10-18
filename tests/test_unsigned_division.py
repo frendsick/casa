@@ -43,7 +43,7 @@ def test_constant_powers(compiler, root):
     expected.append("7:2305843009213693951:55:44:33:22:11\n")
     output, assembly = compile_program(compiler, root, "powers", "\n".join(declarations + calls))
     assert not re.search(r"\b(?:divq|idivq)\b", assembly), assembly
-    assert "jz arithmetic_error" not in assembly, assembly
+    assert "jz .Larithmetic_error_" not in assembly, assembly
     assert "shrq $63" in assembly, assembly
     assert "movabsq $9223372036854775807, %rax" in assembly, assembly
     result = subprocess.run([output], check=True, capture_output=True, text=True, timeout=10)
@@ -72,7 +72,7 @@ def test_fallback_results(compiler, root):
     output, assembly = compile_program(compiler, root, "fallback", "\n".join(source))
     assert "divq %rcx" in assembly, assembly
     assert "idivq %rcx" in assembly, assembly
-    assert "jz arithmetic_error" in assembly, assembly
+    assert "jz .Larithmetic_error_" in assembly, assembly
     result = subprocess.run([output], check=True, capture_output=True, text=True, timeout=10)
     assert result.stdout == "".join(expected), result.stdout
 

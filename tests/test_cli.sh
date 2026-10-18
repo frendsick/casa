@@ -214,6 +214,11 @@ if matches_filter unsigned_division "$@"; then
     python3 tests/test_unsigned_division.py "$COMPILER"
 fi
 
+if matches_filter native_unwinding "$@"; then
+    matched=true
+    python3 tests/test_native_unwinding.py "$COMPILER"
+fi
+
 if matches_filter lsp_workspace "$@"; then
     matched=true
     "$COMPILER" -L lib lsp.casa -o "$CLI_TMP/lsp"

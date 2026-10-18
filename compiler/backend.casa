@@ -3651,31 +3651,33 @@ const SCALAR_REGISTER_COUNT 4
 const INITIAL_SCALAR_REGISTER_ORDER 0xE4
 
 struct Emitter {
-    sources:         $lexer::SourceStore
-    source_files:    std::Map[std::String u64]
-    last_location:   std::Option[common::Location]
+    sources:                $lexer::SourceStore
+    source_files:           std::Map[std::String u64]
+    last_location:          std::Option[common::Location]
     # Byte range of the latest .loc record in asm.
-    record_start:    u64
-    record_end:      u64
+    record_start:           u64
+    record_end:             u64
     # Displacement of the value stack top from rbx until the next synchronization.
-    stack_offset:    i64
+    stack_offset:           i64
     # Local storage below the return address, fixed for one function.
-    frame_bytes:     u64
-    native_calls:    std::Map[std::String common::NativeCallPlan]
-    asm:             std::String
-    label_counter:   u64
-    functions:       std::Map[std::String std::String]
-    templates:       std::Map[std::String LeafTemplate]
-    completed:       std::Set[std::String]
-    strings:         std::List[std::String]
-    string_indexes:  std::Map[std::String u64]
-    static_arrays:   std::List[StaticArray]
-    constants_count: u64
-    expanding_leaf:  bool
-    labels:          std::Set[i64]
-    symbols:         std::Set[std::String]
-    root_selected:   bool
-    failure:         std::Option[std::String]
+    frame_bytes:            u64
+    arithmetic_error_label: u64
+    env_overflow_label:     u64
+    native_calls:           std::Map[std::String common::NativeCallPlan]
+    asm:                    std::String
+    label_counter:          u64
+    functions:              std::Map[std::String std::String]
+    templates:              std::Map[std::String LeafTemplate]
+    completed:              std::Set[std::String]
+    strings:                std::List[std::String]
+    string_indexes:         std::Map[std::String u64]
+    static_arrays:          std::List[StaticArray]
+    constants_count:        u64
+    expanding_leaf:         bool
+    labels:                 std::Set[i64]
+    symbols:                std::Set[std::String]
+    root_selected:          bool
+    failure:                std::Option[std::String]
 }
 
 impl Emitter {
@@ -3687,7 +3689,7 @@ impl Emitter {
         std::Map[std::String u64]::new std::List[std::String]::new
         std::Set[std::String]::new std::Map[std::String LeafTemplate]::new
         std::Map[std::String std::String]::new
-        0 header std::Map[std::String common::NativeCallPlan]::new 0 0 0 0 std::Option[common::Location]::None std::Map[std::String u64]::new sources Emitter
+        0 header std::Map[std::String common::NativeCallPlan]::new 0 0 0 0 0 0 std::Option[common::Location]::None std::Map[std::String u64]::new sources Emitter
     }
 
     fn intern_string self:mut$Emitter value:$str -> u64 {
@@ -3802,6 +3804,37 @@ impl Emitter {
         fi
         f"leaq {self.stack_offset}(%rbx), %rbx" self.indent_string
         0 = self.stack_offset
+    }
+
+    # A runtime failure must be called from inside the current frame's CFI.
+    # Share one cold call site per handler without adding work to the hot path.
+    fn emit_failure_jump self:mut$Emitter jump:$str failure:$str {
+        if failure "arithmetic_error" == then
+            if 0 self.arithmetic_error_label == then
+                self.emit_uid = self.arithmetic_error_label
+            fi
+            f"{jump} .Larithmetic_error_{self.arithmetic_error_label}" self.indent_string
+        elif failure "env_stack_overflow" == then
+            if 0 self.env_overflow_label == then
+                self.emit_uid = self.env_overflow_label
+            fi
+            f"{jump} .Lenv_overflow_{self.env_overflow_label}" self.indent_string
+        else
+            f"{jump} {failure}" self.indent_string
+        fi
+    }
+
+    fn emit_failure_calls self:mut$Emitter {
+        if 0 self.arithmetic_error_label != then
+            f".Larithmetic_error_{self.arithmetic_error_label}:" self.line_string
+            "call arithmetic_error" self.indent
+            "ud2" self.indent
+        fi
+        if 0 self.env_overflow_label != then
+            f".Lenv_overflow_{self.env_overflow_label}:" self.line_string
+            "call env_stack_overflow" self.indent
+            "ud2" self.indent
+        fi
     }
 }
 
@@ -4206,6 +4239,7 @@ impl Emitter {
         ".cfi_startproc" self.indent
         locations self.emit_entry_location
         false locations bytecode self.emit_bytecode
+        self.emit_failure_calls
         ".cfi_endproc" self.indent
         f".size fn_{label}, .-fn_{label}" self.line_string
         "" self.line
@@ -4277,6 +4311,7 @@ impl Emitter {
         "movq $60, %rax" self.indent
         "xorq %rdi, %rdi" self.indent
         "syscall" self.indent
+        self.emit_failure_calls
         ".cfi_endproc" self.indent
         ".size _start, .-_start" self.line
         "" self.line
@@ -4291,6 +4326,8 @@ impl Emitter {
         ScalarStack::new = cache
         0 = self.stack_offset
         0 = self.frame_bytes
+        0 = self.arithmetic_error_label
+        0 = self.env_overflow_label
         # A standalone wrapper keeps its frame so nested capacity checks include it.
         std::Map[std::String LeafTemplate]::new = no_templates
         if is_global ! no_templates bytecode has_forwarding_frame && then
@@ -4676,22 +4713,22 @@ impl Emitter {
                     InstValue::Mul => below top "imulq" self.emit_binary_registers
                     InstValue::CheckedAdd(builtin) => {
                         below top "addq" self.emit_binary_registers
-                        if builtin.is_unsigned then "jc arithmetic_error" else "jo arithmetic_error" fi self.indent
+                        "arithmetic_error" if builtin.is_unsigned then "jc" else "jo" fi self.emit_failure_jump
                     }
                     InstValue::CheckedSub(builtin) => {
                         below top "subq" self.emit_binary_registers
-                        if builtin.is_unsigned then "jc arithmetic_error" else "jo arithmetic_error" fi self.indent
+                        "arithmetic_error" if builtin.is_unsigned then "jc" else "jo" fi self.emit_failure_jump
                     }
                     InstValue::CheckedMul(builtin) => {
                         if builtin.is_unsigned then
                             "%rax" below "movq" self.emit_binary_registers
                             top "mulq" self.emit_unary_register
                             "testq %rdx, %rdx" self.indent
-                            "jnz arithmetic_error" self.indent
+                            "arithmetic_error" "jnz" self.emit_failure_jump
                             below "%rax" "movq" self.emit_binary_registers
                         else
                             below top "imulq" self.emit_binary_registers
-                            "jo arithmetic_error" self.indent
+                            "arithmetic_error" "jo" self.emit_failure_jump
                         fi
                     }
                     InstValue::BitAnd => below top "andq" self.emit_binary_registers
@@ -4912,14 +4949,14 @@ impl Emitter {
             _ => return
         end
         f"cmpq %rax, {top}" self.indent_string
-        f"jne {failure}" self.indent_string
+        failure "jne" self.emit_failure_jump
     }
 
     fn emit_checked_add self:mut$Emitter builtin:mut$common::BuiltinType failure:$str {
         "%rax" self.emit_pop
         f"addq %rax, {0 self.stack_operand}" self.indent_string
         if 64 builtin.bit_width == then
-            if builtin.is_unsigned then f"jc {failure}" else f"jo {failure}" fi self.indent_string
+            failure if builtin.is_unsigned then "jc" else "jo" fi self.emit_failure_jump
         else
             failure builtin self.emit_checked_range
         fi
@@ -4929,7 +4966,7 @@ impl Emitter {
         "%rax" self.emit_pop
         f"subq %rax, {0 self.stack_operand}" self.indent_string
         if 64 builtin.bit_width == then
-            if builtin.is_unsigned then f"jc {failure}" else f"jo {failure}" fi self.indent_string
+            failure if builtin.is_unsigned then "jc" else "jo" fi self.emit_failure_jump
         else
             failure builtin self.emit_checked_range
         fi
@@ -4941,11 +4978,11 @@ impl Emitter {
         if builtin common::BuiltinType::U64 == then
             f"mulq {top}" self.indent_string
             "testq %rdx, %rdx" self.indent
-            f"jnz {failure}" self.indent_string
+            failure "jnz" self.emit_failure_jump
         else
             f"imulq {top}, %rax" self.indent_string
             if builtin common::BuiltinType::I64 == then
-                f"jo {failure}" self.indent_string
+                failure "jo" self.emit_failure_jump
             fi
         fi
         f"movq %rax, {top}" self.indent_string
@@ -4962,7 +4999,7 @@ impl Emitter {
     {
         "%rcx" self.emit_pop
         "testq %rcx, %rcx" self.indent
-        f"jz {failure}" self.indent_string
+        failure "jz" self.emit_failure_jump
         0 self.stack_operand = top
         f"movq {top}, %rax" self.indent_string
         if builtin.is_unsigned then
@@ -4976,7 +5013,7 @@ impl Emitter {
             f"jne .Ldiv_ready_{uid}" self.indent_string
             f"movabsq ${minimum}, %rdx" self.indent_string
             "cmpq %rdx, %rax" self.indent
-            f"je {failure}" self.indent_string
+            failure "je" self.emit_failure_jump
             f".Ldiv_ready_{uid}:" self.line_string
             "cqto" self.indent
             "idivq %rcx" self.indent
@@ -4987,7 +5024,7 @@ impl Emitter {
     fn emit_checked_shift self:mut$Emitter right:bool builtin:mut$common::BuiltinType {
         "%rcx" self.emit_pop
         f"cmpq ${builtin.bit_width}, %rcx" self.indent_string
-        "jae arithmetic_error" self.indent
+        "arithmetic_error" "jae" self.emit_failure_jump
         0 self.stack_operand = top
         if right then
             if builtin.is_unsigned then f"shrq %cl, {top}" else f"sarq %cl, {top}" fi self.indent_string
@@ -5076,15 +5113,15 @@ impl Emitter {
             "xorpd %xmm1, %xmm1" self.indent
             "ucomisd %xmm1, %xmm0" self.indent
         fi
-        f"jp {failure}" self.indent_string
-        f"jb {failure}" self.indent_string
+        failure "jp" self.emit_failure_jump
+        failure "jb" self.emit_failure_jump
         "%xmm1" source "18446744073709551616.0" self.emit_float_constant
         if source common::BuiltinType::F32 == then
             "ucomiss %xmm1, %xmm0" self.indent
         else
             "ucomisd %xmm1, %xmm0" self.indent
         fi
-        f"jae {failure}" self.indent_string
+        failure "jae" self.emit_failure_jump
         "%xmm1" source "9223372036854775808.0" self.emit_float_constant
         if source common::BuiltinType::F32 == then
             "ucomiss %xmm1, %xmm0" self.indent
@@ -5126,11 +5163,11 @@ impl Emitter {
         common::BuiltinType::F64 = comparison_type
         "%xmm1" comparison_type integer_type.get_integer_min self.emit_float_constant
         "ucomisd %xmm1, %xmm2" self.indent
-        f"jp {failure}" self.indent_string
-        f"jb {failure}" self.indent_string
+        failure "jp" self.emit_failure_jump
+        failure "jb" self.emit_failure_jump
         "%xmm1" comparison_type integer_type.get_integer_max self.emit_float_constant
         "ucomisd %xmm1, %xmm2" self.indent
-        f"ja {failure}" self.indent_string
+        failure "ja" self.emit_failure_jump
     }
 
     fn emit_float_to_integer
@@ -5169,8 +5206,8 @@ impl Emitter {
                 "cvtsi2sdq %rax, %xmm1" self.indent
                 "ucomisd %xmm1, %xmm0" self.indent
             fi
-            f"jp {failure}" self.indent_string
-            f"jne {failure}" self.indent_string
+            failure "jp" self.emit_failure_jump
+            failure "jne" self.emit_failure_jump
             f".Ltrunc_i64_done_{uid}:" self.line_string
         fi
     }
@@ -5831,7 +5868,7 @@ impl Emitter {
                 "movq current_env(%rip), %rsi" self.indent
                 "movq env_sp(%rip), %rcx" self.indent
                 f"cmpq ${RETURN_STACK_SIZE}, %rcx" self.indent_string
-                "jge env_stack_overflow" self.indent
+                "env_stack_overflow" "jge" self.emit_failure_jump
                 "movq %rsi, env_stack(%rcx)" self.indent
                 "addq $8, %rcx" self.indent
                 "movq %rcx, env_sp(%rip)" self.indent
@@ -5884,7 +5921,7 @@ impl Emitter {
                 "movq current_env(%rip), %rsi" self.indent
                 "movq env_sp(%rip), %rcx" self.indent
                 f"cmpq ${RETURN_STACK_SIZE}, %rcx" self.indent_string
-                "jge env_stack_overflow" self.indent
+                "env_stack_overflow" "jge" self.emit_failure_jump
                 "movq %rsi, env_stack(%rcx)" self.indent
                 "addq $8, %rcx" self.indent
                 "movq %rcx, env_sp(%rip)" self.indent
