@@ -128,7 +128,7 @@ if matches_filter sealed_scalar "$@"; then
 1:0:-128:41:0:-1:0" ]
     grep -q 'call fn_factorial' "$scalar_binary.s"
     grep -q 'return_stack_overflow:' "$scalar_binary.s"
-    grep -q 'popq -8(%r14)' "$scalar_binary.s"
+    grep -q '.cfi_startproc' "$scalar_binary.s"
 fi
 
 if matches_filter extern_target "$@"; then
@@ -212,6 +212,11 @@ fi
 if matches_filter unsigned_division "$@"; then
     matched=true
     python3 tests/test_unsigned_division.py "$COMPILER"
+fi
+
+if matches_filter comparison_branches "$@"; then
+    matched=true
+    python3 tests/test_comparison_branches.py "$COMPILER"
 fi
 
 if matches_filter lsp_workspace "$@"; then

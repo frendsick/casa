@@ -14,7 +14,7 @@ fn test_complete_scalar_commit {
     checked.into_checked_program.unwrap lexer::SourceStore::new swap bytecode::compile_checked.unwrap = text
     text helpers::generated_assembly = generated
     "native direct call" generated.as_str "call fn_twice" str::contains test::assert_true
-    "checked native return" generated.as_str "popq -8(%r14)" str::contains test::assert_true
+    "native frame unwind information" generated.as_str ".cfi_startproc" str::contains test::assert_true
     "runtime included" text.as_str "return_stack_overflow:" str::contains test::assert_true
     "root included" generated.as_str "_start:" str::contains test::assert_true
 }
@@ -61,11 +61,158 @@ fn test_rejected_source_has_no_backend_input {
     done
 }
 
+# Branches keep these calls out of the existing leaf-template expansion path.
+fn call_one value:i64 -> i64 {
+    if value 0 == then
+        1 return
+    fi
+    value
+}
+
+fn call_two first:i64 second:i64 -> i64 i64 {
+    if first 0 == then
+        second first return
+    fi
+    second first
+}
+
+fn call_three first:i64 second:i64 third:i64 -> i64 i64 i64 {
+    if first 0 == then
+        third second first return
+    fi
+    third second first
+}
+
+fn call_four first:i64 second:i64 third:i64 fourth:i64 -> i64 i64 i64 i64 {
+    if first 0 == then
+        fourth third second first return
+    fi
+    fourth third second first
+}
+
+fn call_five first:i64 second:i64 third:i64 fourth:i64 fifth:i64 -> i64 i64 i64 i64 i64 {
+    if first 0 == then
+        fifth fourth third second first return
+    fi
+    fifth fourth third second first
+}
+
+fn call_zero -> i64 {
+    0 = value
+    while value 3 < do
+        1 += value
+    done
+    value
+}
+
+fn call_empty first:i64 second:i64 third:i64 fourth:i64 {
+    "zero-result first argument" 1 first test::assert_eq
+    "zero-result second argument" 2 second test::assert_eq
+    "zero-result third argument" 3 third test::assert_eq
+    "zero-result fourth argument" 4 fourth test::assert_eq
+}
+
+fn call_recursive value:i64 -> i64 {
+    if value 0 == then
+        1 return
+    fi
+    value 1 - call_recursive value +
+}
+
+fn call_bits narrow:i8 floating:f32 -> i8 f32 {
+    if narrow 0 == then
+        narrow floating return
+    fi
+    narrow floating
+}
+
+fn test_register_call_values {
+    "register_call_values" test::test_start
+    "zero arguments" 3 call_zero test::assert_eq
+    "one argument and result" 42 42 call_one test::assert_eq
+    "recursive call" 16 5 call_recursive test::assert_eq
+    101 202 4 3 2 1 call_four = first = second = third = fourth = lower = bottom
+    "first argument" 1 first test::assert_eq
+    "second argument" 2 second test::assert_eq
+    "third argument" 3 third test::assert_eq
+    "fourth argument" 4 fourth test::assert_eq
+    "lower live value" 202 lower test::assert_eq
+    "bottom live value" 101 bottom test::assert_eq
+    11 22 33 44 swap rot call_four = first = second = third = fourth
+    "permuted first" 22 first test::assert_eq
+    "permuted second" 33 second test::assert_eq
+    "permuted third" 44 third test::assert_eq
+    "permuted fourth" 11 fourth test::assert_eq
+    2 0 call_two = first = second
+    "early first result" 0 first test::assert_eq
+    "early second result" 2 second test::assert_eq
+    3 2 1 call_three = first = second = third
+    "three results" 6 first second + third + test::assert_eq
+    99 4 3 2 1 call_empty = lower
+    "zero results keep lower value" 99 lower test::assert_eq
+    5 4 3 2 1 call_five = first = second = third = fourth = fifth
+    "fallback first argument" 1 first test::assert_eq
+    "fallback remaining results" 14 second third + fourth + fifth + test::assert_eq
+    0x7FC12345 = bits: u32
+    -128 = narrow: i8
+    bits f32::from_bits narrow call_bits = floating = returned_narrow
+    "narrow representation" narrow returned_narrow test::assert_eq
+    "float representation" bits floating.to_bits test::assert_eq
+}
+
+struct CallOwner {
+    drops: ptr
+    value: i64
+}
+
+impl CallOwner {
+    fn drop self:mut$CallOwner {
+        # Exercise allocator calls while an immediate closure's results are live.
+        unsafe {
+            8 alloc = memory
+            123 memory store64
+            memory free
+            self.drops load64 1 + self.drops store64
+        }
+    }
+}
+
+fn test_register_indirect_calls {
+    "register_indirect_calls" test::test_start
+    &call_four = function: fn[i64 i64 i64 i64 -> i64 i64 i64 i64]
+    99 4 3 2 1 function exec = first = second = third = fourth = lower
+    "typed first argument" 1 first test::assert_eq
+    "typed other arguments" 9 second third + fourth + test::assert_eq
+    "typed lower value" 99 lower test::assert_eq
+    &call_five = fallback
+    5 4 3 2 1 fallback exec = first = second = third = fourth = fifth
+    "typed fallback first" 1 first test::assert_eq
+    "typed fallback other results" 14 second third + fourth + fifth + test::assert_eq
+    0 = count
+    { 1 += count count count 10 + } = next
+    next exec = high = low
+    "borrowed closure first result" 1 low test::assert_eq
+    "borrowed closure second result" 11 high test::assert_eq
+    next exec = high = low
+    "mutated capture first result" 2 low test::assert_eq
+    "mutated capture second result" 12 high test::assert_eq
+    next drop
+    unsafe { 8 alloc = drops 0 drops store64 }
+    7 drops CallOwner = owner
+    move { owner.value 2 * owner.value } exec = second = first
+    "owned closure first result survives cleanup" 14 first test::assert_eq
+    "owned closure second result survives cleanup" 7 second test::assert_eq
+    "owned capture destroyed once" 1 unsafe { drops load64 } test::assert_eq
+    unsafe { drops free }
+}
+
 pub fn run_tests {
     test_complete_scalar_commit
     test_aggregate_uses_checked_contract
     test_compound_and_wrapping_plans
     test_rejected_source_has_no_backend_input
+    test_register_call_values
+    test_register_indirect_calls
     test::test_summary
 }
 run_tests
