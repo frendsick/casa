@@ -83,6 +83,26 @@ validation prepass, and semantic queries during backend lowering. Backend label
 allocation and private invariant checks remain. Representation tests must not
 force retention of the removed interface.
 
+## Aggregate storage
+
+Before register emission, the backend can replace non-escaping aggregate bodies
+with scalar frame slots. The proof follows aggregate addresses, fixed field offsets, local
+aliases, and active allocation lifetimes through the existing instruction labels.
+Constructors from separate branches can share scalar slots only when their lifetimes
+do not overlap. Stored aggregate addresses and representation copies propagate escape
+rejection to their dependent storage. Checked moves, payload transfers, borrow
+origins, source locations, and cleanup order remain unchanged.
+
+This proof stays within one physical function. It is limited to 4,096 instructions,
+64 aggregate regions, 256 bytes per region, 128 labels, 256 facts per state
+component, and 16 analysis passes. Unknown address uses, overlapping live
+constructors, unsupported field access, and incomplete convergence retain the
+original representation. A closure environment can use scalar slots only when checked
+capture cleanup is trivial and all environment accesses are visible within the function.
+Nested environment entry and restoration retain their original behavior. This bounded
+address analysis does not introduce a general control-flow graph or optimization
+framework.
+
 ## Runtime source and distribution
 
 Store fixed Linux runtime assembly in an ordinary multiline string in a

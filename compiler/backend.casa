@@ -524,7 +524,7 @@ impl FunctionPlanner {
             variable_name compiler.find_local_inline_aggregate_type
             std::Option::Some(aggregate_type) is
         then
-            local_index InstValue::LocalAddress bytecode.push
+            local_index std::Option::Some bytecode aggregate_type compiler.emit_value_storage
             bytecode aggregate_type compiler.emit_typed_store
             return
         fi
@@ -867,6 +867,16 @@ impl FunctionPlanner {
     {
         if typ compiler.destruction_needs_function ! then
             InstValue::Drop bytecode.push
+            return
+        fi
+        # Expose closure cleanup while preserving its materialized destructor.
+        if
+            typ compiler
+                .state
+                .checked
+                .get_shape typechecker::CheckedShape::Closure is
+        then
+            InstValue::ClosureDrop bytecode.push
             return
         fi
         if
@@ -1823,7 +1833,9 @@ impl FunctionPlanner {
         if 0 size == then
             false return
         fi
-        size self.allocate_value_storage InstValue::LocalAddress bytecode.push
+        size self.allocate_value_storage = slot
+        size slot InstValue::AggregateLocal bytecode.push
+        slot InstValue::LocalAddress bytecode.push
         true
     }
 
@@ -1956,6 +1968,23 @@ impl FunctionPlanner {
         fi
     }
 
+    fn closure_has_plain_cleanup compiler:$FunctionPlanner lambda:$common::Function -> bool {
+        for capture in lambda.captures.iter do
+            if capture.name.as_str lambda.owned_captures common::string_list_contains then
+                if
+                    capture.typ compiler
+                        .state
+                        .checked
+                        .needs_destruction
+                    capture.typ compiler.is_copy_aggregate ||
+                then
+                    false return
+                fi
+            fi
+        done
+        true
+    }
+
     fn compile_closure
         compiler:mut$FunctionPlanner
         store:$common::SymbolStore
@@ -2010,7 +2039,7 @@ impl FunctionPlanner {
             name.clone InstValue::FnPush bytecode.push
             lambda compiler.ensure_closure_destruction_function = drop_name
             drop_name InstValue::DropFn bytecode.push
-            captures.length InstValue::ClosureRecord bytecode.push
+            lambda compiler.closure_has_plain_cleanup captures.length InstValue::ClosureRecord bytecode.push
         fi
     }
 }
@@ -2155,12 +2184,14 @@ impl FunctionPlanner {
             .inline_size
             .unwrap = size
         if local_slot std::Option::Some(slot) is then
+            size slot InstValue::AggregateLocal bytecode.push
             slot InstValue::LocalAddress bytecode.push
         elif typ self.is_copy_aggregate then
-            size self.allocate_value_storage InstValue::LocalAddress bytecode.push
+            size self.allocate_value_storage = slot
+            size slot InstValue::AggregateLocal bytecode.push
+            slot InstValue::LocalAddress bytecode.push
         else
-            size i64::try_from.unwrap InstValue::Push bytecode.push
-            InstValue::HeapAlloc bytecode.push
+            size InstValue::AggregateAlloc bytecode.push
         fi
     }
 
@@ -2175,6 +2206,7 @@ impl FunctionPlanner {
             .inline_size
             .unwrap = size
         size self.allocate_value_storage = copy_local
+        size copy_local InstValue::AggregateLocal bytecode.push
         copy_local InstValue::LocalAddress bytecode.push
         size InstValue::MoveBytes bytecode.push
         copy_local InstValue::LocalAddress bytecode.push
@@ -3469,6 +3501,8 @@ enum InstValue {
     PrintString
     Panic
     # Memory
+    AggregateAlloc(u64)
+    AggregateLocal(u64 u64)
     HeapAlloc
     HeapFree
     Load8
@@ -3577,7 +3611,7 @@ enum InstValue {
     CaptureAddress(u64)
     CaptureSet(u64)
     ClosureDrop
-    ClosureRecord(u64)
+    ClosureRecord(u64 bool)
     FnPushStatic(std::String)
     # Strings
     StrEq
@@ -6051,7 +6085,7 @@ impl Emitter {
                 "movq %rax, current_env(%rip)" self.indent
                 f".Lclosure_drop_done_{uid}:" self.line_string
             }
-            InstValue::ClosureRecord(capture_count) => {
+            InstValue::ClosureRecord(capture_count _) => {
                 capture_count 2 * 2 + common::WORD_SIZE * = record_size
                 f"movq ${record_size}, %rdi" self.indent_string
                 "call heap_alloc" self.indent
@@ -6120,6 +6154,13 @@ impl Emitter {
             }
 
             # Memory operations
+            InstValue::AggregateAlloc(size) => {
+                f"movq ${size}, %rdi" self.indent_string
+                "call heap_alloc" self.indent
+                "%rax" self.emit_push
+            }
+            InstValue::AggregateLocal => {
+            }
             InstValue::HeapAlloc => {
                 "%rdi" self.emit_pop
                 "call heap_alloc" self.indent
@@ -6281,6 +6322,7 @@ struct FunctionPlan {
 
 impl FunctionPlan {
     fn new actions:std::List[InstValue] capture_count:u64 -> FunctionPlan {
+        actions replace_scalar_aggregates = actions
         std::List[InstValue]::new = instructions
         std::List[common::Location]::new = locations
         common::empty_location = location
@@ -6296,6 +6338,8 @@ impl FunctionPlan {
             actions.pop = action
             if action InstValue::Source(origin) is then
                 origin = location
+            elif action InstValue::AggregateLocal is then
+                # Storage metadata has no runtime effect or register clobbers.
             else
                 location.clone locations.push
                 action instructions.push
@@ -6622,4 +6666,1480 @@ fn encode_specialization_name name:$str -> std::String {
         fi
     done
     label
+}
+
+# Scalar replacement operates on logical stack actions before register emission.
+# Checked moves, cleanup order, and borrow origins are unchanged. Analysis is bounded because
+# large bodies and complicated address flows can retain their original storage.
+const SCALAR_MAX_ACTIONS: u64 4096
+const SCALAR_MAX_REGIONS: u64 64
+const SCALAR_MAX_BYTES: u64 256
+const SCALAR_MAX_PASSES: u64 16
+const SCALAR_MAX_LABELS: u64 128
+const SCALAR_MAX_FACTS: u64 256
+
+enum ScalarValue derives std::Copy std::Eq {
+    Unknown
+    Constant(i64)
+    Address(u64 i64)
+    Uncertain(u64)
+}
+
+struct ScalarState derives std::Clone {
+    stack:        std::List[ScalarValue]
+    locals:       std::Map[i64 ScalarValue]
+    memory:       std::Map[i64 ScalarValue]
+    live:         std::Set[i64]
+    environment:  ScalarValue
+    environments: std::List[ScalarValue]
+}
+
+impl ScalarState {
+    fn new -> ScalarState {
+        std::List[ScalarValue]::new ScalarValue::Unknown std::Set[i64]::new std::Map[i64 ScalarValue]::new
+        std::Map[i64 ScalarValue]::new std::List[ScalarValue]::new ScalarState
+    }
+
+    fn pop self:mut$ScalarState -> ScalarValue {
+        if self.stack.is_empty then
+            ScalarValue::Unknown
+        else
+            self.stack.pop
+        fi
+    }
+}
+
+struct ScalarRegion {
+    size:     u64
+    parent:   u64
+    rejected: bool
+    slot:     u64
+}
+
+enum ScalarStackOperation derives std::Copy {
+    Add
+    Drop
+    Dup
+    Over
+    Rot
+    Swap
+}
+
+enum ScalarRewrite derives std::Copy {
+    Value(u64)
+    Assign(u64)
+    Read(u64 u64 ScalarValue)
+    Write(u64 u64 ScalarValue)
+    Stack(ScalarStackOperation ScalarValue ScalarValue ScalarValue)
+    Free(u64)
+    Closure(u64 u64)
+    Environment(u64)
+    CaptureFlag(u64 u64 i64)
+    NullTest(u64 i64)
+    Transfer(u64 u64 u64 u64 u64 bool)
+}
+
+struct ScalarAnalysis {
+    regions:        std::List[ScalarRegion]
+    allocations:    std::Map[i64 u64]
+    local_regions:  std::Map[i64 u64]
+    conflicts:      std::Set[i64]
+    dependencies:   std::Set[i64]
+    labels:         std::Map[i64 ScalarState]
+    rewrites:       std::Map[i64 ScalarRewrite]
+    closure_values: std::Map[i64 std::List[ScalarValue]]
+    changed:        bool
+}
+
+impl ScalarAnalysis {
+    fn new -> ScalarAnalysis {
+        false std::Map[i64 std::List[ScalarValue]]::new std::Map[i64 ScalarRewrite]::new std::Map[i64 ScalarState]::new
+        std::Set[i64]::new std::Set[i64]::new std::Map[i64 u64]::new std::Map[i64 u64]::new
+        std::List[ScalarRegion]::new ScalarAnalysis
+    }
+
+    fn root self:$ScalarAnalysis region:u64 -> u64 {
+        while
+            region self
+                .regions
+                .get
+                .parent region !=
+        do
+            region self
+                .regions
+                .get
+                .parent = region
+        done
+        region
+    }
+
+    fn reject self:mut$ScalarAnalysis value:ScalarValue {
+        value match
+            ScalarValue::Address(region _) => region
+            ScalarValue::Uncertain(region) => region
+            _ => return
+        end = region
+        region self.root = root
+        root self.regions.get_mut = candidate
+        true = candidate.rejected
+    }
+
+    fn discard_stack self:mut$ScalarAnalysis state:mut$ScalarState {
+        while state.stack.is_empty ! do
+            state.pop self.reject
+        done
+    }
+
+    fn canonical self:$ScalarAnalysis value:ScalarValue -> ScalarValue {
+        if value ScalarValue::Address(region offset) is then
+            offset region self.root ScalarValue::Address
+        elif value ScalarValue::Uncertain(region) is then
+            region self.root ScalarValue::Uncertain
+        else
+            value
+        fi
+    }
+
+    fn union_regions self:mut$ScalarAnalysis left:u64 right:u64 -> u64 {
+        if right left < then
+            left = previous right = left previous = right
+        fi
+        left self
+            .regions
+            .get
+            .rejected right self
+            .regions
+            .get
+            .rejected || = rejected
+        right self.regions.get_mut = child
+        left = child.parent
+        left self.regions.get_mut = parent
+        rejected = parent.rejected
+        true = self.changed
+        left
+    }
+
+    fn merge_value self:mut$ScalarAnalysis left:ScalarValue right:ScalarValue -> ScalarValue {
+        left self.canonical = left
+        right self.canonical = right
+        if left right == then
+            left return
+        fi
+        if left ScalarValue::Uncertain(region) is then
+            if right ScalarValue::Address(other _) is then
+                if region other == then
+                    left return
+                fi
+            elif right ScalarValue::Constant is then
+                left return
+            fi
+        fi
+        if right ScalarValue::Uncertain(region) is then
+            if left ScalarValue::Address(other _) is then
+                if region other == then
+                    right return
+                fi
+            elif left ScalarValue::Constant is then
+                right return
+            fi
+        fi
+        if left ScalarValue::Address(a offset_a) is then
+            if right ScalarValue::Address(b offset_b) is then
+                if
+                    offset_a offset_b == a self
+                        .regions
+                        .get
+                        .size b self
+                        .regions
+                        .get
+                        .size == &&
+                then
+                    offset_a b a self.union_regions ScalarValue::Address return
+                fi
+            fi
+        fi
+        if left ScalarValue::Unknown is then
+            if right ScalarValue::Address(region _) is then
+                region ScalarValue::Uncertain return
+            fi
+            if right ScalarValue::Uncertain is then
+                right return
+            fi
+            ScalarValue::Unknown return
+        fi
+        if right ScalarValue::Unknown is then
+            if left ScalarValue::Address(region _) is then
+                region ScalarValue::Uncertain return
+            fi
+            if left ScalarValue::Uncertain is then
+                left return
+            fi
+            ScalarValue::Unknown return
+        fi
+        if left ScalarValue::Address(region _) is then
+            if right ScalarValue::Constant is then
+                region ScalarValue::Uncertain return
+            fi
+        fi
+        if right ScalarValue::Address(region _) is then
+            if left ScalarValue::Constant is then
+                region ScalarValue::Uncertain return
+            fi
+        fi
+        left self.reject
+        right self.reject
+        ScalarValue::Unknown
+    }
+
+    fn merge_map
+        self:mut$ScalarAnalysis
+        destination:mut$std::Map[i64 ScalarValue]
+        source:$std::Map[i64 ScalarValue]
+    {
+        destination.keys = keys
+        for key in keys.iter do
+            key destination.get_copy.unwrap = before
+            ScalarValue::Unknown key source.get_copy.unwrap_or = incoming
+            incoming before self.merge_value = value
+            if before value != then
+                true = self.changed
+            fi
+            value key copy destination.set
+        done
+        for pair in source.iter do
+            if pair.first destination.has ! then
+                pair.second copy ScalarValue::Unknown self.merge_value pair.first copy destination.set
+                true = self.changed
+            fi
+        done
+    }
+
+    fn merge_state self:mut$ScalarAnalysis destination:mut$ScalarState source:$ScalarState {
+        if destination.stack.length source.stack.length != then
+            destination self.discard_stack
+            for value in source.stack.iter do
+                value copy self.reject
+            done
+        else
+            0 = index: u64
+            while index destination.stack.length < do
+                index destination.stack.get copy = before
+                index source.stack.get copy before self.merge_value = value
+                if value ScalarValue::Uncertain is then
+                    value self.reject
+                fi
+                if before value != then
+                    true = self.changed
+                fi
+                value index destination.stack.set
+                1 += index
+            done
+        fi
+        source.environment copy destination.environment copy self.merge_value = environment
+        if environment ScalarValue::Uncertain is then
+            environment self.reject
+        fi
+        environment = destination.environment
+        if destination.environments.length source.environments.length != then
+            for value in destination.environments.iter do
+                value copy self.reject
+            done
+            for value in source.environments.iter do
+                value copy self.reject
+            done
+        else
+            0 = index: u64
+            while index destination.environments.length < do
+                index source.environments.get copy index destination.environments.get copy self.merge_value = value
+                if value ScalarValue::Uncertain is then
+                    value self.reject
+                fi
+                value index destination.environments.set
+                1 += index
+            done
+        fi
+        source.locals destination.locals self.merge_map
+        destination.memory self.normalized_memory = destination.memory
+        source.memory self.normalized_memory = incoming_memory
+        incoming_memory destination.memory self.merge_map
+        for region in source.live.iter do
+            if region destination.live.has ! then
+                region copy destination.live.add
+                true = self.changed
+            fi
+        done
+    }
+
+    fn edge self:mut$ScalarAnalysis label:u64 state:$ScalarState {
+        # Remove the destination while merging so mutations remain explicit and
+        # no borrow of the label table overlaps the region union operation.
+        if label label_key self.labels.remove std::Option::Some(previous) is then
+            state previous self.merge_state
+            previous label label_key self.labels.set
+        else
+            state.clone label label_key self.labels.set
+            true = self.changed
+        fi
+    }
+
+    fn activate self:mut$ScalarAnalysis region:u64 state:mut$ScalarState {
+        for other in state.live.iter do
+            if region other copy u64::try_from.unwrap != then
+                region SCALAR_MAX_REGIONS * other copy u64::try_from.unwrap + label_key self.conflicts.add
+            fi
+        done
+        region label_key state.live.add
+    }
+
+    fn release self:mut$ScalarAnalysis value:ScalarValue state:mut$ScalarState {
+        if value ScalarValue::Uncertain is then
+            value self.reject
+        fi
+        if value ScalarValue::Address(region offset) is then
+            if 0 offset != then
+                value self.reject return
+            fi
+            region self.root = root
+            state.live.clone = live
+            for other in live.iter do
+                if other copy u64::try_from.unwrap self.root root == then
+                    other state.live.remove
+                fi
+            done
+        fi
+    }
+
+    fn memory_key self:$ScalarAnalysis region:u64 offset:u64 -> i64 {
+        region self.root SCALAR_MAX_BYTES * offset + label_key
+    }
+
+    fn address_cell self:mut$ScalarAnalysis value:ScalarValue -> std::Option[i64] {
+        if value ScalarValue::Uncertain is then
+            value self.reject
+        fi
+        if value ScalarValue::Address(region offset) is then
+            region self.root = region
+            if 0 offset > then
+                value self.reject std::Option[i64]::None return
+            fi
+            offset u64::try_from.unwrap = position
+            # A region currently needs disjoint, aligned word cells. Narrow or
+            # overlapping views retain storage. Extend this when measurements
+            # identify narrow aggregate fields in an affected hot path.
+            if
+                position 8 % 0 != position 8 + region self
+                    .regions
+                    .get
+                    .size > ||
+            then
+                value self.reject std::Option[i64]::None return
+            fi
+            position region self.memory_key std::Option::Some return
+        fi
+        std::Option[i64]::None
+    }
+
+    fn collect self:mut$ScalarAnalysis actions:$std::List[InstValue] -> bool {
+        0 = label_count: u64
+        for action in actions.iter do
+            if action InstValue::Label is then
+                1 += label_count
+            fi
+        done
+        if label_count SCALAR_MAX_LABELS > then
+            false return
+        fi
+        0 = index: u64
+        for action in actions.iter do
+            action match
+                InstValue::AggregateAlloc(size) => {
+                    if 0 size == size SCALAR_MAX_BYTES > || then
+                        1 += index continue
+                    fi
+                    self.regions.length = region
+                    0 false region size ScalarRegion self.regions.push
+                    region index label_key self.allocations.set
+                }
+                InstValue::ClosureRecord(count plain) => {
+                    count 2 * 2 + 8 * = size
+                    if plain ! size SCALAR_MAX_BYTES > || then
+                        1 += index continue
+                    fi
+                    self.regions.length = region
+                    0 false region size ScalarRegion self.regions.push
+                    region index label_key self.allocations.set
+                }
+                InstValue::AggregateLocal(slot size) => {
+                    if 0 size == size SCALAR_MAX_BYTES > || then
+                        1 += index continue
+                    fi
+                    if slot label_key self.local_regions.has ! then
+                        self.regions.length = region
+                        0 false region size ScalarRegion self.regions.push
+                        region slot label_key self.local_regions.set
+                    fi
+                }
+                _ => {
+                }
+            end
+            if self.regions.length SCALAR_MAX_REGIONS > then
+                false return
+            fi
+            1 += index
+        done
+        self.regions.is_empty !
+    }
+
+    fn normalized_memory
+        self:mut$ScalarAnalysis
+        memory:$std::Map[i64 ScalarValue]
+    -> std::Map[i64 ScalarValue] {
+        std::Map[i64 ScalarValue]::new = output
+        for pair in memory.iter do
+            pair.first copy u64::try_from.unwrap = key
+            key SCALAR_MAX_BYTES % key SCALAR_MAX_BYTES / self.memory_key = canonical
+            pair.second copy = value
+            if canonical output.get_copy std::Option::Some(previous) is then
+                value previous self.merge_value = value
+            fi
+            value canonical output.set
+        done
+        output
+    }
+
+    fn depend self:mut$ScalarAnalysis parent:u64 child:u64 {
+        parent SCALAR_MAX_REGIONS * child + label_key self.dependencies.add
+    }
+
+    fn reject_dependencies self:mut$ScalarAnalysis {
+        true = changed
+        while changed do
+            false = changed
+            for edge in self.dependencies.iter do
+                edge copy u64::try_from.unwrap = key
+                key SCALAR_MAX_REGIONS / self.root = parent
+                key SCALAR_MAX_REGIONS % self.root = child
+                if
+                    parent self
+                        .regions
+                        .get
+                        .rejected child self
+                        .regions
+                        .get
+                        .rejected ! &&
+                then
+                    child self.regions.get_mut = candidate
+                    true = candidate.rejected
+                    true = changed
+                fi
+            done
+        done
+    }
+
+    fn read_memory self:mut$ScalarAnalysis state:mut$ScalarState index:u64 {
+        state.memory self.normalized_memory = state.memory
+        state.pop = address
+        if address self.address_cell std::Option::Some(key) is then
+            ScalarValue::Unknown key state
+                .memory
+                .get_copy
+                .unwrap_or = value
+            if value ScalarValue::Uncertain is then
+                value self.reject
+            fi
+            address match
+                ScalarValue::Address(region offset) => {
+                    value offset u64::try_from.unwrap region ScalarRewrite::Read index label_key self.rewrites.set
+                }
+                _ => {
+                }
+            end
+            value state.stack.push
+        else
+            ScalarValue::Unknown state.stack.push
+        fi
+    }
+
+    fn write_memory self:mut$ScalarAnalysis state:mut$ScalarState index:u64 {
+        state.memory self.normalized_memory = state.memory
+        state.pop = address
+        state.pop = value
+        if value ScalarValue::Uncertain is then
+            value self.reject
+        fi
+        if address self.address_cell std::Option::Some(key) is then
+            value key state.memory.set
+            if value ScalarValue::Address(child _) is then
+                key u64::try_from.unwrap SCALAR_MAX_BYTES / = parent
+                child parent self.depend
+            fi
+            address match
+                ScalarValue::Address(region offset) => {
+                    value offset u64::try_from.unwrap region ScalarRewrite::Write index label_key self.rewrites.set
+                }
+                _ => {
+                }
+            end
+        else
+            value self.reject
+        fi
+    }
+
+    fn transfer self:mut$ScalarAnalysis state:mut$ScalarState index:u64 size:u64 frees_source:bool {
+        state.memory self.normalized_memory = state.memory
+        state.pop = destination
+        state.pop = source
+        if source ScalarValue::Address(from from_offset) is then
+            if destination ScalarValue::Address(to to_offset) is then
+                if
+                    from_offset 0 < to_offset 0 < || size 8 % 0 != ||
+                    from_offset 8 % 0 != || to_offset 8 % 0 != || size SCALAR_MAX_BYTES > ||
+                then
+                    source self.reject destination self.reject return
+                fi
+                from_offset u64::try_from.unwrap = source_offset
+                to_offset u64::try_from.unwrap = destination_offset
+                if
+                    source_offset size + from self
+                        .regions
+                        .get
+                        .size >
+                    destination_offset size + to self
+                        .regions
+                        .get
+                        .size > ||
+                then
+                    source self.reject destination self.reject return
+                fi
+                to from self.depend
+                from to self.depend
+                frees_source size destination_offset to source_offset from ScalarRewrite::Transfer index label_key self.rewrites.set
+                std::List[ScalarValue]::new = values
+                0 = offset: u64
+                while offset size < do
+                    source_offset offset + from self.memory_key = source_key
+                    ScalarValue::Unknown source_key state
+                        .memory
+                        .get_copy
+                        .unwrap_or values.push
+                    8 += offset
+                done
+                0 = offset: u64
+                for value in values.iter do
+                    destination_offset offset + to self.memory_key = destination_key
+                    value copy destination_key state.memory.set
+                    8 += offset
+                done
+                if frees_source then
+                    state source self.release
+                fi
+                return
+            fi
+        fi
+        source self.reject destination self.reject
+    }
+
+    fn arithmetic self:mut$ScalarAnalysis state:mut$ScalarState subtract:bool {
+        state.pop = right
+        state.pop = left
+        right match
+            ScalarValue::Constant(amount) => amount
+            _ => {
+                left self.reject right self.reject ScalarValue::Unknown state.stack.push return
+            }
+        end = amount
+        left match
+            ScalarValue::Address(region offset) => offset region
+            _ => {
+                left self.reject ScalarValue::Unknown state.stack.push return
+            }
+        end = region = offset
+        SCALAR_MAX_BYTES i64::try_from.unwrap = limit
+        if amount 0 limit - < amount limit > || then
+            left self.reject ScalarValue::Unknown state.stack.push return
+        fi
+        if subtract then
+            0 amount - = amount
+        fi
+        offset amount + = next_offset
+        if
+            next_offset 0 < next_offset region self
+                .regions
+                .get
+                .size i64::try_from.unwrap > ||
+        then
+            left self.reject ScalarValue::Unknown state.stack.push return
+        fi
+        next_offset region ScalarValue::Address state.stack.push
+    }
+
+    fn ordinary self:mut$ScalarAnalysis state:mut$ScalarState action:$InstValue {
+        action match
+            InstValue::Push(value) => value ScalarValue::Constant state.stack.push
+            InstValue::Drop => state.pop drop
+            InstValue::Dup => {
+                state.pop = value value state.stack.push value state.stack.push
+            }
+            InstValue::Over => {
+                state.pop = top state.pop = below
+                below state.stack.push top state.stack.push below state.stack.push
+            }
+            InstValue::Swap => {
+                state.pop = top state.pop = below top state.stack.push below state.stack.push
+            }
+            InstValue::Rot => {
+                state.pop = top state.pop = middle state.pop = below
+                middle state.stack.push top state.stack.push below state.stack.push
+            }
+            InstValue::Add => false state self.arithmetic
+            InstValue::Sub => true state self.arithmetic
+            InstValue::LocalGet(slot) => ScalarValue::Unknown slot label_key state
+                .locals
+                .get_copy
+                .unwrap_or state.stack.push
+            InstValue::LocalSet(slot) => state.pop slot label_key state.locals.set
+            InstValue::HeapFree => state state.pop self.release
+            InstValue::PushChar => ScalarValue::Unknown state.stack.push
+            InstValue::PushFloat32 => ScalarValue::Unknown state.stack.push
+            InstValue::PushFloat64 => ScalarValue::Unknown state.stack.push
+            InstValue::PushStr => ScalarValue::Unknown state.stack.push
+            InstValue::FnPush => ScalarValue::Unknown state.stack.push
+            InstValue::FnPushStatic => ScalarValue::Unknown state.stack.push
+            InstValue::DropFn => ScalarValue::Unknown state.stack.push
+            InstValue::CaptureLoad => ScalarValue::Unknown state.stack.push
+            InstValue::CaptureFlagLoad => ScalarValue::Unknown state.stack.push
+            InstValue::CheckedAdd => {
+                state.pop self.reject state.pop self.reject ScalarValue::Unknown state.stack.push
+            }
+            InstValue::CheckedSub => {
+                state.pop self.reject state.pop self.reject ScalarValue::Unknown state.stack.push
+            }
+            InstValue::CheckedMul => {
+                state.pop self.reject state.pop self.reject ScalarValue::Unknown state.stack.push
+            }
+            InstValue::CheckedDiv => {
+                state.pop self.reject state.pop self.reject ScalarValue::Unknown state.stack.push
+            }
+            InstValue::CheckedMod => {
+                state.pop self.reject state.pop self.reject ScalarValue::Unknown state.stack.push
+            }
+            InstValue::CheckedShl => {
+                state.pop self.reject state.pop self.reject ScalarValue::Unknown state.stack.push
+            }
+            InstValue::CheckedShr => {
+                state.pop self.reject state.pop self.reject ScalarValue::Unknown state.stack.push
+            }
+            InstValue::Mul => {
+                state.pop self.reject state.pop self.reject ScalarValue::Unknown state.stack.push
+            }
+            InstValue::Div => {
+                state.pop self.reject state.pop self.reject ScalarValue::Unknown state.stack.push
+            }
+            InstValue::UDiv => {
+                state.pop self.reject state.pop self.reject ScalarValue::Unknown state.stack.push
+            }
+            InstValue::Mod => {
+                state.pop self.reject state.pop self.reject ScalarValue::Unknown state.stack.push
+            }
+            InstValue::UMod => {
+                state.pop self.reject state.pop self.reject ScalarValue::Unknown state.stack.push
+            }
+            InstValue::BitAnd => {
+                state.pop self.reject state.pop self.reject ScalarValue::Unknown state.stack.push
+            }
+            InstValue::BitOr => {
+                state.pop self.reject state.pop self.reject ScalarValue::Unknown state.stack.push
+            }
+            InstValue::BitXor => {
+                state.pop self.reject state.pop self.reject ScalarValue::Unknown state.stack.push
+            }
+            InstValue::And => {
+                state.pop self.reject state.pop self.reject ScalarValue::Unknown state.stack.push
+            }
+            InstValue::Or => {
+                state.pop self.reject state.pop self.reject ScalarValue::Unknown state.stack.push
+            }
+            InstValue::Eq => {
+                state.pop self.reject state.pop self.reject ScalarValue::Unknown state.stack.push
+            }
+            InstValue::Ne => {
+                state.pop self.reject state.pop self.reject ScalarValue::Unknown state.stack.push
+            }
+            InstValue::Lt => {
+                state.pop self.reject state.pop self.reject ScalarValue::Unknown state.stack.push
+            }
+            InstValue::Le => {
+                state.pop self.reject state.pop self.reject ScalarValue::Unknown state.stack.push
+            }
+            InstValue::Gt => {
+                state.pop self.reject state.pop self.reject ScalarValue::Unknown state.stack.push
+            }
+            InstValue::Ge => {
+                state.pop self.reject state.pop self.reject ScalarValue::Unknown state.stack.push
+            }
+            InstValue::Ult => {
+                state.pop self.reject state.pop self.reject ScalarValue::Unknown state.stack.push
+            }
+            InstValue::Ule => {
+                state.pop self.reject state.pop self.reject ScalarValue::Unknown state.stack.push
+            }
+            InstValue::Ugt => {
+                state.pop self.reject state.pop self.reject ScalarValue::Unknown state.stack.push
+            }
+            InstValue::Uge => {
+                state.pop self.reject state.pop self.reject ScalarValue::Unknown state.stack.push
+            }
+            InstValue::Shl => {
+                state.pop self.reject state.pop self.reject ScalarValue::Unknown state.stack.push
+            }
+            InstValue::Shr => {
+                state.pop self.reject state.pop self.reject ScalarValue::Unknown state.stack.push
+            }
+            InstValue::UShr => {
+                state.pop self.reject state.pop self.reject ScalarValue::Unknown state.stack.push
+            }
+            InstValue::FloatAdd32 => {
+                state.pop self.reject state.pop self.reject ScalarValue::Unknown state.stack.push
+            }
+            InstValue::FloatAdd64 => {
+                state.pop self.reject state.pop self.reject ScalarValue::Unknown state.stack.push
+            }
+            InstValue::FloatSub32 => {
+                state.pop self.reject state.pop self.reject ScalarValue::Unknown state.stack.push
+            }
+            InstValue::FloatSub64 => {
+                state.pop self.reject state.pop self.reject ScalarValue::Unknown state.stack.push
+            }
+            InstValue::FloatMul32 => {
+                state.pop self.reject state.pop self.reject ScalarValue::Unknown state.stack.push
+            }
+            InstValue::FloatMul64 => {
+                state.pop self.reject state.pop self.reject ScalarValue::Unknown state.stack.push
+            }
+            InstValue::FloatDiv32 => {
+                state.pop self.reject state.pop self.reject ScalarValue::Unknown state.stack.push
+            }
+            InstValue::FloatDiv64 => {
+                state.pop self.reject state.pop self.reject ScalarValue::Unknown state.stack.push
+            }
+            InstValue::FloatEq32 => {
+                state.pop self.reject state.pop self.reject ScalarValue::Unknown state.stack.push
+            }
+            InstValue::FloatEq64 => {
+                state.pop self.reject state.pop self.reject ScalarValue::Unknown state.stack.push
+            }
+            InstValue::FloatNe32 => {
+                state.pop self.reject state.pop self.reject ScalarValue::Unknown state.stack.push
+            }
+            InstValue::FloatNe64 => {
+                state.pop self.reject state.pop self.reject ScalarValue::Unknown state.stack.push
+            }
+            InstValue::FloatLt32 => {
+                state.pop self.reject state.pop self.reject ScalarValue::Unknown state.stack.push
+            }
+            InstValue::FloatLt64 => {
+                state.pop self.reject state.pop self.reject ScalarValue::Unknown state.stack.push
+            }
+            InstValue::FloatLe32 => {
+                state.pop self.reject state.pop self.reject ScalarValue::Unknown state.stack.push
+            }
+            InstValue::FloatLe64 => {
+                state.pop self.reject state.pop self.reject ScalarValue::Unknown state.stack.push
+            }
+            InstValue::FloatGt32 => {
+                state.pop self.reject state.pop self.reject ScalarValue::Unknown state.stack.push
+            }
+            InstValue::FloatGt64 => {
+                state.pop self.reject state.pop self.reject ScalarValue::Unknown state.stack.push
+            }
+            InstValue::FloatGe32 => {
+                state.pop self.reject state.pop self.reject ScalarValue::Unknown state.stack.push
+            }
+            InstValue::FloatGe64 => {
+                state.pop self.reject state.pop self.reject ScalarValue::Unknown state.stack.push
+            }
+            InstValue::Not => {
+                state.pop self.reject ScalarValue::Unknown state.stack.push
+            }
+            InstValue::BitNot => {
+                state.pop self.reject ScalarValue::Unknown state.stack.push
+            }
+            InstValue::NormalizeInt => {
+                state.pop self.reject ScalarValue::Unknown state.stack.push
+            }
+            InstValue::NumericConvert => {
+                state.pop self.reject ScalarValue::Unknown state.stack.push
+            }
+            InstValue::FloatRound => {
+                state.pop self.reject ScalarValue::Unknown state.stack.push
+            }
+            InstValue::Source => {
+            }
+            InstValue::LocalsInit => {
+            }
+            InstValue::LocalsUninit => {
+            }
+            InstValue::AggregateLocal => {
+            }
+            _ => state self.discard_stack
+        end
+    }
+
+    fn closure self:mut$ScalarAnalysis state:mut$ScalarState index:u64 count:u64 {
+        index label_key self.allocations.get_copy match
+            std::Option::Some(region) => region
+            std::Option::None => {
+                state self.discard_stack ScalarValue::Unknown state.stack.push return
+            }
+        end = region
+        if region label_key state.live.has then
+            0 region ScalarValue::Address self.reject
+        fi
+        state region self.activate
+        std::List[ScalarValue]::new = values
+        count 2 * 2 + = remaining
+        while remaining 0 > do
+            state.pop = value
+            if value ScalarValue::Address(child _) is then
+                child region self.depend
+            fi
+            value values.push
+            if remaining count 2 * 2 + == then
+                8
+            elif remaining count 2 * 1 + == then
+                0
+            else
+                remaining 1 - 8 * 16 +
+            fi = offset
+            value offset region self.memory_key state.memory.set
+            1 -= remaining
+        done
+        values region label_key self.closure_values.set
+        count region ScalarRewrite::Closure index label_key self.rewrites.set
+        0 region ScalarValue::Address state.stack.push
+    }
+
+    fn enter_environment self:mut$ScalarAnalysis state:mut$ScalarState index:u64 {
+        state.environment copy state.environments.push
+        state.pop = environment
+        environment = state.environment
+        if environment ScalarValue::Address(region _) is then
+            region ScalarRewrite::Environment index label_key self.rewrites.set
+        elif environment ScalarValue::Uncertain is then
+            environment self.reject
+        fi
+    }
+
+    fn leave_environment self:mut$ScalarAnalysis state:mut$ScalarState index:u64 {
+        if state.environment ScalarValue::Address(region _) is then
+            region ScalarRewrite::Environment index label_key self.rewrites.set
+        elif state.environment ScalarValue::Uncertain is then
+            state.environment copy self.reject
+        fi
+        if state.environments.is_empty then
+            ScalarValue::Unknown
+        else
+            state.environments.pop
+        fi = state.environment
+    }
+
+    fn capture_address self:mut$ScalarAnalysis state:$ScalarState offset:u64 -> ScalarValue {
+        if state.environment ScalarValue::Address(region base) is then
+            base offset i64::try_from.unwrap + region ScalarValue::Address
+        else
+            state.environment copy self.reject
+            ScalarValue::Unknown
+        fi
+    }
+
+    fn capture_flag self:mut$ScalarAnalysis state:mut$ScalarState index:u64 slot:u64 value:i64 {
+        slot 16 * 24 + = offset
+        offset state self.capture_address = address
+        if address self.address_cell std::Option::Some(key) is then
+            value ScalarValue::Constant key state.memory.set
+            if address ScalarValue::Address(region _) is then
+                value offset region ScalarRewrite::CaptureFlag index label_key self.rewrites.set
+            fi
+        fi
+    }
+
+    fn stack_rewrite
+        self:mut$ScalarAnalysis
+        state:$ScalarState
+        index:u64
+        operation:ScalarStackOperation
+    {
+        ScalarValue::Unknown = top
+        ScalarValue::Unknown = below
+        ScalarValue::Unknown = third
+        if state.stack.length 0 > then
+            state.stack.length 1 - state.stack.get copy = top
+        fi
+        if state.stack.length 1 > then
+            state.stack.length 2 - state.stack.get copy = below
+        fi
+        if state.stack.length 2 > then
+            state.stack.length 3 - state.stack.get copy = third
+        fi
+        third below top operation ScalarRewrite::Stack index label_key self.rewrites.set
+    }
+
+    fn local_address self:$ScalarAnalysis slot:u64 -> ScalarValue {
+        for pair in self.local_regions.iter do
+            pair.first copy u64::try_from.unwrap = base
+            if slot base <= then
+                base slot - 8 * = offset
+                if
+                    offset pair.second copy self
+                        .regions
+                        .get
+                        .size <
+                then
+                    offset i64::try_from.unwrap pair.second copy ScalarValue::Address return
+                fi
+            fi
+        done
+        ScalarValue::Unknown
+    }
+
+    fn null_test self:mut$ScalarAnalysis state:mut$ScalarState index:u64 unequal:bool {
+        state.pop = right
+        state.pop = left
+        ScalarValue::Unknown = address
+        if right ScalarValue::Constant(value) is then
+            if value 0 == then
+                left = address
+            fi
+        fi
+        if left ScalarValue::Constant(value) is then
+            if value 0 == then
+                right = address
+            fi
+        fi
+        if address ScalarValue::Address(region _) is then
+            if unequal then 1 else 0 fi = result: i64
+            result ScalarValue::Constant state.stack.push
+            result region ScalarRewrite::NullTest index label_key self.rewrites.set
+        else
+            left self.reject right self.reject
+            ScalarValue::Unknown state.stack.push
+        fi
+    }
+
+    fn action self:mut$ScalarAnalysis state:mut$ScalarState action:$InstValue index:u64 {
+        action match
+            InstValue::Eq => false index state self.null_test
+            InstValue::Ne => true index state self.null_test
+            InstValue::ClosureRecord(count _) => count index state self.closure
+            InstValue::ClosureDrop => {
+                state.pop = value
+                if value ScalarValue::Address(region _) is then
+                    # Only plain-cleanup closure records enter the region table.
+                    region ScalarRewrite::Free index label_key self.rewrites.set
+                fi
+                state value self.release
+            }
+            InstValue::CaptureLoad(slot) => {
+                slot 16 * 16 + state self.capture_address state.stack.push
+                index state self.read_memory
+            }
+            InstValue::CaptureAddress(slot) => {
+                slot 16 * 16 + state self.capture_address = value
+                value state.stack.push
+                if value ScalarValue::Address(region _) is then
+                    region ScalarRewrite::Value index label_key self.rewrites.set
+                fi
+            }
+            InstValue::CaptureSet(slot) => {
+                slot 16 * 16 + state self.capture_address state.stack.push
+                index state self.write_memory
+            }
+            InstValue::CaptureFlagLoad(slot) => {
+                slot 16 * 24 + state self.capture_address state.stack.push
+                index state self.read_memory
+            }
+            InstValue::CaptureFlagMark(slot) => 1 slot index state self.capture_flag
+            InstValue::CaptureFlagClear(slot) => 0 slot index state self.capture_flag
+            InstValue::FnCall => {
+                state.environment copy self.reject state self.discard_stack
+            }
+            InstValue::FnExec => {
+                state.environment copy self.reject state self.discard_stack
+            }
+            InstValue::Drop => {
+                ScalarStackOperation::Drop index state self.stack_rewrite action state self.ordinary
+            }
+            InstValue::Dup => {
+                ScalarStackOperation::Dup index state self.stack_rewrite action state self.ordinary
+            }
+            InstValue::Over => {
+                ScalarStackOperation::Over index state self.stack_rewrite action state self.ordinary
+            }
+            InstValue::Rot => {
+                ScalarStackOperation::Rot index state self.stack_rewrite action state self.ordinary
+            }
+            InstValue::Swap => {
+                ScalarStackOperation::Swap index state self.stack_rewrite action state self.ordinary
+            }
+            InstValue::Add => {
+                ScalarStackOperation::Add index state self.stack_rewrite action state self.ordinary
+            }
+            InstValue::Sub => {
+                ScalarStackOperation::Add index state self.stack_rewrite action state self.ordinary
+            }
+            InstValue::AggregateAlloc => {
+                if index label_key self.allocations.get_copy std::Option::Some(region) is then
+                    if region label_key state.live.has then
+                        0 region ScalarValue::Address self.reject
+                    fi
+                    state region self.activate
+                    0 region ScalarValue::Address state.stack.push
+                    region ScalarRewrite::Value index label_key self.rewrites.set
+                else
+                    ScalarValue::Unknown state.stack.push
+                fi
+            }
+            InstValue::LocalAddress(slot) => {
+                slot self.local_address = value
+                value state.stack.push
+                if value ScalarValue::Address(region _) is then
+                    state region self.activate
+                    region ScalarRewrite::Value index label_key self.rewrites.set
+                fi
+            }
+            InstValue::Load64 => index state self.read_memory
+            InstValue::Store64 => index state self.write_memory
+            InstValue::MoveBytes(size) => false size index state self.transfer
+            InstValue::WriteIndirect(size) => true size index state self.transfer
+            InstValue::HeapFree => {
+                state.pop = value
+                if value ScalarValue::Address(region _) is then
+                    region ScalarRewrite::Free index label_key self.rewrites.set
+                fi
+                state value self.release
+            }
+            InstValue::LocalGet(slot) => {
+                ScalarValue::Unknown slot label_key state
+                    .locals
+                    .get_copy
+                    .unwrap_or = value
+                if value ScalarValue::Uncertain is then
+                    value self.reject
+                fi
+                value state.stack.push
+                if value ScalarValue::Address(region _) is then
+                    region ScalarRewrite::Value index label_key self.rewrites.set
+                fi
+            }
+            InstValue::LocalSet(slot) => {
+                state.pop = value
+                value slot label_key state.locals.set
+                if value ScalarValue::Address(region _) is then
+                    region ScalarRewrite::Assign index label_key self.rewrites.set
+                fi
+            }
+            _ => action state self.ordinary
+        end
+    }
+
+    fn scan self:mut$ScalarAnalysis actions:$std::List[InstValue] -> bool {
+        std::Map[i64 ScalarRewrite]::new = self.rewrites
+        ScalarState::new = state
+        true = reachable
+        0 = index: u64
+        for action in actions.iter do
+            if
+                state.locals.length SCALAR_MAX_FACTS > state.memory.length SCALAR_MAX_FACTS > ||
+                state.stack.length SCALAR_MAX_FACTS > || state.environments.length SCALAR_MAX_FACTS > ||
+            then
+                false return
+            fi
+            if action InstValue::Label(label) is then
+                if reachable then
+                    state label self.edge
+                fi
+                if label label_key self.labels.get std::Option::Some(entry) is then
+                    entry.clone = state true = reachable
+                fi
+                1 += index continue
+            fi
+            if reachable ! then
+                1 += index continue
+            fi
+            action match
+                InstValue::Jump(label) => {
+                    state label self.edge false = reachable
+                }
+                InstValue::JumpNe(label) => {
+                    state.pop self.reject state label self.edge
+                }
+                InstValue::JumpTable(targets fallback) => {
+                    state.pop self.reject
+                    state fallback self.edge
+                    for target in targets.iter do
+                        state target copy self.edge
+                    done
+                    false = reachable
+                }
+                InstValue::FnReturn => {
+                    state self.discard_stack false = reachable
+                }
+                _ => index action state self.action
+            end
+            1 += index
+        done
+        if reachable then
+            state self.discard_stack
+        fi
+        true
+    }
+
+    fn reject_conflicts self:mut$ScalarAnalysis {
+        for conflict in self.conflicts.iter do
+            conflict copy u64::try_from.unwrap SCALAR_MAX_REGIONS / self.root = left
+            conflict copy u64::try_from.unwrap SCALAR_MAX_REGIONS % self.root = right
+            if left right == then
+                left self.regions.get_mut = candidate
+                true = candidate.rejected
+            fi
+        done
+    }
+
+    fn accepted self:$ScalarAnalysis region:u64 -> bool {
+        region self.root self
+            .regions
+            .get
+            .rejected !
+    }
+
+    fn cell_slot self:$ScalarAnalysis region:u64 offset:u64 -> u64 {
+        region self.root self
+            .regions
+            .get
+            .slot offset 8 / +
+    }
+
+    fn is_virtual self:$ScalarAnalysis value:ScalarValue -> bool {
+        if value ScalarValue::Address(region _) is then
+            region self.accepted
+        else
+            false
+        fi
+    }
+
+    fn emit_stack_rewrite
+        self:$ScalarAnalysis
+        operation:ScalarStackOperation
+        top:ScalarValue
+        below:ScalarValue
+        third:ScalarValue
+        output:mut$std::List[InstValue]
+    -> bool {
+        top self.is_virtual = top_virtual
+        below self.is_virtual = below_virtual
+        third self.is_virtual = third_virtual
+        operation match
+            ScalarStackOperation::Drop => top_virtual return
+            ScalarStackOperation::Dup => top_virtual return
+            ScalarStackOperation::Swap => top_virtual below_virtual || return
+            ScalarStackOperation::Over => {
+                if below_virtual then
+                    true return
+                fi
+                if top_virtual then
+                    InstValue::Dup output.push true return
+                fi
+                false return
+            }
+            ScalarStackOperation::Rot => {
+                if top_virtual below_virtual || third_virtual || ! then
+                    false return
+                fi
+                if third_virtual ! top_virtual below_virtual && ! && then
+                    InstValue::Swap output.push
+                fi
+            }
+            ScalarStackOperation::Add => {
+                if below_virtual ! then false return fi
+                InstValue::Drop output.push
+            }
+        end
+        true
+    }
+
+    fn emit_rewrite
+        self:$ScalarAnalysis
+        rewrite:ScalarRewrite
+        output:mut$std::List[InstValue]
+    -> bool {
+        rewrite match
+            ScalarRewrite::Value(region) => {
+                if region self.accepted ! then false return fi
+            }
+            ScalarRewrite::Assign(region) => {
+                if region self.accepted ! then false return fi
+            }
+            ScalarRewrite::Read(region offset value) => {
+                if region self.accepted ! then
+                    false return
+                fi
+                if value self.is_virtual ! then
+                    offset region self.cell_slot InstValue::LocalGet output.push
+                fi
+            }
+            ScalarRewrite::Write(region offset value) => {
+                if region self.accepted ! then
+                    false return
+                fi
+                if value self.is_virtual ! then
+                    offset region self.cell_slot InstValue::LocalSet output.push
+                fi
+            }
+            ScalarRewrite::Stack(operation top below third) => {
+                output third below top operation self.emit_stack_rewrite return
+            }
+            ScalarRewrite::Free(region) => {
+                if region self.accepted ! then false return fi
+            }
+            ScalarRewrite::NullTest(region value) => {
+                if region self.accepted ! then
+                    false return
+                fi
+                InstValue::Drop output.push
+                value InstValue::Push output.push
+            }
+            ScalarRewrite::Closure(region count) => {
+                if region self.accepted ! then
+                    false return
+                fi
+                region label_key self
+                    .closure_values
+                    .get
+                    .unwrap = values
+                0 = index: u64
+                for value in values.iter do
+                    if index 0 == then
+                        8
+                    elif index 1 == then
+                        0
+                    else
+                        count 2 * 1 + index - 8 * 16 +
+                    fi = offset
+                    if value copy self.is_virtual ! then
+                        offset region self.cell_slot InstValue::LocalSet output.push
+                    fi
+                    1 += index
+                done
+            }
+            ScalarRewrite::Environment(region) => {
+                if region self.accepted ! then false return fi
+            }
+            ScalarRewrite::CaptureFlag(region offset value) => {
+                if region self.accepted ! then
+                    false return
+                fi
+                value InstValue::Push output.push
+                offset region self.cell_slot InstValue::LocalSet output.push
+            }
+            ScalarRewrite::Transfer(from source_offset to destination_offset size _) => {
+                if from self.accepted to self.accepted && ! then
+                    false return
+                fi
+                0 = offset: u64
+                while offset size < do
+                    source_offset offset + from self.cell_slot InstValue::LocalGet output.push
+                    8 += offset
+                done
+                while 0 offset < do
+                    8 -= offset
+                    destination_offset offset + to self.cell_slot InstValue::LocalSet output.push
+                done
+            }
+        end
+        true
+    }
+}
+
+fn replace_scalar_aggregates actions:std::List[InstValue] -> std::List[InstValue] {
+    if actions.length SCALAR_MAX_ACTIONS > then
+        actions return
+    fi
+    ScalarAnalysis::new = analysis
+    if actions analysis.collect ! then
+        actions return
+    fi
+    0 = passes: u64
+    while passes SCALAR_MAX_PASSES < do
+        false = analysis.changed
+        if actions analysis.scan ! then
+            actions return
+        fi
+        if analysis.changed ! then
+            break
+        fi
+        1 += passes
+    done
+    if passes SCALAR_MAX_PASSES == then
+        actions return
+    fi
+    analysis.reject_conflicts
+    analysis.reject_dependencies
+    0 = original_count: u64
+    if actions.is_empty ! then
+        if 0 actions.get InstValue::LocalsInit(count) is then
+            count = original_count
+        fi
+    fi
+    original_count = count
+    0 = region: u64
+    for candidate in analysis.regions.iter_mut do
+        if candidate.parent region == candidate.rejected ! && then
+            count = candidate.slot
+            candidate.size 7 + 8 / += count
+        fi
+        1 += region
+    done
+    if count original_count == then
+        actions return
+    fi
+    std::List[InstValue]::new = output
+    if 0 original_count == then
+        count InstValue::LocalsInit output.push
+    fi
+    actions.reverse
+    0 = index: u64
+    false = returned
+    while actions.is_empty ! do
+        actions.pop = action
+        false = rewritten
+        if index label_key analysis.rewrites.get_copy std::Option::Some(rewrite) is then
+            output rewrite analysis.emit_rewrite = rewritten
+        fi
+        if rewritten ! then
+            action = action_ref: $InstValue
+            action_ref match
+                InstValue::LocalsInit(_) => count InstValue::LocalsInit output.push
+                InstValue::LocalsUninit(_) => count InstValue::LocalsUninit output.push
+                InstValue::AggregateLocal => {
+                }
+                InstValue::FnReturn => {
+                    if 0 original_count == then
+                        count InstValue::LocalsUninit output.push
+                    fi
+                    InstValue::FnReturn output.push true = returned
+                }
+                _ => {
+                    action output.push false = returned
+                }
+            end
+        fi
+        1 += index
+    done
+    if original_count 0 == returned ! && then
+        count InstValue::LocalsUninit output.push
+    fi
+    count original_count output compact_scalar_frame
+}
+
+# Removing a virtual address can expose a discarded offset, temporary binding,
+# or copy component. Keep all original slots when any materialized frame address
+# survives, because a typed borrow can access more than the addressed word.
+fn discard_unused_scalar_slots
+    actions:std::List[InstValue]
+    protected_count:u64
+-> std::List[InstValue] {
+    std::Set[i64]::new = reads
+    for action in actions.iter do
+        if action InstValue::LocalGet(slot) is then
+            slot label_key reads.add
+        fi
+    done
+    std::List[InstValue]::new = output
+    actions.reverse
+    while actions.is_empty ! do
+        actions.pop = action
+        if action InstValue::LocalSet(slot) is then
+            if slot protected_count >= slot label_key reads.has ! && then
+                InstValue::Drop = action
+            fi
+        fi
+        if action InstValue::Drop is then
+            output.length = previous
+            while previous 0 > do
+                if previous 1 - output.get InstValue::Source is then
+                    1 -= previous
+                else
+                    break
+                fi
+            done
+            if previous 0 > then
+                previous 1 - output.get match
+                    InstValue::Push => true
+                    InstValue::PushChar => true
+                    InstValue::LocalGet => true
+                    InstValue::FnPush => true
+                    InstValue::DropFn => true
+                    InstValue::Dup => true
+                    InstValue::Over => true
+                    _ => false
+                end = removable
+                if removable then
+                    previous 1 - output.remove drop continue
+                fi
+            fi
+        fi
+        action output.push
+    done
+    output
+}
+
+fn compact_scalar_frame
+    actions:std::List[InstValue]
+    original_count:u64
+    count:u64
+-> std::List[InstValue] {
+    0 = protected_count: u64
+    for action in actions.iter do
+        if action InstValue::LocalAddress is then
+            original_count = protected_count break
+        fi
+    done
+    0 = pass: u64
+    while pass 4 < do
+        protected_count actions discard_unused_scalar_slots = actions
+        1 += pass
+    done
+    std::Set[i64]::new = used
+    for action in actions.iter do
+        action match
+            InstValue::LocalGet(slot) => slot label_key used.add
+            InstValue::LocalSet(slot) => slot label_key used.add
+            _ => {
+            }
+        end
+    done
+    std::Map[i64 u64]::new = slots
+    0 = frame_index: u64
+    0 = next_slot: u64
+    while frame_index count < do
+        if frame_index protected_count < frame_index label_key used.has || then
+            next_slot frame_index label_key slots.set
+            1 += next_slot
+        fi
+        1 += frame_index
+    done
+    std::List[InstValue]::new = output
+    actions.reverse
+    while actions.is_empty ! do
+        actions.pop = action
+        action = borrowed: $InstValue
+        borrowed match
+            InstValue::LocalGet(slot) => slot label_key slots.get_copy.unwrap InstValue::LocalGet output.push
+            InstValue::LocalSet(slot) => slot label_key slots.get_copy.unwrap InstValue::LocalSet output.push
+            InstValue::LocalsInit(_) => next_slot InstValue::LocalsInit output.push
+            InstValue::LocalsUninit(_) => next_slot InstValue::LocalsUninit output.push
+            _ => action output.push
+        end
+    done
+    output
 }

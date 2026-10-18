@@ -1,0 +1,232 @@
+import "std" as std
+import "../../compiler/backend.casa" as backend
+import "../../compiler/error.casa" as error
+import "../../compiler/lexer.casa" as lexer
+import "../../lib/test.casa" as test
+import "helpers.casa" as helpers
+
+fn assert_scalar_storage code:$str {
+    error::Diagnostics::new = diagnostics
+    diagnostics code helpers::typecheck_test_source = checked
+    "scalar candidate passes checking" checked.get_diagnostics.has_errors ! test::assert_true
+    checked.into_checked_program.unwrap lexer::SourceStore::new swap backend::compile_checked.unwrap = text
+    text helpers::generated_assembly = generated
+    "temporary has no backing allocation" generated.as_str "call heap_alloc" str::contains ! test::assert_true
+    "temporary has no backing release" generated.as_str "call heap_free" str::contains ! test::assert_true
+}
+"scalar aggregate representation" test::test_start
+"struct Pair { value:i64 } 42 Pair match Pair { value:value } => value print end" assert_scalar_storage
+"enum Ref { Some($i64) None } fn read value:$i64 -> i64 { value Ref::Some match Ref::Some(inner) => inner copy Ref::None => 0 end } 42 = value value read print" assert_scalar_storage
+"enum Choice { Some(i64) None } fn read flag:bool -> i64 { if flag then 42 Choice::Some else Choice::None fi match Choice::Some(value) => value Choice::None => 0 end } true read print false read print" assert_scalar_storage
+
+# Copy aggregates already use frame storage. Check that scalar replacement also
+# removes the body addresses and the snapshot copies between those local bodies.
+fn has_frame_address text:$str -> bool {
+    text "\n" str::split.unwrap = lines
+    for line in lines.iter do
+        if line.as_str "leaq " str::contains line.as_str "(%rsp)" str::contains && then
+            true return
+        fi
+    done
+    false
+}
+"native frame address detection" "    leaq 16(%rsp), %r8" has_frame_address test::assert_true
+"value-stack adjustment is not an aggregate body" "    leaq -8(%rbx), %rbx" has_frame_address ! test::assert_true
+
+fn assert_scalar_body code:$str {
+    error::Diagnostics::new = diagnostics
+    diagnostics code helpers::typecheck_test_source = checked
+    "aggregate candidate passes checking" checked.get_diagnostics.has_errors ! test::assert_true
+    checked.into_checked_program.unwrap lexer::SourceStore::new swap backend::compile_checked.unwrap = text
+    text helpers::generated_assembly = generated
+    generated.as_str "fn_scalar_case:" str::find u64::try_from.unwrap = start
+    generated.as_str ".size fn_scalar_case," str::find u64::try_from.unwrap = finish
+    generated.as_str start finish start - str::substring = body
+    "aggregate temporary has no body address" body.as_str has_frame_address ! test::assert_true
+    "aggregate temporary has no snapshot payload copy" body.as_str "%xmm" str::contains ! test::assert_true
+    "aggregate temporary has no bulk payload copy" body.as_str "rep movs" str::contains ! test::assert_true
+    "aggregate temporary has no backing allocation" body.as_str "call heap_alloc" str::contains ! test::assert_true
+    "aggregate temporary has no backing release" body.as_str "call heap_free" str::contains ! test::assert_true
+}
+"already-local Copy aggregate representation" test::test_start
+"import \"lib/std.casa\" as std struct Pair derives std::Copy { left:i64 right:i64 } fn scalar_case value:i64 -> i64 { value 9 Pair = first first = second second match Pair { left:left right:right } => left right + end } 4 scalar_case print" assert_scalar_body
+"import \"lib/std.casa\" as std fn scalar_case value:i64 -> i64 { value std::Option::Some = first first = second second match std::Option::Some(inner) => inner 1 + std::Option::None => 0 end } 4 scalar_case print" assert_scalar_body
+
+fn assert_materialized_body code:$str {
+    error::Diagnostics::new = diagnostics
+    diagnostics code helpers::typecheck_test_source = checked
+    "borrowed aggregate passes checking" checked.get_diagnostics.has_errors ! test::assert_true
+    checked.into_checked_program.unwrap lexer::SourceStore::new swap backend::compile_checked.unwrap = text
+    text.as_str "fn_scalar_case:" str::split.unwrap = sections
+    1 sections.get.as_str ".size fn_scalar_case," str::split.unwrap = parts
+    "call argument keeps its native frame address" 0 parts.get.as_str has_frame_address test::assert_true
+}
+"import \"lib/std.casa\" as std struct Pair derives std::Copy { pub left:i64 pub right:i64 } fn inspect pair:$Pair -> i64 { pair.left pair.right - } fn scalar_case value:i64 -> i64 { 9 value Pair = pair pair inspect } 4 scalar_case print" assert_materialized_body
+
+struct LocalCopy derives std::Copy {
+    left:  i64
+    right: i64
+}
+
+fn copy_sum value:i64 -> i64 {
+    value 9 LocalCopy = first
+    first = second
+    second match
+        LocalCopy { left: left right: right } => left right +
+    end
+}
+
+fn copy_option value:i64 -> i64 {
+    value std::Option::Some = first
+    first = second
+    second match
+        std::Option::Some(inner) => inner 1 +
+        std::Option::None => 0
+    end
+}
+"copied struct fields survive body elimination" 13 4 copy_sum test::assert_eq
+"copied Option payload survives immediate match" 5 4 copy_option test::assert_eq
+
+fn scalar_counter -> i64 {
+    10 = index
+    { 1 += index index } = callback
+    callback exec callback exec +
+}
+"both calls update the same capture" 23 scalar_counter test::assert_eq
+"exhaustive match releases each loop temporary" test::test_start
+"enum Choice { Some(i64) None } fn scalar_case -> i64 { 0 = total 0 = index while index 4 < do if index 2 < then index Choice::Some else Choice::None fi match Choice::Some(value) => value += total Choice::None => 10 += total end 1 += index done total } scalar_case print" assert_scalar_body
+
+enum LoopChoice {
+    Some(i64)
+    None
+}
+
+fn loop_choices -> i64 {
+    0 = total
+    0 = index
+    while index 4 < do
+        if index 2 < then index LoopChoice::Some else LoopChoice::None fi match
+            LoopChoice::Some(value) => value += total
+            LoopChoice::None => 10 += total
+        end
+        1 += index
+    done
+    total
+}
+"Some and None alternatives retain their loop effects" 21 loop_choices test::assert_eq
+
+struct GuardBox {
+    pub flag: bool
+}
+
+struct GuardOuter {
+    pub box: GuardBox
+}
+
+fn flip_guard box:mut$GuardBox -> bool { false = box.flag false }
+
+fn guarded_match outer:mut$GuardOuter {
+    outer match
+        GuardOuter { box: GuardBox { flag: false } } => "earlier pattern does not match initial subject" false test::assert_true
+        GuardOuter { box: box } if box flip_guard => "false guard does not enter its arm" false test::assert_true
+        GuardOuter { box: GuardBox { flag: true } } => "final pattern rechecks the mutated subject" false test::assert_true
+    end
+}
+"failed guards retain final pattern checks" test::test_start
+true GuardBox GuardOuter = guarded_subject
+guarded_subject guarded_match
+"guard mutation is preserved" guarded_subject.box.flag ! test::assert_true
+
+struct Payload {
+    pub log: ptr
+    pub id:  u64
+}
+
+impl Payload {
+    fn drop self:mut$Payload {
+        unsafe { self.log load64 10 * self.id + self.log store64 }
+    }
+}
+
+enum Transfer {
+    Value(Payload)
+    Empty
+}
+
+fn transfer log:ptr -> u64 {
+    1 log Payload Transfer::Value match
+        Transfer::Value(value) => value.id
+        Transfer::Empty => 0
+    end
+}
+
+struct Nested {
+    pub value: Payload
+}
+
+fn inspect value:$Nested -> u64 { value.value.id }
+
+fn select flag:bool -> u64 {
+    10 std::Option::Some = first
+    20 std::Option::Some = second
+    if flag then first else second fi match
+        std::Option::Some(value) => value
+        std::Option::None => 0
+    end
+}
+"scalar cleanup and escape fallback" test::test_start
+unsafe { 8 alloc } = log
+unsafe { 0 log store64 }
+"owned payload is transferred" 1 log transfer test::assert_eq
+"transferred payload drops exactly once" 1 unsafe { log load64 } test::assert_eq
+2 log Payload Nested = nested
+"escaping container preserves owned field address" 2 nested inspect test::assert_eq
+nested drop
+"nested destruction keeps its original order" 12 unsafe { log load64 } test::assert_eq
+"simultaneously live alternatives stay independent" 10 true select test::assert_eq
+"other alternative stays independent" 20 false select test::assert_eq
+unsafe { log free }
+
+struct CopyPair derives std::Copy {
+    pub left:  i64
+    pub right: i64
+}
+
+fn inspect_copy value:$CopyPair -> i64 { value.left value.right + }
+
+"mixed scalar and materialized copies" test::test_start
+2 1 CopyPair = original
+original = copied
+9 = copied.left
+"escaped original copy keeps its body" 3 original inspect_copy test::assert_eq
+"materialized copy keeps independent mutation" 11 copied inspect_copy test::assert_eq
+
+struct ScalarPair {
+    pub value: i64
+}
+
+fn rotate_bottom -> i64 {
+    42 ScalarPair 7 9 rot match
+        ScalarPair { value: value } => value
+    end
+    - -
+}
+
+fn rotate_middle -> i64 {
+    7 42 ScalarPair 9 rot - swap match
+        ScalarPair { value: value } => value
+    end
+    -
+}
+
+fn rotate_top -> i64 {
+    7 9 42 ScalarPair rot swap match
+        ScalarPair { value: value } => value
+    end
+    - -
+}
+"virtual aggregate stack order" test::test_start
+"bottom virtual operand rotates through two scalars" 40 rotate_bottom test::assert_eq
+"middle virtual operand preserves subtraction order" -40 rotate_middle test::assert_eq
+"top virtual operand preserves subtraction order" 44 rotate_top test::assert_eq
+test::test_summary
