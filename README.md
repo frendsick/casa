@@ -108,3 +108,6 @@ Casa is self-hosted. Build the compiler with an existing `casac`:
 ```sh
 ./casac casa.casa -o casac -L lib
 ```
+
+Run the test suite with `tests/test_all.sh`. The CLI tests require GDB and
+Python 3.
