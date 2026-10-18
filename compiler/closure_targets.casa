@@ -1,0 +1,1237 @@
+# Bounded target propagation over checked bodies. Shapes describe callable targets,
+# never runtime values or capture storage. Every call still receives its original values.
+import "std" as std
+import "common" as common
+import "semantic_body" as semantic_body
+import "pattern" as pattern
+import "typechecker" as typechecker
+
+const MAX_CONTEXTS_PER_FUNCTION: u64 8
+const MAX_SPECIALIZATIONS: u64 1024
+const MAX_ANALYSIS_DEPTH: u64 16
+const MAX_SHAPES: u64 8192
+const MAX_LOOP_PASSES: u64 4
+
+# Zero is the unknown shape. Positive identities index this request-owned table.
+struct Shape {
+    target:   std::String
+    children: std::List[u64]
+}
+
+pub struct Context {
+    pub name:       std::String
+    pub symbol:     std::String
+    pub calls:      std::Map[i64 u64]
+    pub executions: std::Map[i64 u64]
+    outputs:        std::List[u64]
+    invalidates:    bool
+    complete:       bool
+}
+
+pub struct Plan {
+    pub contexts: std::List[Context]
+    pub defaults: std::Map[std::String u64]
+    pub root:     u64
+}
+
+struct Analysis {
+    checked:         $typechecker::CheckedProgram
+    plan:            Plan
+    shapes:          std::List[Shape]
+    shape_keys:      std::Map[std::String u64]
+    contexts:        std::Map[std::String u64]
+    counts:          std::Map[std::String u64]
+    specializations: u64
+    depth:           u64
+}
+
+struct Flow derives std::Clone {
+    stack:             std::List[u64]
+    variables:         std::Map[std::String u64]
+    stopped:           bool
+    invalidates:       bool
+    # Binding coverage is independent of whether callable target shapes are known.
+    bindings_complete: bool
+    # Checked unconditional transfers disable cleanup. Conditional cleanup events
+    # cannot prove inactivity because their runtime generation guard may fail.
+    inactive:          std::Set[std::String]
+}
+
+struct LoopExit {
+    flow:      Flow
+    continues: bool
+}
+
+struct Frame {
+    calls:        std::Map[i64 u64]
+    executions:   std::Map[i64 u64]
+    returns:      std::Option[std::List[u64]]
+    return_count: u64
+    captures:     std::Set[std::String]
+    invalidates:  bool
+    exits:        std::List[LoopExit]
+}
+
+impl Flow {
+    fn new -> Flow {
+        std::Set[std::String]::new true false false std::Map[std::String u64]::new std::List[u64]::new Flow
+    }
+    fn replace self:mut$Flow value:Flow {
+        value match
+            Flow { stack: stack variables: variables stopped: stopped invalidates: invalidates bindings_complete: bindings_complete inactive: inactive } => {
+                stack = self.stack variables = self.variables stopped = self.stopped invalidates = self.invalidates bindings_complete = self.bindings_complete inactive = self.inactive
+            }
+        end
+    }
+    fn pop self:mut$Flow -> u64 {
+        if self.stack.is_empty then
+            0
+        else
+            self.stack.pop
+        fi
+    }
+    # Keep binding identities for later replacement cleanup, even without targets.
+    fn forget self:mut$Flow {
+        0 = index: u64
+        while index self.stack.length < do
+            0 index self.stack.set
+            1 += index
+        done
+        self.variables.keys = names
+        for name in names.iter do
+            0 name.clone self.variables.set
+        done
+    }
+    fn is_equal self:$Flow other:$Flow -> bool {
+        if
+            self.stack.length other.stack.length != self.variables.length other.variables.length != || self.invalidates other.invalidates != || self.bindings_complete other.bindings_complete != || self.inactive.length other.inactive.length != ||
+        then
+            false return
+        fi
+        0 = index: u64
+        while index self.stack.length < do
+            if index self.stack.get copy index other.stack.get copy != then
+                false return
+            fi
+            1 += index
+        done
+        for name in self.inactive.iter do
+            if name other.inactive.has ! then
+                false return
+            fi
+        done
+        for entry in self.variables.iter do
+            if
+                0 entry.first other
+                    .variables
+                    .get_copy
+                    .unwrap_or entry.second !=
+            then
+                false return
+            fi
+        done
+        true
+    }
+    fn merge self:mut$Flow other:$Flow {
+        if other.stopped then
+            return
+        fi
+        if self.stopped then
+            other.clone self.replace return
+        fi
+        self.invalidates other.invalidates || = self.invalidates
+        # In a fully modeled path, no binding means no initialized owner.
+        # Pattern bindings are entered even when their target is unknown.
+        std::Set[std::String]::new = inactive
+        for name in self.inactive.iter do
+            if name other.inactive.has name other.variables.has ! other.bindings_complete && || then
+                name.clone inactive.add
+            fi
+        done
+        for name in other.inactive.iter do
+            if name self.variables.has ! self.bindings_complete && then
+                name.clone inactive.add
+            fi
+        done
+        inactive = self.inactive
+        self.bindings_complete other.bindings_complete && = self.bindings_complete
+        if self.stack.length other.stack.length != then
+            std::List[u64]::new = self.stack
+        else
+            0 = index: u64
+            while index self.stack.length < do
+                if index self.stack.get copy index other.stack.get copy != then
+                    0 index self.stack.set
+                fi
+                1 += index
+            done
+        fi
+        for entry in other.variables.iter do
+            if entry.first self.variables.has ! then
+                0 entry.first.clone self.variables.set
+            fi
+        done
+        self.variables.keys = names
+        for name in names.iter do
+            0 name self
+                .variables
+                .get_copy
+                .unwrap_or = value
+            if
+                0 name other
+                    .variables
+                    .get_copy
+                    .unwrap_or value !=
+            then
+                0 name.clone self.variables.set
+            fi
+        done
+    }
+}
+
+impl Frame {
+    fn new return_count:u64 -> Frame {
+        std::List[LoopExit]::new false std::Set[std::String]::new return_count std::Option[std::List[u64]]::None
+        std::Map[i64 u64]::new std::Map[i64 u64]::new Frame
+    }
+    fn record_return self:mut$Frame flow:$Flow {
+        self.invalidates flow.invalidates || = self.invalidates
+        std::List[u64]::new = result
+        self.return_count = remaining
+        while 0 remaining != do
+            if remaining flow.stack.length <= then
+                flow.stack.length remaining - flow.stack.get copy
+            else
+                0
+            fi result.push
+            1 -= remaining
+        done
+        if self.returns std::Option::Some(previous) is then
+            0 = index: u64
+            while index result.length < do
+                if index result.get copy index previous.get copy != then
+                    0 index result.set
+                fi
+                1 += index
+            done
+        fi
+        result std::Option::Some = self.returns
+    }
+    fn record_unknown_return self:mut$Frame {
+        Flow::new = exit_flow
+        exit_flow self.record_return
+        true = self.invalidates
+    }
+    fn invalidate self:mut$Frame flow:mut$Flow {
+        true = flow.invalidates
+        flow.forget
+    }
+}
+
+fn can_hold_targets typ:$common::Type -> bool {
+    if typ.borrow_target std::Option::Some(target) is then
+        target can_hold_targets return
+    fi
+    typ match
+        common::Type::Function(_) => true
+        common::Type::Generic(_) => true
+        _ => false
+    end
+}
+
+fn is_exit_syscall node:$semantic_body::Node literal:$std::Option[i64] -> bool {
+    node match
+        semantic_body::Node::Leaf(leaf) => leaf
+        _ => false return
+    end = leaf
+    leaf.action match
+        semantic_body::Action::Intrinsic(kind) => kind
+        _ => false return
+    end = kind
+    if kind semantic_body::IntrinsicKind::Syscall1 != then
+        false return
+    fi
+    literal match
+        std::Option::Some(number) => number
+        _ => false return
+    end = number
+    # Linux exit and exit_group never reach the loop back-edge.
+    number 60 == number 231 == ||
+}
+
+fn record_target targets:mut$std::Map[i64 u64] identity:i64 target:u64 {
+    if identity targets.get_copy std::Option::Some(previous) is then
+        if previous target != then
+            0 identity targets.set
+        fi
+    else
+        target identity targets.set
+    fi
+}
+
+fn append_ids text:mut$std::String ids:$std::List[u64] {
+    for identity in ids.iter do
+        f"/{identity}" = part
+        part.as_str text.append
+    done
+}
+
+impl Analysis {
+    fn intern_shape self:mut$Analysis target:std::String children:std::List[u64] -> u64 {
+        false = known
+        for child in children.iter do
+            if child 0 != then
+                true = known
+            fi
+        done
+        if target.is_empty known ! && then
+            0 return
+        fi
+        f"{target.length}:{target}" = key
+        children key append_ids
+        if key self.shape_keys.get_copy std::Option::Some(identity) is then
+            identity return
+        fi
+        if self.shapes.length MAX_SHAPES >= then
+            0 return
+        fi
+        self.shapes.length 1 + = identity
+        children target Shape self.shapes.push
+        identity key self.shape_keys.set
+        identity
+    }
+    fn get_child self:$Analysis shape:u64 index:u64 -> u64 {
+        if shape 0 == then
+            0 return
+        fi
+        shape 1 - self.shapes.get = value
+        if index value.children.length < then
+            index value.children.get copy
+        else
+            0
+        fi
+    }
+    fn push_unknown_outputs self:$Analysis name:$str flow:mut$Flow {
+        name self
+            .checked
+            .get_store
+            .get_function
+            .unwrap = function
+        for
+            typ in function
+                .stack_effect
+                .return_types
+                .iter
+        do
+            0 flow.stack.push
+        done
+    }
+    fn consume_arguments self:$Analysis name:$str flow:mut$Flow -> std::List[u64] {
+        std::List[u64]::new = arguments
+        name self
+            .checked
+            .get_store
+            .get_function
+            .unwrap = function
+        for
+            parameter in function
+                .stack_effect
+                .parameters
+                .iter
+        do
+            flow.pop arguments.push
+        done
+        arguments
+    }
+    fn apply_context self:$Analysis context:u64 flow:mut$Flow frame:mut$Frame {
+        context 1 - self
+            .plan
+            .contexts
+            .get = result
+        if result.invalidates result.complete ! || then
+            flow frame.invalidate
+        fi
+        for shape in result.outputs.iter do
+            shape copy flow.stack.push
+        done
+    }
+    fn analyze_call
+        self:mut$Analysis
+        call:$semantic_body::Callable
+        identity:i64
+        flow:mut$Flow
+        frame:mut$Frame
+    {
+        flow call.name.as_str self.consume_arguments = arguments
+        std::List[u64]::new arguments call.name.as_str self.analyze_function = context
+        context identity frame.calls record_target
+        if context 0 == then
+            flow frame.invalidate
+            flow call.name.as_str self.push_unknown_outputs
+        else
+            frame flow context self.apply_context
+        fi
+    }
+    fn analyze_closure
+        self:mut$Analysis
+        call:$semantic_body::Callable
+        facts:$semantic_body::OperationFacts
+        flow:mut$Flow
+    {
+        call.name.as_str self
+            .checked
+            .get_store
+            .get_function
+            .unwrap = function
+        std::List[u64]::new = children
+        for capture in function.captures.iter do
+            capture.name.as_str facts.resolve_storage_name = storage
+            0 storage flow
+                .variables
+                .get_copy
+                .unwrap_or children.push
+            if capture.name.as_str function.owned_captures common::string_list_contains then
+                if capture.typ self.checked.is_copy_aggregate ! then
+                    storage.clone flow.inactive.add
+                fi
+            fi
+        done
+        children call.name.clone self.intern_shape flow.stack.push
+    }
+    fn analyze_execute
+        self:mut$Analysis
+        typ:$common::Type
+        identity:i64
+        flow:mut$Flow
+        frame:mut$Frame
+    {
+        flow.pop = closure
+        typ match
+            common::Type::Function(effect) => effect
+            _ => flow frame.invalidate return
+        end = effect
+        std::List[u64]::new = arguments
+        for parameter in effect.parameters.iter do
+            flow.pop arguments.push
+        done
+        0 = context: u64
+        if closure 0 != then
+            closure 1 - self.shapes.get = shape
+            shape.target.clone = name
+            shape.children.clone = captures
+            if name.is_empty ! then
+                captures arguments name.as_str self.analyze_function = context
+            fi
+        fi
+        context identity frame.executions record_target
+        if context 0 == then
+            flow frame.invalidate
+            for result_type in effect.return_types.iter do
+                0 flow.stack.push
+            done
+        else
+            frame flow context self.apply_context
+        fi
+    }
+    fn analyze_binding
+        self:mut$Analysis
+        kind:$semantic_body::BindingKind
+        binding:$common::BindingReference
+        typ:$common::Type
+        flow:mut$Flow
+        frame:mut$Frame
+    {
+        if kind semantic_body::BindingKind::PushCapture == then
+            0 binding.name flow
+                .variables
+                .get_copy
+                .unwrap_or flow.stack.push
+        elif kind semantic_body::BindingKind::PushVar == then
+            0 binding.storage_name flow
+                .variables
+                .get_copy
+                .unwrap_or flow.stack.push
+        elif kind semantic_body::BindingKind::AssignVar == then
+            flow.pop = shape
+            if binding.name frame.captures.has then
+                0 binding.name flow
+                    .variables
+                    .get_copy
+                    .unwrap_or = previous
+                if previous shape != typ can_hold_targets || then
+                    flow frame.invalidate
+                fi
+                shape binding.name.clone flow.variables.set
+            else
+                shape binding.storage_name.clone flow.variables.set
+            fi
+        elif
+            kind semantic_body::BindingKind::AssignInc == kind semantic_body::BindingKind::AssignDec == ||
+        then
+            flow.pop drop
+        elif kind semantic_body::BindingKind::Question == then
+            # The propagation exit has separate cleanup and result transfer.
+            # Keep its unknown effects until both outcomes have explicit facts.
+            frame.record_unknown_return
+            flow frame.invalidate
+            0 binding.storage_name.clone flow.variables.set
+            binding.storage_name flow.inactive.remove
+            std::List[u64]::new = flow.stack
+        fi
+    }
+    fn analyze_primitive self:mut$Analysis kind:$semantic_body::PrimitiveKind flow:mut$Flow {
+        kind match
+            semantic_body::PrimitiveKind::Copy => {
+            }
+            semantic_body::PrimitiveKind::Dup => {
+                flow.pop = value value flow.stack.push value flow.stack.push
+            }
+            semantic_body::PrimitiveKind::Over => {
+                flow.pop = top flow.pop = under
+                under flow.stack.push top flow.stack.push under flow.stack.push
+            }
+            semantic_body::PrimitiveKind::Drop => flow.pop drop
+            semantic_body::PrimitiveKind::PrintInt => flow.pop drop
+            semantic_body::PrimitiveKind::Typeof => flow.pop drop
+            semantic_body::PrimitiveKind::BitNot => {
+                flow.pop drop 0 flow.stack.push
+            }
+            _ => {
+                flow.pop drop flow.pop drop 0 flow.stack.push
+            }
+        end
+    }
+    fn analyze_intrinsic
+        self:mut$Analysis
+        kind:$semantic_body::IntrinsicKind
+        flow:mut$Flow
+        frame:mut$Frame
+    {
+        kind match
+            semantic_body::IntrinsicKind::PtrFromRef => {
+            }
+            semantic_body::IntrinsicKind::OwnerCleanup => {
+            }
+            semantic_body::IntrinsicKind::FstringToStr => {
+                flow.pop drop 0 flow.stack.push
+            }
+            semantic_body::IntrinsicKind::Swap => {
+                flow.pop = first flow.pop = second first flow.stack.push second flow.stack.push
+            }
+            semantic_body::IntrinsicKind::Rot => {
+                flow.pop = first flow.pop = second flow.pop = third
+                second flow.stack.push first flow.stack.push third flow.stack.push
+            }
+            semantic_body::IntrinsicKind::Panic => {
+                true = flow.stopped
+            }
+            semantic_body::IntrinsicKind::FnReturn => {
+                flow frame.record_return true = flow.stopped
+            }
+            semantic_body::IntrinsicKind::WhileBreak => {
+                false flow.clone LoopExit frame.exits.push true = flow.stopped
+            }
+            semantic_body::IntrinsicKind::WhileContinue => {
+                true flow.clone LoopExit frame.exits.push true = flow.stopped
+            }
+            semantic_body::IntrinsicKind::Store8 => {
+                flow frame.invalidate std::List[u64]::new = flow.stack
+            }
+            semantic_body::IntrinsicKind::Store16 => {
+                flow frame.invalidate std::List[u64]::new = flow.stack
+            }
+            semantic_body::IntrinsicKind::Store32 => {
+                flow frame.invalidate std::List[u64]::new = flow.stack
+            }
+            semantic_body::IntrinsicKind::Store64 => {
+                flow frame.invalidate std::List[u64]::new = flow.stack
+            }
+            semantic_body::IntrinsicKind::Load8 => {
+                flow.pop drop 0 flow.stack.push
+            }
+            semantic_body::IntrinsicKind::Load16 => {
+                flow.pop drop 0 flow.stack.push
+            }
+            semantic_body::IntrinsicKind::Load32 => {
+                flow.pop drop 0 flow.stack.push
+            }
+            semantic_body::IntrinsicKind::Load64 => {
+                flow.pop drop 0 flow.stack.push
+            }
+            semantic_body::IntrinsicKind::PtrNull => 0 flow.stack.push
+            semantic_body::IntrinsicKind::Argc => 0 flow.stack.push
+            semantic_body::IntrinsicKind::Argv => 0 flow.stack.push
+            semantic_body::IntrinsicKind::Envp => 0 flow.stack.push
+            semantic_body::IntrinsicKind::Syscall0 => {
+                flow frame.invalidate std::List[u64]::new = flow.stack
+            }
+            semantic_body::IntrinsicKind::Syscall1 => {
+                flow frame.invalidate std::List[u64]::new = flow.stack
+            }
+            semantic_body::IntrinsicKind::Syscall2 => {
+                flow frame.invalidate std::List[u64]::new = flow.stack
+            }
+            semantic_body::IntrinsicKind::Syscall3 => {
+                flow frame.invalidate std::List[u64]::new = flow.stack
+            }
+            semantic_body::IntrinsicKind::Syscall4 => {
+                flow frame.invalidate std::List[u64]::new = flow.stack
+            }
+            semantic_body::IntrinsicKind::Syscall5 => {
+                flow frame.invalidate std::List[u64]::new = flow.stack
+            }
+            semantic_body::IntrinsicKind::Syscall6 => {
+                flow frame.invalidate std::List[u64]::new = flow.stack
+            }
+            semantic_body::IntrinsicKind::Not => {
+                flow.pop drop 0 flow.stack.push
+            }
+            semantic_body::IntrinsicKind::And => {
+                flow.pop drop flow.pop drop 0 flow.stack.push
+            }
+            semantic_body::IntrinsicKind::Or => {
+                flow.pop drop flow.pop drop 0 flow.stack.push
+            }
+            _ => std::List[u64]::new = flow.stack
+        end
+    }
+    fn does_destruction_invalidate self:$Analysis typ:$common::Type depth:u64 -> bool {
+        depth 0 typ self.does_shape_destruction_invalidate
+    }
+    fn does_shape_destruction_invalidate
+        self:$Analysis
+        typ:$common::Type
+        shape:u64
+        depth:u64
+    -> bool {
+        if typ.is_borrow then
+            false return
+        fi
+        if depth MAX_ANALYSIS_DEPTH >= then
+            true return
+        fi
+        if
+            typ self
+                .checked
+                .find_drop_function
+                .is_some
+        then
+            true return
+        fi
+        typ self.checked.get_shape match
+            typechecker::CheckedShape::Closure => {
+                if shape 0 == then
+                    true return
+                fi
+                shape 1 - self.shapes.get = value
+                if value.target.is_empty then
+                    true return
+                fi
+                value.target.as_str self
+                    .checked
+                    .get_store
+                    .get_function
+                    .unwrap = function
+                0 = index: u64
+                for capture in function.captures.iter do
+                    if capture.name.as_str function.owned_captures common::string_list_contains then
+                        if depth 1 + index shape self.get_child capture.typ self.does_shape_destruction_invalidate then
+                            true return
+                        fi
+                    fi
+                    1 += index
+                done
+                false
+            }
+            typechecker::CheckedShape::Array => depth 1 + typ.array_element_type.unwrap self.does_destruction_invalidate
+            typechecker::CheckedShape::Struct => {
+                typ.match_base self
+                    .checked
+                    .get_store
+                    .structs
+                    .get
+                    .unwrap = declaration
+                declaration.type_vars typ common::aggregate_type_bindings = substitutions
+                0 = index: u64
+                for member in declaration.members.iter do
+                    substitutions member.typ.substitute_t = field_type
+                    if depth 1 + index shape self.get_child field_type self.does_shape_destruction_invalidate then
+                        true return
+                    fi
+                    1 += index
+                done
+                false
+            }
+            typechecker::CheckedShape::Enum => {
+                typ.match_base self
+                    .checked
+                    .get_store
+                    .enums
+                    .get
+                    .unwrap = declaration
+                declaration.type_vars typ common::aggregate_type_bindings = substitutions
+                for variant in declaration.variant_types.iter do
+                    for payload in variant.second.iter do
+                        substitutions payload.substitute_t = payload_type
+                        if depth 1 + payload_type self.does_destruction_invalidate then
+                            true return
+                        fi
+                    done
+                done
+                false
+            }
+            _ => false
+        end
+    }
+    fn analyze_facts
+        self:$Analysis
+        facts:$semantic_body::OperationFacts
+        flow:mut$Flow
+        frame:mut$Frame
+    {
+        if facts.effects std::Option::Some(effects) is then
+            for cleanup in effects.cleanups.iter do
+                if cleanup.storage_name flow.inactive.has ! then
+                    0 cleanup.storage_name flow
+                        .variables
+                        .get_copy
+                        .unwrap_or = shape
+                    if 0 shape cleanup.typ self.does_shape_destruction_invalidate then
+                        flow frame.invalidate
+                    fi
+                fi
+            done
+        fi
+    }
+    fn analyze_assignments
+        self:$Analysis
+        facts:$semantic_body::OperationFacts
+        flow:mut$Flow
+        frame:mut$Frame
+    {
+        if facts.effects std::Option::Some(effects) is then
+            for event in effects.assignments.iter do
+                if
+                    event.storage_name flow.variables.has flow.bindings_complete ! || event.storage_name flow.inactive.has ! &&
+                then
+                    0 event.storage_name flow
+                        .variables
+                        .get_copy
+                        .unwrap_or = shape
+                    if 0 shape event.typ self.does_shape_destruction_invalidate then
+                        flow frame.invalidate return
+                    fi
+                fi
+            done
+        fi
+    }
+    fn forget_pattern_bindings
+        self:$Analysis
+        value:$common::PatternValue
+        facts:$semantic_body::OperationFacts
+        flow:mut$Flow
+    {
+        for name in value pattern::binding_names.iter do
+            name.as_str facts.resolve_storage_name = storage
+            0 storage.clone flow.variables.set
+            storage flow.inactive.remove
+        done
+    }
+    fn analyze_leaf self:mut$Analysis leaf:$semantic_body::Leaf flow:mut$Flow frame:mut$Frame {
+        frame flow leaf.facts self.analyze_facts
+        leaf.action match
+            semantic_body::Action::Call(call) => frame flow leaf.facts.identity call self.analyze_call
+            semantic_body::Action::Closure(call) => flow leaf.facts call self.analyze_closure
+            semantic_body::Action::Execute(typ owned) => {
+                frame flow leaf.facts.identity typ self.analyze_execute
+                if owned then
+                    flow frame.invalidate
+                fi
+            }
+            semantic_body::Action::Binding(kind binding typ) => {
+                if kind semantic_body::BindingKind::AssignVar == then
+                    frame flow leaf.facts self.analyze_assignments
+                fi
+                frame flow typ binding kind self.analyze_binding
+                if kind semantic_body::BindingKind::AssignVar == then
+                    binding.storage_name flow.inactive.remove
+                elif leaf.facts.moves_owner then
+                    binding.storage_name.clone flow.inactive.add
+                fi
+            }
+            semantic_body::Action::Primitive(kind typ) => {
+                if kind semantic_body::PrimitiveKind::Drop == then
+                    flow.pop = shape
+                    shape flow.stack.push
+                    if 0 shape typ self.does_shape_destruction_invalidate then
+                        flow frame.invalidate
+                    fi
+                fi
+                flow kind self.analyze_primitive
+            }
+            semantic_body::Action::Intrinsic(kind) => frame flow kind self.analyze_intrinsic
+            semantic_body::Action::Struct(shape _) => {
+                std::List[u64]::new = children
+                for member in shape.members.iter do
+                    flow.pop children.push
+                done
+                children std::String::new self.intern_shape flow.stack.push
+            }
+            semantic_body::Action::StructFields(literal _) => {
+                std::Map[std::String u64]::new = fields
+                literal.field_order.length = remaining
+                while 0 remaining != do
+                    1 -= remaining
+                    flow.pop remaining literal
+                        .field_order
+                        .get
+                        .clone fields.set
+                done
+                literal.struct_name self
+                    .checked
+                    .get_store
+                    .structs
+                    .get
+                    .unwrap = shape
+                std::List[u64]::new = children
+                for member in shape.members.iter do
+                    0 member.name fields.get_copy.unwrap_or children.push
+                done
+                children std::String::new self.intern_shape flow.stack.push
+            }
+            semantic_body::Action::StructMemberProject(member _) => {
+                flow.pop = shape
+                member.member_index shape self.get_child flow.stack.push
+            }
+            semantic_body::Action::StructMemberStore(_ typ) => {
+                flow.pop drop flow.pop = value
+                # A field replacement can affect aliases and retained captures.
+                # Scalar stores cannot replace callable shape components.
+                if value 0 != typ can_hold_targets || then
+                    flow frame.invalidate
+                fi
+            }
+            semantic_body::Action::Temporary(binding depth) => {
+                frame flow leaf.facts self.analyze_assignments
+                binding.storage_name flow.inactive.remove
+                if depth flow.stack.length < then
+                    flow.stack.length depth - 1 - flow.stack.get copy
+                else
+                    0
+                fi binding.storage_name.clone flow.variables.set
+            }
+            semantic_body::Action::OwnerMoved(binding) => binding.storage_name.clone flow.inactive.add
+            semantic_body::Action::Integer(_) => 0 flow.stack.push
+            semantic_body::Action::Float(_) => 0 flow.stack.push
+            semantic_body::Action::Boolean(_) => 0 flow.stack.push
+            semantic_body::Action::Character(_) => 0 flow.stack.push
+            semantic_body::Action::String(_) => 0 flow.stack.push
+            semantic_body::Action::SizeOf(_) => 0 flow.stack.push
+            semantic_body::Action::PtrAsRef(_) => {
+                flow.pop drop 0 flow.stack.push
+            }
+            semantic_body::Action::PtrAsMut(_) => {
+                flow.pop drop 0 flow.stack.push
+            }
+            semantic_body::Action::PtrFromRaw(_) => {
+                flow.pop drop 0 flow.stack.push
+            }
+            semantic_body::Action::PtrRead(_) => {
+                flow.pop drop 0 flow.stack.push
+            }
+            semantic_body::Action::PtrWrite(_) => {
+                flow frame.invalidate std::List[u64]::new = flow.stack
+            }
+            semantic_body::Action::IntoRaw(_) => {
+                flow frame.invalidate std::List[u64]::new = flow.stack
+            }
+            semantic_body::Action::PatternTest(variant typ) => {
+                variant.clone common::PatternValue::EnumVariant = value
+                flow leaf.facts value self.forget_pattern_bindings
+                if 0 typ self.does_destruction_invalidate then
+                    flow frame.invalidate
+                fi
+                flow.pop drop 0 flow.stack.push
+            }
+            semantic_body::Action::Enum(variant _) => {
+                variant.enum_name self
+                    .checked
+                    .get_store
+                    .enums
+                    .get
+                    .unwrap = declaration
+                if variant.variant_name declaration.variant_types.get std::Option::Some(types) is then
+                    for payload_type in types.iter do
+                        flow.pop drop
+                    done
+                fi
+                0 flow.stack.push
+            }
+            _ => std::List[u64]::new = flow.stack
+        end
+    }
+    fn analyze_body self:mut$Analysis body:$semantic_body::Body flow:mut$Flow frame:mut$Frame {
+        std::Option[i64]::None = literal
+        for node in body.get_nodes.iter do
+            if flow.stopped then
+                return
+            fi
+            if literal node is_exit_syscall then
+                true = flow.stopped return
+            fi
+            std::Option[i64]::None = literal
+            if node semantic_body::Node::Leaf(leaf) is then
+                if leaf.action semantic_body::Action::Integer(value _) is then
+                    value.value std::Option::Some = literal
+                fi
+            fi
+            frame flow node self.analyze_node
+        done
+    }
+    fn analyze_conditional
+        self:mut$Analysis
+        conditional:$semantic_body::Conditional
+        flow:mut$Flow
+        frame:mut$Frame
+    {
+        flow.clone = remaining
+        Flow::new = joined true = joined.stopped
+        0 = index: u64
+        for branch in conditional.branches.iter do
+            frame remaining branch.entry self.analyze_facts
+            frame remaining branch.condition self.analyze_body
+            frame remaining branch.test self.analyze_facts
+            remaining.pop drop
+            remaining.clone = branch_flow
+            frame branch_flow branch.consequent self.analyze_body
+            if index 1 + conditional.branches.length < then
+                frame branch_flow index 1 + conditional
+                    .branches
+                    .get
+                    .entry self.analyze_facts
+            elif conditional.alternative std::Option::Some(alternative) is then
+                frame branch_flow alternative.entry self.analyze_facts
+            else
+                frame branch_flow conditional.exit self.analyze_facts
+            fi
+            branch_flow joined.merge
+            1 += index
+        done
+        if conditional.alternative std::Option::Some(alternative) is then
+            frame remaining alternative.entry self.analyze_facts
+            frame remaining alternative.body self.analyze_body
+        fi
+        remaining joined.merge
+        joined flow.replace
+        frame flow conditional.exit self.analyze_facts
+    }
+    fn analyze_loop self:mut$Analysis loop:$semantic_body::Loop flow:mut$Flow frame:mut$Frame {
+        # Meet entry and back-edge facts before retaining any loop target. The
+        # fixed pass budget widens all values on difficult changing loops.
+        frame flow loop.entry self.analyze_facts
+        flow.clone = entry
+        frame.exits.length = exit_base
+        false = stable
+        Flow::new = exits
+        true = exits.stopped
+        0 = pass: u64
+        while pass MAX_LOOP_PASSES < do
+            entry.clone = previous
+            entry.clone = iteration
+            frame iteration loop.condition self.analyze_body
+            frame iteration loop.test self.analyze_facts
+            iteration.pop drop
+            iteration exits.merge
+            frame iteration loop.body self.analyze_body
+            frame iteration loop.exit self.analyze_facts
+            iteration entry.merge
+            while frame.exits.length exit_base > do
+                frame.exits.pop match
+                    LoopExit { flow: exit_flow continues: continues } => {
+                        if continues then
+                            exit_flow entry.merge
+                        else
+                            exit_flow exits.merge
+                        fi
+                    }
+                end
+            done
+            if previous entry.is_equal then
+                true = stable break
+            fi
+            1 += pass
+        done
+        if stable ! then
+            entry.forget
+            entry.clone = iteration
+            frame iteration loop.condition self.analyze_body
+            frame iteration loop.test self.analyze_facts
+            iteration.pop drop
+            iteration exits.merge
+            frame iteration loop.body self.analyze_body
+            while frame.exits.length exit_base > do
+                frame.exits.pop match
+                    LoopExit { flow: exit_flow continues: continues } => {
+                        if continues ! then
+                            exit_flow exits.merge
+                        fi
+                    }
+                end
+            done
+        fi
+        exits flow.replace
+        frame flow loop.exit self.analyze_facts
+    }
+    fn analyze_node self:mut$Analysis node:$semantic_body::Node flow:mut$Flow frame:mut$Frame {
+        node match
+            semantic_body::Node::Leaf(leaf) => frame flow leaf self.analyze_leaf
+            semantic_body::Node::Region(region) => {
+                frame flow region.entry self.analyze_facts
+                frame flow region.body self.analyze_body
+                frame flow region.exit self.analyze_facts
+            }
+            semantic_body::Node::Group(group) => {
+                frame flow group.facts self.analyze_facts frame flow group.body self.analyze_body
+            }
+            semantic_body::Node::Conditional(conditional) => frame flow conditional self.analyze_conditional
+            semantic_body::Node::Loop(loop) => frame flow loop self.analyze_loop
+            semantic_body::Node::Match(value) => {
+                frame flow value.entry self.analyze_facts
+                if 0 value.subject_type self.does_destruction_invalidate then
+                    flow frame.invalidate
+                fi
+                # Failed guards can mutate state before a later arm is selected.
+                for arm in value.arms.iter do
+                    if
+                        arm
+                            .guard
+                            .get_nodes
+                            .is_empty !
+                    then
+                        flow frame.invalidate
+                    fi
+                done
+                flow.pop drop
+                flow.clone = entry
+                Flow::new = joined true = joined.stopped
+                0 = index: u64
+                for arm in value.arms.iter do
+                    entry.clone = branch
+                    frame branch arm.entry self.analyze_facts
+                    branch arm.entry arm.pattern self.forget_pattern_bindings
+                    frame branch arm.guard self.analyze_body
+                    std::List[u64]::new = branch.stack
+                    frame branch arm.body self.analyze_body
+                    if index 1 + value.arms.length < then
+                        frame branch index 1 + value
+                            .arms
+                            .get
+                            .entry self.analyze_facts
+                    else
+                        frame branch value.exit self.analyze_facts
+                    fi
+                    branch joined.merge
+                    1 += index
+                done
+                joined flow.replace
+                frame flow value.exit self.analyze_facts
+            }
+            semantic_body::Node::Array(_) => {
+                # Element expressions can call, mutate, or return. Preserve no
+                # target summary until element evaluation is modeled explicitly.
+                frame.record_unknown_return
+                flow frame.invalidate
+                # Skipped element expressions can initialize or reactivate any
+                # local binding. Absence no longer proves an inactive owner.
+                false = flow.bindings_complete
+                std::Set[std::String]::new = flow.inactive
+                std::List[u64]::new = flow.stack
+                0 flow.stack.push
+            }
+            semantic_body::Node::Unreachable(_) => {
+            }
+        end
+    }
+    fn analyze_function
+        self:mut$Analysis
+        name:$str
+        arguments:std::List[u64]
+        captures:std::List[u64]
+    -> u64 {
+        name self.checked.find_body match
+            std::Option::Some(body) => body
+            std::Option::None => 0 return
+        end = body
+        f"{name.length}:{name}" = key
+        arguments key append_ids
+        ":" key.append
+        captures key append_ids
+        if key self.contexts.get_copy std::Option::Some(identity) is then
+            if identity 1 - self
+                .plan
+                .contexts
+                .get
+                .complete then identity else 0 fi return
+        fi
+        if self.depth MAX_ANALYSIS_DEPTH >= then
+            0 return
+        fi
+        false = specialized
+        for argument in arguments.iter do
+            if argument 0 != then
+                true = specialized
+            fi
+        done
+        for capture in captures.iter do
+            if capture 0 != then
+                true = specialized
+            fi
+        done
+        0 name self
+            .counts
+            .get_copy_str
+            .unwrap_or = count
+        if specialized then
+            if count MAX_CONTEXTS_PER_FUNCTION >= self.specializations MAX_SPECIALIZATIONS >= || then
+                0 return
+            fi
+            1 += self.specializations
+            count 1 + name.to_str self.counts.set
+        fi
+        self
+            .plan
+            .contexts
+            .length 1 + = identity
+        if specialized then f"{name}$closure${identity}" else name.to_str fi = symbol
+        name self
+            .checked
+            .get_store
+            .get_function
+            .unwrap = function
+        std::List[u64]::new = unknown
+        for
+            typ in function
+                .stack_effect
+                .return_types
+                .iter
+        do
+            0 unknown.push
+        done
+        false true unknown std::Map[i64 u64]::new std::Map[i64 u64]::new symbol name.to_str Context self
+            .plan
+            .contexts
+            .push
+        identity key self.contexts.set
+        if specialized ! then
+            identity name.to_str self
+                .plan
+                .defaults
+                .set
+        fi
+        Flow::new = flow
+        while arguments.is_empty ! do
+            arguments.pop flow.stack.push
+        done
+        function
+            .stack_effect
+            .return_types
+            .length Frame::new = frame
+        0 = index: u64
+        for capture in function.captures.iter do
+            capture.name.clone frame.captures.add
+            if index captures.length < then
+                index captures.get copy
+            else
+                0
+            fi capture.name.clone flow.variables.set
+            1 += index
+        done
+        1 += self.depth
+        frame flow body self.analyze_body
+        1 -= self.depth
+        if flow.stopped ! then
+            flow frame.record_return
+        fi
+        identity 1 - self
+            .plan
+            .contexts
+            .get_mut = result
+        frame match
+            Frame { calls: calls executions: executions invalidates: invalidates returns: returns } => {
+                calls = result.calls
+                executions = result.executions
+                invalidates = result.invalidates
+                std::List[u64]::new returns.unwrap_or = result.outputs
+            }
+        end
+        true = result.complete
+        if specialized then
+            false = needs_body
+            for execution in result.executions.iter do
+                if execution.second 0 != then
+                    true = needs_body
+                fi
+            done
+            result.calls.values = calls
+            for callee in calls.iter do
+                if callee 0 != then
+                    callee 1 - self
+                        .plan
+                        .contexts
+                        .get = called
+                    if called.name called.symbol != then
+                        true = needs_body
+                    fi
+                fi
+            done
+            if needs_body ! then
+                identity 1 - self
+                    .plan
+                    .contexts
+                    .get_mut = destination
+                name.to_str = destination.symbol
+            fi
+        fi
+        identity
+    }
+}
+
+pub fn analyze checked:$typechecker::CheckedProgram -> Plan {
+    0 std::Map[std::String u64]::new std::List[Context]::new Plan = plan
+    0 0 std::Map[std::String u64]::new std::Map[std::String u64]::new std::Map[std::String u64]::new
+    std::List[Shape]::new plan checked Analysis = analysis
+    Flow::new = flow
+    0 Frame::new = frame
+    frame flow checked.get_root analysis.analyze_body
+    frame match
+        Frame { calls: calls executions: executions invalidates: invalidates } => {
+            true invalidates std::List[u64]::new executions calls "".to_str "".to_str Context analysis
+                .plan
+                .contexts
+                .push
+        }
+    end
+    analysis
+        .plan
+        .contexts
+        .length = analysis.plan.root
+    for name in checked.get_function_names.iter do
+        std::List[u64]::new = arguments
+        name.as_str checked
+            .get_store
+            .get_function
+            .unwrap = function
+        for
+            parameter in function
+                .stack_effect
+                .parameters
+                .iter
+        do
+            0 arguments.push
+        done
+        std::List[u64]::new arguments name.as_str analysis.analyze_function drop
+    done
+    analysis match
+        Analysis { plan: result } => result
+    end
+}
