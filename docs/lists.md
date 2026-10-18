@@ -221,8 +221,9 @@ fn is_empty self:$List -> bool
 fn iter self:$List[T] -> Iter[$T]
 ```
 
-`iter` returns an iterator over shared element borrows. The list keeps ownership
-and remains loaned while those borrows are in use.
+`iter` returns an iterator over shared element borrows. A yielded borrow remains
+valid after advancing or dropping the iterator. The list keeps ownership and
+remains loaned while those borrows are in use.
 
 Call `numbers.iter`.
 
