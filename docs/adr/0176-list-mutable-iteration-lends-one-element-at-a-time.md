@@ -5,6 +5,12 @@ shared, `iter_mut` lends an exclusive element borrow, and `into_iter` transfers
 owned elements. Each follows original index order without requiring `Copy` or
 `Clone`. This amends [ADR-0157](0157-collection-ownership-uses-two-explicit-mode-triads.md).
 
+`ListIter[T]` retains a shared list borrow and implements `Iterable[$T]`.
+Each yield retains the stored source borrow independently of the cursor. It can
+remain live across advancement and cursor destruction while the list remains
+borrowed. `ListIter.into_iter` consumes the cursor and wraps its remaining state
+in a closure-backed `Iter[$T]` without transferring element ownership.
+
 `ListIterMut[T]` retains an exclusive list borrow. Its `next` method borrows the
 cursor exclusively and returns `Option[mut$T]`. Each result keeps the complete
 cursor loaned until its last use. No other result can be obtained during that

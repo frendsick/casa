@@ -872,7 +872,7 @@ See [examples/fizzbuzz.casa](../examples/fizzbuzz.casa) for a counted loop.
 |---|---|
 | `array[T N]` | `Iter[$T]` |
 | `Bytes` | `Iter[u8]` |
-| `List[T]` | `Iter[$T]` |
+| `List[T]` | `ListIter[T]` |
 | `Map[K V]` | `Iter[Pair[$K $V]]` |
 | `Set[K]` | `Iter[$K]` |
 | `Slice[T]` | `Iter[$T]` |
@@ -893,6 +893,39 @@ and terminal operations below.
 
 `iter` on arrays, lists, slices, maps, and sets yields borrows because the source keeps
 owning its elements. Clone a yielded value when an owned value is needed.
+
+### List cursor compatibility
+
+`ListIter[T]` implements `Iterable[$T]`. Ordinary `for` loops and iterator
+operations accept the cursor as their receiver. Lazy operations such as `map`
+and `filter` still return closure-backed `Iter` values.
+
+`List.iter` returns `ListIter[T]` rather than `Iter[$T]`. Update explicit
+parameter, return, and binding types when they name the direct cursor. When an
+existing API requires `Iter[$T]`, adapt the cursor with `into_iter`:
+
+```casa
+fn shared_values[T] values:$List[T] -> Iter[$T] {
+    values.iter.into_iter
+}
+```
+
+The adapter consumes the cursor and preserves its remaining position. Dropping
+it destroys no list elements. Its yields remain valid after adapter destruction
+while the list remains borrowed. `List.into_iter` has different ownership:
+it consumes the list and transfers owned elements.
+
+`chain` and `zip` still require an `Iter` for their `other` argument. Convert a
+list cursor in that position:
+
+```casa
+right.iter.into_iter left.iter.zip
+right.iter.into_iter left.iter.chain
+```
+
+A `flat_map` callback must still return `Iter[U]`. A callback that previously
+returned `values.iter` can return `values.iter.into_iter`. Code that accesses
+`Iter.next_fn` also needs the adapter because `ListIter` has no callback field.
 
 ## Lazy iterator operations
 

@@ -53,7 +53,7 @@ names. Call forms below assume a list binding named `numbers`.
 | [insert](#listtinsert) | `fn insert [T] self:mut$List[T] item:T index:u64` | Insert before `index` |
 | [into_iter](#listtinto_iter) | `fn into_iter self:List[T] -> Iter[T]` | Transfer elements in index order |
 | [is_empty](#listtis_empty) | `fn is_empty self:$List -> bool` | Whether the list has no elements |
-| [iter](#listtiter) | `fn iter self:$List[T] -> Iter[$T]` | Iterator over borrows of the elements |
+| [iter](#listtiter) | `fn iter self:$List[T] -> ListIter[T]` | Iterator over borrows of the elements |
 | [iter_mut](#listtiter_mut) | `fn iter_mut self:mut$List[T] -> ListIterMut[T]` | Lend one mutable element at a time |
 | [join](#liststrjoin) | `fn join self:$List[str] separator:$str -> String` | Join a string-view list |
 | [join_strings](#liststringjoin_strings) | `fn join_strings self:$List[String] separator:$str -> String` | Join owned strings |
@@ -218,13 +218,29 @@ fn is_empty self:$List -> bool
 ### List[T]::iter
 
 ```text
-fn iter self:$List[T] -> Iter[$T]
+fn iter self:$List[T] -> ListIter[T]
 ```
 
-`iter` returns an iterator over shared element borrows. The list keeps ownership
-and remains loaned while those borrows are in use.
+`iter` returns a `ListIter[T]` cursor over shared element borrows in index order.
+A yielded borrow remains valid after advancing or dropping the cursor. The list
+keeps ownership and remains loaned while the cursor or any yielded borrow is in
+use. Elements need neither `Copy` nor `Clone`.
 
-Call `numbers.iter`.
+`ListIter[T]` implements `Iterable[$T]` and supports its lazy and terminal
+operations. It also provides `min` and `max` when `T` implements `Ord`. These
+methods inspect the remaining elements, retain the first equal minimum or
+maximum, and exhaust the cursor. Repeated `next` calls after exhaustion return
+`None`.
+
+Call `numbers.iter`. To pass the cursor to an API that requires `Iter[$T]`, use
+`numbers.iter.into_iter`. This consumes the cursor and wraps its remaining
+position in a closure. Its yields still borrow the list. Unlike `List.into_iter`,
+`ListIter.into_iter` does not transfer element ownership.
+
+Explicit `Iter[$T]` annotations for a direct `List.iter` result must change to
+`ListIter[T]` or use this adapter. The cursor has no public `next_fn` field.
+See [iterator compatibility](collections.md#list-cursor-compatibility) for
+`chain`, `zip`, and `flat_map` examples.
 
 ### List[T]::iter_mut
 
