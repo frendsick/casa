@@ -1,5 +1,7 @@
 # Editor products retain verified source facts
 
+status: amended by [ADR-0179](0179-analysis-reuses-a-verified-import-analysis.md)
+
 related issue: [Choose compiler products for editor and formatter tooling](https://github.com/frendsick/casa/issues/650).
 
 This completes the tooling contract for the independent snapshots in

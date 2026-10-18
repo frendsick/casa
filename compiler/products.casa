@@ -1,5 +1,6 @@
 # Request-owned syntax, editor analysis, and assembly products.
 import "std" as std
+import "os" as os
 import "common" as common
 import "error" as error
 import "lexer" as lexer
@@ -33,6 +34,27 @@ impl CompilationInput {
         else
             f"{self.base_directory}/{path}".as_str lexer::normalize_path
         fi
+    }
+
+    # Overrides first, then the authoritative root text.
+    fn request_sources self:$CompilationInput root_file:$str -> lexer::SourceStore {
+        lexer::SourceStore::new = sources
+        for override in self.source_overrides.iter do
+            override.second.as_str override.first.as_str self.resolve_path.as_str sources.add
+        done
+        self
+            .root
+            .text
+            .as_str root_file sources.add
+        sources
+    }
+
+    fn resolve_library_paths self:$CompilationInput -> std::List[std::String] {
+        std::List[std::String]::new = resolved
+        for path in self.library_paths.iter do
+            path.as_str self.resolve_path resolved.push
+        done
+        resolved
     }
 
     fn input_failure self:$CompilationInput message:std::String -> CompilerFailure {
@@ -201,8 +223,181 @@ pub fn syntax source:SourceUnit -> std::Result[SyntaxResult CompilerFailure] {
     facts tokens report SyntaxResult std::Result::Ok
 }
 
+# Caller-owned reuse state for `analyze_cached`. A snapshot never borrows it, and
+# an empty cache produces the same snapshot as a filled one.
+pub struct AnalysisCache {
+    imports: std::Option[ImportAnalysis]
+}
+
+impl AnalysisCache {
+    pub fn new -> AnalysisCache { std::Option[ImportAnalysis]::None AnalysisCache }
+}
+
+# Sealed analysis of the modules one root imports. Requests copy it, never change it.
+struct ImportAnalysis {
+    root_file:      std::String
+    base_directory: std::String
+    library_paths:  std::List[std::String]
+    texts:          lexer::SourceStore
+    source:         parser::ImportSource
+    check:          typechecker::ImportCheck
+    index:          document::ImportIndex
+}
+
+# Reuse requires the same inputs: identity, search order, imported text, and resolution.
+fn is_current
+    imports:$ImportAnalysis
+    root_file:$str
+    input:$CompilationInput
+    library_paths:$std::List[std::String]
+    sources:$lexer::SourceStore
+-> bool {
+    if
+        imports.root_file.as_str root_file != imports.base_directory input.base_directory != ||
+        library_paths imports.library_paths same_paths ! ||
+    then
+        false return
+    fi
+    for
+        imported in imports
+            .texts
+            .sources
+            .iter
+    do
+        if imported.first.as_str sources.get std::Option::Some(text) is then
+            if text imported.second != then
+                false return
+            fi
+        elif imported.first.as_str read_text std::Option::Some(text) is then
+            if text imported.second != then
+                false return
+            fi
+        else
+            false return
+        fi
+    done
+    for
+        resolution in imports
+            .source
+            .get_resolutions
+            .iter
+    do
+        resolution.specifier.as_str resolution.importing_file.as_str library_paths sources
+        parser::resolve_import_in drop = resolved
+        if resolved std::Option::Some(path) is then
+            if path resolution.path != then
+                false return
+            fi
+        else
+            false return
+        fi
+    done
+    true
+}
+
+# Import stage. Imports with diagnostics produce no reusable analysis.
+fn analyze_imports
+    root_file:$str
+    input:$CompilationInput
+    sources:$lexer::SourceStore
+    library_paths:$std::List[std::String]
+    tokens:$std::List[common::Token]
+    diagnostics:$error::Diagnostics
+-> std::Option[ImportAnalysis] {
+    sources.clone = import_sources
+    import_sources diagnostics.clone library_paths.clone tokens parser::parse_imports
+    = bodies = store = source
+    if source.is_clean ! then
+        std::Option[ImportAnalysis]::None return
+    fi
+    bodies store typechecker::check_imports = check
+    if check.is_clean ! then
+        std::Option[ImportAnalysis]::None return
+    fi
+    import_sources.clone_loaded = texts
+    check typechecker::finish_imports = finished
+    texts.clone finished document::project_imports = index
+    ImportAnalysis {
+        root_file: root_file.to_str
+        base_directory: input.base_directory.clone
+        library_paths: library_paths.clone
+        texts: texts
+        source: source
+        check: check
+        index: index
+    } std::Option::Some
+}
+
+# Root stage over a copy of `imports`. No snapshot when the root imports other modules.
+fn analyze_root
+    imports:$ImportAnalysis
+    root_file:$str
+    sources:$lexer::SourceStore
+    library_paths:std::List[std::String]
+    tokens:std::List[common::Token]
+    diagnostics:error::Diagnostics
+-> std::Option[AnalysisSnapshot] {
+    # Root-stage sources hold the imported text, overrides, and the root.
+    imports.texts.clone = root_sources
+    for text in sources.sources.iter do
+        text.second.as_str text.first.as_str root_sources.add
+    done
+    imports
+        .check
+        .get_store
+        .clone imports.source root_sources diagnostics library_paths tokens
+    parser::parse_root_with_imports = root_imports = parsed
+    if imports.source.get_paths root_imports same_paths ! then
+        std::Option[AnalysisSnapshot]::None return
+    fi
+    { drop } imports.check root_sources parsed check_root_with_imports.into_parts
+    = checked = root_sources = diagnostics
+    imports.index root_file.to_str diagnostics root_sources checked document::project_index_with_imports
+    = diagnostics = root_sources = index
+    root_file.to_str index root_sources diagnostics Report AnalysisSnapshot std::Option::Some
+}
+
+fn same_paths left:$std::List[std::String] right:$std::List[std::String] -> bool {
+    if left.length right.length != then
+        false return
+    fi
+    0 = index: u64
+    while index left.length < do
+        if index left.get index right.get != then
+            false return
+        fi
+        1 += index
+    done
+    true
+}
+
+fn read_text path:$str -> std::Option[std::String] {
+    path.as_cstr = path_cstr
+    if path_cstr.is_none then
+        std::Option[std::String]::None return
+    fi
+    path_cstr.unwrap os::file::read_all match
+        std::Result::Ok(bytes) => bytes.to_str match
+            std::Result::Ok(text) => text std::Option::Some
+            std::Result::Error(_) => std::Option[std::String]::None
+        end
+        std::Result::Error(_) => std::Option[std::String]::None
+    end
+}
+
 # Project source facts, then release all compiler bodies and declarations.
 pub fn analyze input:CompilationInput -> std::Result[AnalysisSnapshot CompilerFailure] {
+    AnalysisCache::new = cache
+    cache input analyze_cached
+}
+
+# Analyze in two stages: the root's imports, then the root over a copy of that
+# import analysis. A current cached import analysis replaces the first stage.
+# Imports with diagnostics use one combined analysis and leave the cache empty.
+pub fn analyze_cached
+    input:CompilationInput
+    cache:mut$AnalysisCache
+-> std::Result[AnalysisSnapshot CompilerFailure] {
     if input.validate std::Option::Some(failure) is then
         failure std::Result::Error return
     fi
@@ -210,6 +405,39 @@ pub fn analyze input:CompilationInput -> std::Result[AnalysisSnapshot CompilerFa
         .root
         .file
         .as_str input.resolve_path = root_file
+    root_file.as_str input.request_sources = sources
+    input.resolve_library_paths = library_paths
+    root_file.as_str input
+        .root
+        .text
+        .as_str lexer::lex_source.into_parts = diagnostics = tokens
+    false = reused
+    if cache.imports std::Option::Some(cached) is then
+        sources library_paths input root_file.as_str cached is_current = reused
+    fi
+    if reused ! then
+        diagnostics tokens library_paths sources input root_file.as_str analyze_imports = cache.imports
+    fi
+    if cache.imports std::Option::Some(imports) is then
+        if
+            diagnostics tokens library_paths sources root_file.as_str imports analyze_root std::Option::Some(snapshot) is
+        then
+            snapshot std::Result::Ok return
+        fi
+        # The root now imports other modules. Analyze its imports again.
+        std::Option[ImportAnalysis]::None = cache.imports
+        if reused then
+            cache input analyze_cached return
+        fi
+    fi
+    input root_file analyze_combined
+}
+
+# One combined analysis, used when the root's imports report diagnostics.
+fn analyze_combined
+    root_file:std::String
+    input:CompilationInput
+-> std::Result[AnalysisSnapshot CompilerFailure] {
     { drop } input parse_input = sources = parsed
     { drop } sources parsed check.into_parts = checked = sources = diagnostics
     root_file.clone diagnostics sources checked document::project_index
@@ -307,18 +535,8 @@ fn parse_input
         .root
         .file
         .as_str input.resolve_path = root_file
-    lexer::SourceStore::new = sources
-    for override in input.source_overrides.iter do
-        override.second.as_str override.first.as_str input.resolve_path.as_str sources.add
-    done
-    input
-        .root
-        .text
-        .as_str root_file.as_str sources.add
-    std::List[std::String]::new = resolved_library_paths
-    for path in input.library_paths.iter do
-        path.as_str input.resolve_path resolved_library_paths.push
-    done
+    root_file.as_str input.request_sources = sources
+    input.resolve_library_paths = resolved_library_paths
     input match
         CompilationInput { root: root } => {
             root match
@@ -335,6 +553,26 @@ fn parse_input
     "Parsing and resolving imports" log_progress exec
     sources diagnostics resolved_library_paths tokens parser::parse_and_resolve = parse_result
     parse_result sources
+}
+
+fn check_root_with_imports
+    parsed:parser::ParseResolveResult
+    sources:lexer::SourceStore
+    imports:$typechecker::ImportCheck
+    log_progress:$fn[str]
+-> CheckingResult {
+    parsed.into_parts = diagnostics = parsed_source
+    parsed_source match
+        std::Option::Some(source) => {
+            diagnostics log_progress imports source typechecker::check_root_with_imports.with_source_diagnostics
+            = typecheck_result
+            typecheck_result.get_diagnostics.clone = diagnostics
+            typecheck_result std::Option::Some
+        }
+        std::Option::None => std::Option[typechecker::TypecheckResult]::None
+    end
+    = typechecked
+    typechecked sources diagnostics CheckingResult
 }
 
 fn check

@@ -8,6 +8,7 @@ requests syntax:
 | --- | --- | --- |
 | `syntax` | One `SourceUnit` | Tokens, optional structural facts, and a report |
 | `analyze` | `CompilationInput` | An independent analysis snapshot with a report and editor index |
+| `analyze_cached` | `CompilationInput` and a borrowed `AnalysisCache` | The same snapshot as `analyze` |
 | `assembly` | `CompilationInput` and `Target` | `Produced(report, source)` or `Rejected(report)` |
 
 `assembly_with_progress` accepts the same input and target plus a borrowed
@@ -38,6 +39,18 @@ rejected sources. `SourceStore::get_bytes` returns an owned byte copy even for
 imports rejected as invalid UTF-8, for which text lookup returns no value.
 Completed analysis and assembly reports omit unused overrides. Requests own source stores and
 compiler state, so retained results cannot affect other requests.
+
+Analysis first builds an import analysis: it parses, checks, and indexes the
+modules the root imports, without the root's declarations. It then checks the
+root over a copy of that state and adds the imported-file facts to the index.
+`analyze_cached` keeps the import analysis in a caller-owned `AnalysisCache`.
+A later request reuses it when the root identity, base directory, library
+paths, imported file text, nested import resolution, and root import order are
+unchanged. Imported text is read again from overrides or disk for this check.
+Imports with diagnostics are checked together with the root, and the cache
+stays empty. Assembly always checks the root and its imports together, so its
+diagnostic order can differ from analysis.
+See [ADR-0179](adr/0179-analysis-reuses-a-verified-import-analysis.md).
 
 `AssemblySource` exposes a shared borrow of its text and identifies its target,
 `Target::LinuxX86_64`. The caller writes and builds assembly and launches binaries.
@@ -274,6 +287,8 @@ facts into definition, reference, hover, and completion results without matching
 assignments or replaying scope markers. Root bindings, branches, loops, and
 patterns use the same facts. Rejected operations withhold dependent bindings,
 while independent verified declarations remain available.
+Imported-file facts come from the import analysis, so completion there does not
+offer the root's declarations.
 References cover this compilation's root and loaded imports,
 with sorted, deduplicated ranges and explicit declaration inclusion. Tokens are
 sorted, non-overlapping, and restricted to the requested file. Source failures

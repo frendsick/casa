@@ -791,10 +791,11 @@ impl IndexBuilder {
         diagnostics:error::Diagnostics
         file_path:std::String
     -> IndexBuilder {
-        file_path.as_str sources
-            .get
-            .unwrap
-            .clone = source
+        if file_path.as_str sources.get std::Option::Some(text) is then
+            text.clone
+        else
+            std::String::new
+        fi = source
         std::List[ProjectionOperation]::new = root_occurrences
         std::Map[std::String std::List[ProjectionOperation]]::new = body_occurrences
         common::symbol_store_new = store
@@ -1748,7 +1749,7 @@ impl DocumentSymbol {
     }
 }
 
-struct Occurrence {
+struct Occurrence derives std::Clone {
     location:         DocumentLocation
     hover:            std::Option[std::String]
     definition:       std::Option[DocumentLocation]
@@ -1758,12 +1759,12 @@ struct Occurrence {
     reference_length: u64
 }
 
-struct CompletionScope {
+struct CompletionScope derives std::Clone {
     location: DocumentLocation
     items:    std::List[CompletionCandidate]
 }
 
-pub struct EditorIndex {
+pub struct EditorIndex derives std::Clone {
     files:       std::List[DocumentLocation]
     occurrences: std::List[Occurrence]
     tokens:      std::List[DocumentToken]
@@ -2033,7 +2034,13 @@ impl IndexBuilder {
         token.location self.locate kind DocumentToken index.tokens.push
     }
 
-    fn project_facts self:$IndexBuilder index:mut$EditorIndex {
+    # Import-stage names already have projected facts when the root stage reuses them.
+    fn project_facts
+        self:$IndexBuilder
+        index:mut$EditorIndex
+        imported_functions:$std::Set[std::String]
+        imported_types:$std::Set[std::String]
+    {
         index std::Option[std::String]::None self.root_occurrences self.project_operations
         for
             name in self
@@ -2044,7 +2051,7 @@ impl IndexBuilder {
                 name self
                     .store
                     .source_functions
-                    .has
+                    .has name imported_functions.has ||
             then
                 continue
             fi
@@ -2065,6 +2072,9 @@ impl IndexBuilder {
                 .structs
                 .iter
         do
+            if entry.first imported_types.has then
+                continue
+            fi
             index std::Option[common::Location]::None entry.second.location entry.first.as_str
             DocumentSymbolKind::Struct ProjectionSymbol::new self.project_declaration
         done
@@ -2074,6 +2084,9 @@ impl IndexBuilder {
                 .enums
                 .iter
         do
+            if entry.first imported_types.has then
+                continue
+            fi
             index std::Option[common::Location]::None entry.second.location entry.first.as_str
             DocumentSymbolKind::Enum ProjectionSymbol::new self.project_declaration
             for
@@ -2088,22 +2101,34 @@ impl IndexBuilder {
         done
     }
 
+    fn project_file self:mut$IndexBuilder file:$std::String index:mut$EditorIndex {
+        file.clone = self.file_path
+        file self
+            .sources
+            .sources
+            .get
+            .unwrap
+            .clone = self.source
+        self.source.length 1 + 0 file.clone DocumentLocation = file_range
+        file_range.clone index.files.push
+        "" 1 1 common::SourcePosition self.find_completion_candidates file_range
+        CompletionScope index.completions.push
+        self.file_path.as_str self.source.as_str lexer::lex_source.into_parts = lexical_diagnostics = lexical_tokens
+        lexical_tokens self.collect_source_declarations
+        self.find_semantic_tokens index.tokens.append
+        for token in lexical_tokens.iter do
+            index token self.project_lexical_token
+            index token self.project_completion_triggers
+        done
+    }
+
+    # Files and declarations in `imports` keep the facts the import stage projected.
     fn project
         self:IndexBuilder
         coverage:std::Option[QueryReason]
+        imports:$ImportIndex
     -> EditorIndex lexer::SourceStore error::Diagnostics {
-        EditorIndex {
-            files: std::List[DocumentLocation]::new
-            occurrences: std::List[Occurrence]::new
-            tokens: std::List[DocumentToken]::new
-            completions: std::List[CompletionScope]::new
-            scopes: std::List[CompletionScope]::new
-            triggers: std::List[CompletionScope]::new
-            coverage: coverage
-            unavailable: std::List[CoverageRegion]::new
-            words: std::List[DocumentLocation]::new
-            bodies: std::List[DocumentLocation]::new
-        } = index
+        coverage EditorIndex::new = index
         index self.project_failures
         for
             file in self
@@ -2112,27 +2137,13 @@ impl IndexBuilder {
                 .keys
                 .iter
         do
-            file.clone = self.file_path
-            file self
-                .sources
-                .sources
-                .get
-                .unwrap
-                .clone = self.source
-            self.source.length 1 + 0 file.clone DocumentLocation = file_range
-            file_range.clone index.files.push
-            "" 1 1 common::SourcePosition self.find_completion_candidates file_range
-            CompletionScope index.completions.push
-            self.file_path.as_str self.source.as_str lexer::lex_source.into_parts = lexical_diagnostics = lexical_tokens
-            lexical_tokens self.collect_source_declarations
-            self.find_semantic_tokens index.tokens.append
-            for token in lexical_tokens.iter do
-                index token self.project_lexical_token
-                index token self.project_completion_triggers
-            done
+            if file imports.files.has ! then
+                index file self.project_file
+            fi
         done
-        index self.project_facts
-        index self.project_bindings
+        imports.types imports.functions index self.project_facts
+        imports.bindings index self.project_bindings
+        imports.index index.append_copy
         # Move the retained text and index. The temporary compiler maps are destroyed here.
         self match
             IndexBuilder { sources: sources diagnostics: diagnostics } => index sources diagnostics
@@ -2184,6 +2195,34 @@ impl IndexBuilder {
 }
 
 impl EditorIndex {
+    fn new coverage:std::Option[QueryReason] -> EditorIndex {
+        EditorIndex {
+            files: std::List[DocumentLocation]::new
+            occurrences: std::List[Occurrence]::new
+            tokens: std::List[DocumentToken]::new
+            completions: std::List[CompletionScope]::new
+            scopes: std::List[CompletionScope]::new
+            triggers: std::List[CompletionScope]::new
+            coverage: coverage
+            unavailable: std::List[CoverageRegion]::new
+            words: std::List[DocumentLocation]::new
+            bodies: std::List[DocumentLocation]::new
+        }
+    }
+
+    # Root-stage facts come first, so they win ties in `find_occurrence`.
+    fn append_copy self:mut$EditorIndex other:$EditorIndex {
+        other.files.clone self.files.append
+        other.occurrences.clone self.occurrences.append
+        other.tokens.clone self.tokens.append
+        other.completions.clone self.completions.append
+        other.scopes.clone self.scopes.append
+        other.triggers.clone self.triggers.append
+        other.unavailable.clone self.unavailable.append
+        other.words.clone self.words.append
+        other.bodies.clone self.bodies.append
+    }
+
     fn contains self:$EditorIndex file:$str offset:u64 -> bool {
         for range in self.files.iter do
             if offset file range.contains then
@@ -2443,23 +2482,91 @@ fn index_visible_bindings
     files
 }
 
-pub fn project_index
+# Imported-file facts and the import-stage names that produced them.
+pub struct ImportIndex {
+    index:     EditorIndex
+    files:     std::Set[std::String]
+    functions: std::Set[std::String]
+    types:     std::Set[std::String]
+    bindings:  u64
+}
+
+impl ImportIndex {
+    fn empty -> ImportIndex {
+        ImportIndex {
+            index: std::Option[QueryReason]::None EditorIndex::new
+            files: std::Set[std::String]::new
+            functions: std::Set[std::String]::new
+            types: std::Set[std::String]::new
+            bindings: 0
+        }
+    }
+}
+
+# Project every imported file once. `sources` holds the imported files only.
+pub fn project_imports
+    checked:typechecker::TypecheckResult
+    sources:lexer::SourceStore
+-> ImportIndex {
+    sources.sources.keys common::string_list_to_set = files
+    "".to_str error::Diagnostics::new sources checked std::Option::Some IndexBuilder::new = builder
+    builder.store.get_function_names common::string_list_to_set = functions
+    builder
+        .store
+        .structs
+        .keys common::string_list_to_set = types
+    for
+        name in builder
+            .store
+            .enums
+            .keys
+            .iter
+    do
+        name.clone types.add
+    done
+    builder
+        .bindings
+        .declarations
+        .length = bindings
+    ImportIndex::empty = none
+    none std::Option[QueryReason]::None builder.project = diagnostics = sources = index
+    bindings types functions files index ImportIndex
+}
+
+# Project root-stage facts beside imported-file facts from `imports`.
+pub fn project_index_with_imports
     checked:std::Option[typechecker::TypecheckResult]
     sources:lexer::SourceStore
     diagnostics:error::Diagnostics
     root_file:std::String
+    imports:$ImportIndex
 -> EditorIndex lexer::SourceStore error::Diagnostics {
+    diagnostics find_coverage = coverage
+    root_file.as_str sources.retain_used
+    imports coverage root_file diagnostics sources checked IndexBuilder::new.project
+}
+
+fn find_coverage diagnostics:$error::Diagnostics -> std::Option[QueryReason] {
     std::Option[QueryReason]::None = coverage
     for diagnostic in diagnostics.entries.iter do
         if diagnostic error::Diagnostic::Error(failure) is then
             failure classify_query_failure std::Option::Some = coverage
         fi
     done
-    root_file.as_str sources.retain_used
-    coverage root_file diagnostics sources checked IndexBuilder::new.project
+    coverage
 }
 
-struct CoverageRegion {
+pub fn project_index
+    checked:std::Option[typechecker::TypecheckResult]
+    sources:lexer::SourceStore
+    diagnostics:error::Diagnostics
+    root_file:std::String
+-> EditorIndex lexer::SourceStore error::Diagnostics {
+    ImportIndex::empty = none
+    none root_file diagnostics sources checked project_index_with_imports
+}
+
+struct CoverageRegion derives std::Clone {
     location: DocumentLocation
     reason:   QueryReason
 }
@@ -2665,12 +2772,13 @@ impl IndexBuilder {
         std::Option[common::Type]::None
     }
 
-    fn project_bindings self:$IndexBuilder index:mut$EditorIndex {
+    fn project_bindings self:$IndexBuilder index:mut$EditorIndex first:u64 {
         for
-            binding in self
+            binding in first self
                 .bindings
                 .declarations
                 .iter
+                .skip
         do
             if binding.verified ! then
                 continue
