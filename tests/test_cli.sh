@@ -219,6 +219,11 @@ if matches_filter native_unwinding "$@"; then
     python3 tests/test_native_unwinding.py "$COMPILER"
 fi
 
+if matches_filter comparison_branches "$@"; then
+    matched=true
+    python3 tests/test_comparison_branches.py "$COMPILER"
+fi
+
 if matches_filter lsp_workspace "$@"; then
     matched=true
     "$COMPILER" -L lib lsp.casa -o "$CLI_TMP/lsp"
