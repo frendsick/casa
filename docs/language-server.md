@@ -104,6 +104,11 @@ Query results own their presentation text and source ranges.
 Hover, definition, completion, and semantic-token requests refresh the document
 analysis and publish diagnostics before returning their result.
 
+Each open document keeps the analysis of its imports between edits. The server
+reads the imported files again on each analysis and reuses the earlier import
+analysis only when their text, import resolution, library paths, and the
+document's imports are unchanged. Closing the document releases it.
+
 Source errors can leave independent hover, definition, completion, reference,
 and token facts available. Partial completion lists set `isIncomplete`.
 Completion edits replace the selected identifier range.
@@ -155,6 +160,8 @@ return no result until it analyzes again.
   complete coverage.
 - Rename validation is conservative. Syntax failures or diagnostics in a required
   root can prevent rename even when some references remain queryable.
+- An open document whose imports report diagnostics gets no import reuse. Each
+  edit then analyzes all of its imports again.
 - Workspace requests reanalyze roots on each request. Large workspaces can be slow.
   Exclude generated files and intentionally invalid fixtures with `excludePaths`.
 

@@ -304,7 +304,8 @@ not represented. Rename must reject these answers.
 `workspace.casa` aggregates owned answers across fresh snapshots, retains exact
 source revisions, and validates proposed rename bindings through reanalysis.
 Workspace discovery and LSP document versions stay outside the compiler products.
-The LSP stores `AnalysisSnapshot` values. Position-based queries convert through
+The LSP stores `AnalysisSnapshot` values and one `AnalysisCache` per open
+document. Position-based queries convert through
 the snapshot's retained sources and return owned answers. The caller must check
 document versions before applying results to newer text.
 
