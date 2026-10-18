@@ -1898,6 +1898,7 @@ impl FunctionPlanner {
             closure InstValue::LocalSet bytecode.push
             bytecode function.return_types self.prepare_results drop
             closure InstValue::LocalGet bytecode.push
+            function.return_types function.parameters.length self.state.checked plan_register_call
             InstValue::FnExec bytecode.push
             if owned then
                 closure InstValue::LocalGet bytecode.push
@@ -3256,6 +3257,30 @@ fn is_leaf_candidate
     true
 }
 
+# Each current Casa value has a word carrier, including indirect aggregate
+# addresses. Copy aggregate results additionally need hidden destination storage.
+# Keep that convention and signatures larger than the cache on the memory ABI.
+struct RegisterCallPlan derives std::Copy {
+    arguments: u64
+    results:   u64
+}
+
+fn plan_register_call
+    checked:$typechecker::CheckedProgram
+    argument_count:u64
+    returns:$std::List[common::Type]
+-> std::Option[RegisterCallPlan] {
+    if argument_count SCALAR_REGISTER_COUNT > returns.length SCALAR_REGISTER_COUNT > || then
+        std::Option[RegisterCallPlan]::None return
+    fi
+    for typ in returns.iter do
+        if typ checked.is_copy_aggregate then
+            std::Option[RegisterCallPlan]::None return
+        fi
+    done
+    returns.length argument_count RegisterCallPlan std::Option::Some
+}
+
 pub fn compile_checked
     checked:$typechecker::CheckedProgram
     sources:$lexer::SourceStore
@@ -3294,6 +3319,22 @@ pub fn compile_checked
     &does_function_name_precede names.sort_by
     for name in names.iter do
         name.as_str state.program.register_function
+        name.as_str checked
+            .get_store
+            .get_function
+            .unwrap = function
+        function.stack_effect.return_types function
+            .stack_effect
+            .parameters
+            .length checked plan_register_call
+        match
+            std::Option::Some(plan) => plan name.clone state
+                .program
+                .register_calls
+                .set
+            std::Option::None => {
+            }
+        end
     done
     for name in names.iter do
         name.clone FunctionWork::Checked = work
@@ -3495,7 +3536,7 @@ enum InstValue {
     # Functions
     FnCall(std::String)
     ExternCall(std::String)
-    FnExec
+    FnExec(std::Option[RegisterCallPlan])
     FnPush(std::String)
     FnReturn
     DropFn(std::String)
@@ -3663,6 +3704,8 @@ struct Emitter {
     frame_bytes:            u64
     arithmetic_error_label: u64
     env_overflow_label:     u64
+    register_results:       std::Option[u64]
+    register_calls:         std::Map[std::String RegisterCallPlan]
     native_calls:           std::Map[std::String common::NativeCallPlan]
     asm:                    std::String
     label_counter:          u64
@@ -3689,7 +3732,8 @@ impl Emitter {
         std::Map[std::String u64]::new std::List[std::String]::new
         std::Set[std::String]::new std::Map[std::String LeafTemplate]::new
         std::Map[std::String std::String]::new
-        0 header std::Map[std::String common::NativeCallPlan]::new 0 0 0 0 0 0 std::Option[common::Location]::None std::Map[std::String u64]::new sources Emitter
+        0 header std::Map[std::String common::NativeCallPlan]::new
+        std::Map[std::String RegisterCallPlan]::new std::Option[u64]::None 0 0 0 0 0 0 std::Option[common::Location]::None std::Map[std::String u64]::new sources Emitter
     }
 
     fn intern_string self:mut$Emitter value:$str -> u64 {
@@ -3941,7 +3985,8 @@ struct LeafTemplate {
 }
 
 # A register holds one distinct value in a suffix of the value stack. Copies
-# use separate registers. Calls, branches, and unsupported operations flush it.
+# use separate registers. Selected calls transfer the suffix in registers.
+# Other calls, branches, and unsupported operations flush it.
 struct ScalarStack {
     depth: u64
     first: u64
@@ -4236,7 +4281,7 @@ impl Emitter {
         f"fn_{label}:" self.line_string
         ".cfi_startproc" self.indent
         locations self.emit_entry_location
-        false locations bytecode self.emit_bytecode
+        name self.register_calls.get_copy_str false locations bytecode self.emit_bytecode
         self.emit_failure_calls
         ".cfi_endproc" self.indent
         f".size fn_{label}, .-fn_{label}" self.line_string
@@ -4305,7 +4350,7 @@ impl Emitter {
         "movq %rsp, %rbx" self.indent
         "leaq return_stack_top(%rip), %rsp" self.indent
         "call return_stack_guard_init" self.indent
-        true locations bytecode self.emit_bytecode
+        std::Option[RegisterCallPlan]::None true locations bytecode self.emit_bytecode
         "movq $60, %rax" self.indent
         "xorq %rdi, %rdi" self.indent
         "syscall" self.indent
@@ -4320,8 +4365,14 @@ impl Emitter {
         bytecode:$std::List[InstValue]
         locations:$std::List[common::Location]
         is_global:bool
+        call_plan:std::Option[RegisterCallPlan]
     {
         ScalarStack::new = cache
+        std::Option[u64]::None = self.register_results
+        if call_plan std::Option::Some(plan) is then
+            plan.arguments = cache.depth
+            plan.results std::Option::Some = self.register_results
+        fi
         0 = self.stack_offset
         0 = self.frame_bytes
         0 = self.arithmetic_error_label
@@ -4334,7 +4385,22 @@ impl Emitter {
             is_global cache InstValue::FnReturn self.emit_scalar_or_inst
             return
         fi
-        is_global cache bytecode.length 0 locations bytecode self.emit_instruction_range
+        0 = start: u64
+        if self.register_results.is_some then
+            # The first label is an entry marker, never a control-flow target.
+            # Frame setup and flag initialization must see the incoming suffix.
+            while start bytecode.length < do
+                start locations.get self.emit_location
+                start bytecode.get = instruction
+                1 += start
+                if instruction InstValue::Label is then
+                    is_global instruction self.emit_inst
+                    break
+                fi
+                is_global cache instruction self.emit_scalar_or_inst
+            done
+        fi
+        is_global cache bytecode.length start locations bytecode self.emit_instruction_range
         cache self.flush_scalar_stack
     }
 
@@ -4581,7 +4647,94 @@ impl Emitter {
         register
     }
 
+    # The closure record is in rax. Environment bookkeeping preserves all
+    # argument and result registers and restores the caller's active capture set.
+    fn emit_execute self:mut$Emitter {
+        self.sync_value_stack
+        "movq current_env(%rip), %rsi" self.indent
+        "movq env_sp(%rip), %rcx" self.indent
+        f"cmpq ${RETURN_STACK_SIZE}, %rcx" self.indent_string
+        "env_stack_overflow" "jge" self.emit_failure_jump
+        "movq %rsi, env_stack(%rcx)" self.indent
+        "addq $8, %rcx" self.indent
+        "movq %rcx, env_sp(%rip)" self.indent
+        "movq %rax, current_env(%rip)" self.indent
+        "movq (%rax), %rax" self.indent
+        "callq *%rax" self.indent
+        "movq env_sp(%rip), %rcx" self.indent
+        "subq $8, %rcx" self.indent
+        "movq %rcx, env_sp(%rip)" self.indent
+        "movq env_stack(%rcx), %rax" self.indent
+        "movq %rax, current_env(%rip)" self.indent
+    }
+
+    # Transfer a suffix using r8..r11 in bottom-to-top order. All four are
+    # caller-clobbered, so only the live values below the arguments are spilled.
+    # The same operation normalizes every explicit and implicit return.
+    fn prepare_register_transfer self:mut$Emitter cache:mut$ScalarStack count:u64 {
+        if cache.depth count > then
+            cache.depth count - = lower_count
+            0 = index: u64
+            while index lower_count < do
+                index cache.get_register self.emit_push
+                1 += index
+            done
+            cache.first lower_count + SCALAR_REGISTER_COUNT % = cache.first
+            count = cache.depth
+        fi
+        count cache self.refill_scalar_stack
+        0 = index: u64
+        while index count < do
+            index cache.get_register = source
+            index get_scalar_register = target
+            if source target != then
+                0 = target_index: u64
+                while target_index cache.get_register target != do
+                    1 += target_index
+                done
+                target source if target_index count < then "xchgq" else "movq" fi self.emit_binary_registers
+                target_index index cache.swap_registers
+            fi
+            1 += index
+        done
+        0 = cache.first
+        INITIAL_SCALAR_REGISTER_ORDER = cache.order
+    }
+
     fn emit_scalar_or_inst self:mut$Emitter inst:$InstValue cache:mut$ScalarStack is_global:bool {
+        if inst InstValue::FnCall(name) is then
+            if name self.register_calls.get_copy std::Option::Some(plan) is then
+                plan.arguments cache self.prepare_register_transfer
+                self.sync_value_stack
+                f"call fn_{name.as_str self.function_label}" self.indent_string
+                plan.results = cache.depth
+                return
+            fi
+        fi
+        if inst InstValue::FnExec(contract) is then
+            if contract std::Option::Some(plan) is then
+                1 cache self.refill_scalar_stack
+                cache.depth 1 - cache.get_register = closure
+                "%rax" closure "movq" self.emit_binary_registers
+                1 -= cache.depth
+                plan.arguments cache self.prepare_register_transfer
+                self.emit_execute
+                plan.results = cache.depth
+                return
+            fi
+        fi
+        if self.register_results std::Option::Some(result_count) is then
+            if inst InstValue::FnReturn is then
+                result_count cache self.prepare_register_transfer
+                is_global inst self.emit_inst
+                0 = cache.depth
+                return
+            fi
+            if inst InstValue::LocalsInit is inst InstValue::LocalsUninit is || then
+                is_global inst self.emit_inst
+                return
+            fi
+        fi
         if cache inst self.emit_scalar_inst ! then
             cache self.flush_scalar_stack
             is_global inst self.emit_inst
@@ -5911,27 +6064,8 @@ impl Emitter {
             }
             InstValue::ExternCall(call) => call self.emit_extern_call
             InstValue::FnExec => {
-                # Save the caller's active closure env on the env stack and switch
-                # current_env to the popped closure record so its body can access
-                # captured values via InstCaptureLoad. After the callee returns,
-                # restore the previous env.
                 "%rax" self.emit_pop
-                self.sync_value_stack
-                "movq current_env(%rip), %rsi" self.indent
-                "movq env_sp(%rip), %rcx" self.indent
-                f"cmpq ${RETURN_STACK_SIZE}, %rcx" self.indent_string
-                "env_stack_overflow" "jge" self.emit_failure_jump
-                "movq %rsi, env_stack(%rcx)" self.indent
-                "addq $8, %rcx" self.indent
-                "movq %rcx, env_sp(%rip)" self.indent
-                "movq %rax, current_env(%rip)" self.indent
-                "movq (%rax), %rax" self.indent
-                "callq *%rax" self.indent
-                "movq env_sp(%rip), %rcx" self.indent
-                "subq $8, %rcx" self.indent
-                "movq %rcx, env_sp(%rip)" self.indent
-                "movq env_stack(%rcx), %rax" self.indent
-                "movq %rax, current_env(%rip)" self.indent
+                self.emit_execute
             }
             InstValue::FnPush(fn_name) => {
                 f"leaq fn_{fn_name.as_str self.function_label}(%rip), %rax" self.indent_string
