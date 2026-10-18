@@ -45,12 +45,19 @@ modules the root imports, without the root's declarations. It then checks the
 root over a copy of that state and adds the imported-file facts to the index.
 `analyze_cached` keeps the import analysis in a caller-owned `AnalysisCache`.
 A later request reuses it when the root identity, base directory, library
-paths, imported file text, nested import resolution, and root import order are
+paths, imported file text, import resolution, and root import order are
 unchanged. Imported text is read again from overrides or disk for this check.
 Imports with diagnostics are checked together with the root, and the cache
 stays empty. Assembly always checks the root and its imports together, so its
 diagnostic order can differ from analysis.
 See [ADR-0179](adr/0179-analysis-reuses-a-verified-import-analysis.md).
+
+`AnalysisSnapshot::is_current` borrows a `CompilationInput` and tells whether
+analyzing it would produce the same snapshot. The input must pass validation
+and have the same root identity, root text, and library paths. Each import must
+resolve to the same file, or still to no file. Each resolved file must have the
+same text, read again from its override or from disk. A resolved file without
+text, such as a missing path-style import, makes the snapshot not current.
 
 `AssemblySource` exposes a shared borrow of its text and identifies its target,
 `Target::LinuxX86_64`. The caller writes and builds assembly and launches binaries.

@@ -117,7 +117,7 @@ The source-oriented facts of one compilation used to answer editor queries.
 _Avoid_: Checked operations, declaration-store snapshot
 
 **Parse-and-resolve boundary**:
-The private compiler boundary that keeps parser state internal and returns a source program plus diagnostics for semantic checking.
+The private compiler boundary that keeps parser state internal and returns a source program plus diagnostics for semantic checking. It also returns the import resolutions it used.
 _Avoid_: Parser result, resolver-owned parser
 
 **Compiler diagnostics schema**:
@@ -125,7 +125,7 @@ The data-only representation and flow for compiler diagnostics across lexer, par
 _Avoid_: Typechecker-only diagnostics refactor, phase-local error schema
 
 **Analysis snapshot**:
-The independent result of one analysis request. It owns a report with exact source text and diagnostics, plus an editor index with verified source facts.
+The independent result of one analysis request. It owns a report with exact source text and diagnostics, plus an editor index with verified source facts. Its import resolutions let a caller check that it is still current.
 _Avoid_: Shared compiler session, analysis result, global compiler result
 
 **Import analysis**:
