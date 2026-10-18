@@ -169,17 +169,24 @@ fn count_abi_class
     count
 }
 
+# Arguments stay in value stack slots above rbx until the call returns.
 struct NativePlanner {
     actions:         std::List[common::NativeAction]
     stack_arguments: std::List[ExternStackArgument]
     integer_index:   u64
     float_index:     u64
+    argument_offset: u64
 }
 
 impl NativePlanner {
     fn new -> NativePlanner {
-        0 0 std::List[ExternStackArgument]::new
+        0 0 0 std::List[ExternStackArgument]::new
         std::List[common::NativeAction]::new NativePlanner
+    }
+
+    fn argument_operand self:$NativePlanner parameter_index:u64 -> std::String {
+        parameter_index common::WORD_SIZE * self.argument_offset + = offset
+        f"{offset}(%rbx)"
     }
 
     fn append self:mut$NativePlanner instruction:std::String {
@@ -196,14 +203,14 @@ impl NativePlanner {
         ["%rdi", "%rsi", "%rdx", "%rcx", "%r8", "%r9"] = integer_registers
         ["%xmm0", "%xmm1", "%xmm2", "%xmm3", "%xmm4", "%xmm5", "%xmm6", "%xmm7"]
         = float_registers
-        parameter_index common::WORD_SIZE * = offset
+        parameter_index self.argument_operand = operand
         if builtin.is_float then
             if self.float_index 8 < then
                 self.float_index float_registers array::nth = register
                 if builtin common::BuiltinType::F32 == then
-                    f"movss {offset}(%r13), {register}" self.append
+                    f"movss {operand}, {register}" self.append
                 else
-                    f"movsd {offset}(%r13), {register}" self.append
+                    f"movsd {operand}, {register}" self.append
                 fi
                 1 += self.float_index
             else
@@ -213,7 +220,7 @@ impl NativePlanner {
         else
             if self.integer_index 6 < then
                 self.integer_index integer_registers array::nth = register
-                f"movq {offset}(%r13), {register}" self.append
+                f"movq {operand}, {register}" self.append
                 1 += self.integer_index
             else
                 false common::WORD_SIZE parameter_index ExternStackArgument
@@ -231,7 +238,6 @@ impl NativePlanner {
         ["%rdi", "%rsi", "%rdx", "%rcx", "%r8", "%r9"] = integer_registers
         ["%xmm0", "%xmm1", "%xmm2", "%xmm3", "%xmm4", "%xmm5", "%xmm6", "%xmm7"]
         = float_registers
-        parameter_index common::WORD_SIZE * = offset
         common::ExternAbiClass::Integer classes count_abi_class
         = required_integer_registers
         common::ExternAbiClass::Sse classes count_abi_class
@@ -240,7 +246,7 @@ impl NativePlanner {
             self.integer_index required_integer_registers + 6 <=
             self.float_index required_float_registers + 8 <= &&
         then
-            f"movq {offset}(%r13), %rax" self.append
+            f"movq {parameter_index self.argument_operand}, %rax" self.append
             0 = class_index: u64
             for abi_class in classes.iter do
                 class_index common::WORD_SIZE * = class_offset
@@ -283,9 +289,11 @@ impl NativePlanner {
         stack_slots
     }
 
+    # r13 is callee-saved, so the unwinder finds the Casa frame through it while
+    # rsp is realigned for the native call.
     fn plan_stack self:mut$NativePlanner {
-        # Build the native stack below the Casa arguments so pushes cannot overwrite sources.
-        "movq %r13, %rsp" self.append_literal
+        "movq %rsp, %r13" self.append_literal
+        ".cfi_def_cfa_register %r13" self.append_literal
         "andq $-16, %rsp" self.append_literal
         self.count_stack_slots = stack_slots
         if 0 stack_slots 2 % != then
@@ -293,27 +301,27 @@ impl NativePlanner {
         fi
         while self.stack_arguments.is_empty ! do
             self.stack_arguments.pop = argument
-            argument.parameter_index common::WORD_SIZE * = offset
+            argument.parameter_index self.argument_operand = operand
             if argument.is_aggregate then
                 argument.size common::WORD_SIZE u64::try_from.unwrap 1 - +
                 common::WORD_SIZE u64::try_from.unwrap / = argument_slots
                 argument_slots common::WORD_SIZE * = argument_size
                 f"subq ${argument_size}, %rsp" self.append
-                f"movq {offset}(%r13), %rax" self.append
+                f"movq {operand}, %rax" self.append
                 0 = slot_index: u64
                 while slot_index argument_slots < do
                     slot_index common::WORD_SIZE * = slot_offset
-                    f"movq {slot_offset}(%rax), %rbx" self.append
-                    f"movq %rbx, {slot_offset}(%rsp)" self.append
+                    f"movq {slot_offset}(%rax), %r11" self.append
+                    f"movq %r11, {slot_offset}(%rsp)" self.append
                     1 += slot_index
                 done
             else
-                f"pushq {offset}(%r13)" self.append
+                f"pushq {operand}" self.append
             fi
         done
     }
 
-    fn plan_register_result self:mut$NativePlanner classes:$std::List[common::ExternAbiClass] {
+    fn store_register_result self:mut$NativePlanner classes:$std::List[common::ExternAbiClass] {
         0 = return_integer_index: u64
         0 = return_float_index: u64
         0 = offset: u64
@@ -329,10 +337,10 @@ impl NativePlanner {
             fi
             common::WORD_SIZE += offset
         done
-        "pushq %r15" self.append_literal
     }
 
-    fn plan_result self:mut$NativePlanner return_type:$common::ExternAbiType {
+    # Returns the register that holds the Casa result value.
+    fn plan_result self:mut$NativePlanner return_type:$common::ExternAbiType -> str {
         return_type.passing match
             common::ExternAbiPassing::Scalar(builtin) => {
                 builtin match
@@ -348,12 +356,13 @@ impl NativePlanner {
                     _ => {
                     }
                 end
-                "pushq %rax" self.append_literal
+                "%rax"
             }
-            common::ExternAbiPassing::Registers(classes) => classes self.plan_register_result
-            common::ExternAbiPassing::Memory => {
-                "pushq %r15" self.append_literal
+            common::ExternAbiPassing::Registers(classes) => {
+                classes self.store_register_result
+                "%r15"
             }
+            common::ExternAbiPassing::Memory => "%r15"
         end
     }
 
@@ -365,11 +374,12 @@ impl NativePlanner {
         caller_owned_result:bool
     {
         if caller_owned_result then
-            "popq %r15" self.append_literal
+            "movq (%rbx), %r15" self.append_literal
+            common::WORD_SIZE = self.argument_offset
         elif result_type std::Option::Some(return_type) is then
             if return_type.passing common::ExternAbiPassing::Scalar(_) is ! then
                 return_type.size common::NativeAction::Allocate self.actions.push
-                "popq %r15" self.append_literal
+                "movq %rax, %r15" self.append_literal
             fi
         fi
         if result_type std::Option::Some(return_type) is then
@@ -379,38 +389,35 @@ impl NativePlanner {
             fi
         fi
 
-        "movq %rsp, %r13" self.append_literal
         0 = parameter_index: u64
         for parameter in parameters.iter do
             parameter_index parameter self.plan_parameter
             1 += parameter_index
         done
-
-        f"leaq {parameters.length common::WORD_SIZE *}(%r13), %r12"
-        self.append
         self.plan_stack
 
         f"call {symbol}" self.append
-        # Preserve the source slots while converting the native result.
         "movq %r13, %rsp" self.append_literal
+        ".cfi_def_cfa_register %rsp" self.append_literal
 
+        parameters.length common::WORD_SIZE * self.argument_offset + i64::try_from.unwrap = consumed
         if result_type std::Option::Some(return_type) is then
-            return_type self.plan_result
-        fi
-
-        if result_type std::Option::Some(_) is then
-            "popq %rax" self.append_literal
-            "movq %r12, %rsp" self.append_literal
-            "pushq %rax" self.append_literal
-        else
-            "movq %r12, %rsp" self.append_literal
+            return_type self.plan_result = register
+            common::WORD_SIZE -= consumed
+            if 0 consumed != then
+                f"leaq {consumed}(%rbx), %rbx" self.append
+            fi
+            f"movq {register}, (%rbx)" self.append
+        elif 0 consumed != then
+            f"leaq {consumed}(%rbx), %rbx" self.append
         fi
     }
 }
 
 # Classification is supplied once for a verified concrete signature. The plan
-# fixes all placements and normalization before use. A caller-owned aggregate
-# result consumes its destination address above the source arguments.
+# fixes all placements and normalization before use. It reads arguments from a
+# synchronized rbx and leaves rbx at the result. A caller-owned aggregate result
+# consumes its destination address above the source arguments.
 pub fn plan_native_call
     symbol:$str
     parameters:$std::List[common::ExternAbiType]
