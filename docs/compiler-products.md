@@ -324,7 +324,8 @@ not represented. Rename must reject these answers.
 source revisions, and validates proposed rename bindings through reanalysis.
 Workspace discovery and LSP document versions stay outside the compiler products.
 The LSP stores `AnalysisSnapshot` values and one `AnalysisCache` per open
-document. Position-based queries convert through
+document. Local queries use the stored snapshot while `is_current` holds.
+Position-based queries convert through
 the snapshot's retained sources and return owned answers. The caller must check
 document versions before applying results to newer text.
 

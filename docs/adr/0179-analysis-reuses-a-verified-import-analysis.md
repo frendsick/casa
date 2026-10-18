@@ -35,6 +35,10 @@ assembly does, and the cache stays empty. Assembly does not use two stages.
 The language server keeps one cache per open document and drops it when the
 document closes. Workspace reference and rename analyses use `analyze`.
 
+A snapshot records its library paths and import resolutions. Before a local
+query, the language server reuses the open document's snapshot when the root
+text, library paths, import resolutions, and imported text still match.
+
 ## Considered options
 
 - Keeping one combined analysis repeats the work for every imported module on

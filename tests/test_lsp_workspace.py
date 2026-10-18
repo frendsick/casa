@@ -90,6 +90,38 @@ def check_malformed_messages(binary):
             server.close()
 
 
+def check_query_reuse(binary):
+    """Queries reuse a current analysis and analyze again after an import changes."""
+    with tempfile.TemporaryDirectory(prefix="casa-query-reuse-") as temporary:
+        root = Path(temporary)
+        dependency = root / "dependency.casa"
+        document = root / "document.casa"
+        dependency.write_text("pub fn value -> i64 { 42 }\n")
+        document.write_text('import "dependency.casa" as dependency\ndependency::value drop\n')
+        server = Server(binary, root)
+
+        def hover():
+            published = len(server.notifications)
+            contents = server.query("hover", document, 1, 13)["result"]["contents"]["value"]
+            return contents, any(item.get("method") == "textDocument/publishDiagnostics"
+                                 and item["params"]["uri"] == document.as_uri()
+                                 for item in server.notifications[published:])
+
+        try:
+            server.open(document, document.read_text())
+            assert "i64" in hover()[0]
+            contents, analyzed = hover()
+            assert "i64" in contents and not analyzed, (contents, analyzed)
+            dependency.write_text('pub fn value -> str { "text" }\n')
+            contents, analyzed = hover()
+            assert "str" in contents and analyzed, (contents, analyzed)
+            server.open(dependency, "pub fn value -> bool { true }\n")
+            contents, analyzed = hover()
+            assert "bool" in contents and analyzed, (contents, analyzed)
+        finally:
+            server.close()
+
+
 def main(binary):
     with tempfile.TemporaryDirectory(prefix="casa workspace ") as temporary:
         root = Path(temporary)
@@ -248,6 +280,7 @@ def main(binary):
             writer.join()
             server.close()
     check_malformed_messages(binary)
+    check_query_reuse(binary)
     print("LSP transport and workspace tests passed")
 
 
