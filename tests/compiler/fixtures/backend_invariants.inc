@@ -1,4 +1,5 @@
 import "test" as test
+import "source_builder" as source_builder
 
 fn assert_invalid_reference instruction:InstValue {
     lexer::SourceStore::new = sources
@@ -77,8 +78,59 @@ pub fn test_escape_string {
     "NUL before octal digit" "\\0001" nul_then_digit.as_str
     escape_string.as_str test::assert_str_eq
 }
+
+fn check_inline_source source:$str -> typechecker::CheckedProgram {
+    "inline-cache.casa" source lexer::lex_source.into_parts = diagnostics = tokens
+    lexer::SourceStore::new = sources
+    source "inline-cache.casa" sources.add
+    sources diagnostics std::List[std::String]::new tokens source_builder::parse_and_resolve.into_parts
+    = parse_diagnostics = parsed
+    "cache fixture parses" parse_diagnostics.has_errors ! test::assert_true
+    parsed.unwrap typechecker::type_check.into_checked_program.unwrap
+}
+
+fn test_reusable_inline_plans {
+    "reusable inline plans retain one concrete candidate" test::test_start
+    "inline fn candidate value:i64 -> i64 { if value 0 < then value 1 - return fi value 1 + } 1 candidate drop"
+    check_inline_source = checked
+    lexer::SourceStore::new = sources
+    sources checked BackendPlanner::new = state
+    0 "candidate" "candidate" state.find_inline_plan.unwrap = first
+    state.label_counter = after_first
+    "branch plan allocates local labels" after_first 0 > test::assert_true
+    0 "candidate" "candidate" state.find_inline_plan.unwrap = second
+    "reused candidate allocates no new labels" after_first state.label_counter test::assert_eq
+    0 "candidate" state
+        .closure_targets
+        .defaults
+        .get_copy_str
+        .unwrap_or = context
+    context "candidate" "candidate" state.find_inline_plan.unwrap drop
+    "default context shares its plan" 1 state.inline_plans.length test::assert_eq
+    "reuse retains the same local extent" first.get.locals_count second.get.locals_count test::assert_eq
+    "reuse retains the same action count" first
+        .get
+        .instructions
+        .length second
+        .get
+        .instructions
+        .length test::assert_eq
+    "retained action accounting counts the plan once" first
+        .get
+        .instructions
+        .length state.inline_retained test::assert_eq
+    "inline fn recursive value:i64 -> i64 { if value 0 == then 0 return fi value 1 - recursive } 1 recursive drop"
+    check_inline_source = recursive
+    sources recursive BackendPlanner::new = rejected
+    "recursive candidate rejected" 0 "recursive" "recursive" rejected.find_inline_plan.is_none test::assert_true
+    rejected.label_counter = after_rejection
+    "negative plan reused" 0 "recursive" "recursive" rejected.find_inline_plan.is_none test::assert_true
+    "negative reuse does not plan labels" after_rejection rejected.label_counter test::assert_eq
+    "one bounded negative entry" 1 rejected.inline_plans.length test::assert_eq
+}
 test_sanitize_name
 test_escape_string
 test_invalid_machine_references
 test_invalid_static_references
+test_reusable_inline_plans
 test::test_summary

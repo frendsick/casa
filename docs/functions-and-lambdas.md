@@ -55,9 +55,10 @@ inline fn clamp value:i64 minimum:i64 maximum:i64 -> i64 {
 
 The compiler can expand resolved named calls, including branches and early
 returns. `inline` is a best-effort request. Recursive cycles, unsupported bodies,
-and exhausted compilation or code-size budgets retain ordinary calls. Unmarked
-functions skip this expansion pass. The existing small leaf optimization also
-applies to unmarked functions.
+and exhausted compilation or code-size budgets retain ordinary calls. Bodies
+with Or-patterns currently retain ordinary calls. Unmarked functions skip this
+expansion pass. The existing small leaf optimization also applies to unmarked
+functions.
 
 The modifier can appear on generic functions, methods, and trait methods with a
 default body. A trait method requirement and an extern declaration cannot be

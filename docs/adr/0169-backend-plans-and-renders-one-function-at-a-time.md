@@ -71,6 +71,46 @@ before lowering, so recursive calls can refer forward without recursively
 building another function buffer. Validate cross-function, pool, and runtime
 references before publishing complete assembly. Partial output remains private.
 
+### Bounded explicit inline expansion
+
+An `inline fn` declaration makes resolved named calls eligible for best-effort
+expansion. Semantic checking retains this flag on concrete function declarations.
+It does not select physical storage or change stack effects, ownership, borrowing,
+or cleanup. Generated closure bodies do not inherit the flag. Unmarked functions
+bypass the general expansion planner, while the existing eight-instruction leaf
+templates remain available.
+
+As an exception to immediate buffer release, the backend can retain a bounded
+set of private expansion plans for the current assembly request. A plan contains
+selected target actions before frame finalization, the complete local-storage
+reservation, and its local label range. Its identity includes the concrete symbol
+and the closure specialization context. Matching calls reuse the same immutable
+plan. Pending and rejected entries prevent recursive planning and repeated failed
+attempts. All entries are released when the request ends.
+
+Planning is limited to 64 candidates, eight nested plans, and 64 checked nodes
+per candidate, including branch and match-arm entries, nested pattern nodes, and
+pattern and constructor field work. Or-pattern candidates retain ordinary calls
+without expanding
+their alternatives for eligibility. A retained plan has at most 256 actions and
+512 local slots. The request retains at most 4,096 actions. Each caller can add at
+most 1,024 actions and 512 local slots through expansion.
+Exceeding a limit or encountering a planning cycle retains the ordinary call and
+its native-call plan. Unsupported bodies also retain their calls.
+
+Each insertion reserves fresh labels and local slots, including complete
+aggregate storage extents. It rewrites local returns to one fresh continuation,
+initializes cleanup flags for that invocation, and retains the hidden destination
+protocol for Copy aggregate results. Checked cleanup and borrow origins remain
+unchanged. Callee source locations survive expansion, and the continuation restores
+the caller location. Calls retained inside a reusable plan stay calls, including
+recursive fallbacks. Closure specialization continues to use the original capture
+record and its mutation state.
+
+The finalized caller still owns one physical instruction buffer. Reusable
+expansion plans do not form a whole-program machine product or a second semantic
+tree. They remain private target planning under the same backend entry point.
+
 The buffer earns its cost through frame finalization and inspectable target
 instructions. Direct text emission would need another way to size frames before
 writing prologues and returns. Discovering locals during lowering requires frame finalization before rendering. A whole-program machine product has no additional demonstrated

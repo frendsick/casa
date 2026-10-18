@@ -10,6 +10,7 @@ import "runtime" as runtime
 import "local_storage" as local_storage
 import "lexer" as lexer
 import "closure_targets" as closure_targets
+import "shared" as shared
 
 pub struct BytecodeFailure {
     pub message: std::String
@@ -27,6 +28,15 @@ pub enum AssemblyError {
 const ENUM_DISPATCH_MIN_ARMS 4
 const SHORT_COPY_LIMIT 64
 const LOCAL_AGGREGATE_BYTES: u64 4096
+
+# Independent limits bound request planning, retained actions, and caller growth.
+const MAX_INLINE_DEPTH: u64 8
+const MAX_INLINE_EXPANSION: u64 1024
+const MAX_INLINE_INSTRUCTIONS: u64 256
+const MAX_INLINE_LOCALS: u64 512
+const MAX_INLINE_NODES: u64 64
+const MAX_INLINE_PLANS: u64 64
+const MAX_INLINE_RETAINED: u64 4096
 
 enum StorageKind derives std::Copy {
     Heap
@@ -61,6 +71,10 @@ struct BackendPlanner {
     label_counter:   u64
     layouts:         common::LayoutPlanner
     closure_targets: closure_targets::Plan
+    inline_plans:    std::Map[std::String InlinePlanState]
+    inline_depth:    u64
+    inline_stops:    u64
+    inline_retained: u64
 }
 
 struct EnumDispatch {
@@ -86,6 +100,8 @@ struct FunctionPlanner {
     result_slot:      std::Option[u64]
     local_aggregates: LocalAggregates
     closure_context:  u64
+    inline_expansion: u64
+    inline_locals:    u64
 }
 
 struct ResolvedStructField {
@@ -121,6 +137,7 @@ fn resolve_struct_field
 impl BackendPlanner {
     fn new checked:$typechecker::CheckedProgram sources:$lexer::SourceStore -> BackendPlanner {
         checked.get_store = store
+        0 0 0 std::Map[std::String InlinePlanState]::new
         checked closure_targets::analyze
         store common::LayoutPlanner::new
         0
@@ -150,7 +167,7 @@ impl BackendPlanner {
 impl FunctionPlanner {
     fn new state:mut$BackendPlanner -> FunctionPlanner {
         state.layouts state.checked state.store.variables index_root_variable_map = locals_count = local_slots
-        state.closure_targets.root
+        0 0 state.closure_targets.root
         LocalAggregates::new
         std::Option[u64]::None
         std::Map[std::String u64]::new
@@ -165,6 +182,7 @@ impl FunctionPlanner {
 
     fn for_function state:mut$BackendPlanner function:$common::Function -> FunctionPlanner {
         state.layouts state.checked function.variables index_local_variable_list = locals_count = local_slots
+        0 0
         0 function.name state
             .closure_targets
             .defaults
@@ -2004,7 +2022,7 @@ impl FunctionPlanner {
                     .get
                     .symbol
                     .clone = symbol
-                bytecode symbol.as_str name self.compile_call_target
+                bytecode target symbol.as_str name self.compile_call_target
                 return
             fi
         fi
@@ -2012,13 +2030,14 @@ impl FunctionPlanner {
     }
 
     fn compile_call self:mut$FunctionPlanner name:$str bytecode:mut$std::List[InstValue] {
-        bytecode name name self.compile_call_target
+        bytecode 0 name name self.compile_call_target
     }
 
     fn compile_call_target
         self:mut$FunctionPlanner
         name:$str
         symbol:$str
+        context:u64
         bytecode:mut$std::List[InstValue]
     {
         if name self.compile_named_function then
@@ -2044,7 +2063,9 @@ impl FunctionPlanner {
                     .state
                     .store
                     .get_function
-                    .unwrap
+                    .unwrap = function
+                function.is_inline = eligible
+                function
                     .stack_effect
                     .return_types
                     .clone = returns
@@ -2061,6 +2082,11 @@ impl FunctionPlanner {
                     fi
                 else
                     bytecode returns self.prepare_results drop
+                fi
+                if eligible then
+                    if bytecode context symbol name self.try_inline_call then
+                        return
+                    fi
                 fi
                 symbol.to_str InstValue::FnCall bytecode.push
             fi
@@ -3186,6 +3212,374 @@ impl FunctionPlanner {
     }
 }
 
+# Each retained plan belongs to this backend request. It contains target actions
+# before frame finalization, including the complete local-storage reservation.
+struct InlineExpansion {
+    instructions: std::List[InstValue]
+    locals_count: u64
+    label_start:  u64
+    label_count:  u64
+}
+
+enum InlinePlanState {
+    Planning
+    Rejected
+    Ready(shared::Shared[InlineExpansion])
+}
+
+struct InlineBudget {
+    remaining: u64
+    store:     $common::SymbolStore
+}
+
+impl InlineBudget {
+    fn take self:mut$InlineBudget count:u64 -> bool {
+        if count self.remaining > then
+            false return
+        fi
+        count -= self.remaining
+        true
+    }
+}
+
+fn fits_inline_variant variant:$common::EnumVariant budget:mut$InlineBudget -> bool {
+    if variant.variant_name.as_str common::MATCH_WILDCARD == then
+        true return
+    fi
+    variant.enum_name budget
+        .store
+        .enums
+        .get
+        .unwrap = declaration
+    if variant.variant_name declaration.variant_types.get std::Option::Some(types) is then
+        if types.length budget.take ! then
+            false return
+        fi
+    fi
+    for child in variant.bindings.iter do
+        if budget child fits_inline_pattern ! then
+            false return
+        fi
+    done
+    true
+}
+
+fn fits_inline_pattern value:$common::PatternValue budget:mut$InlineBudget -> bool {
+    if 1 budget.take ! then
+        false return
+    fi
+    value match
+        # Do not expand or clone alternatives to decide physical eligibility.
+        common::PatternValue::Alternatives(_) => false return
+        common::PatternValue::Struct(struct_pattern) => {
+            struct_pattern.struct_name budget
+                .store
+                .structs
+                .get
+                .unwrap
+                .members
+                .length = fields
+            if fields budget.take ! then
+                false return
+            fi
+            for field in struct_pattern.bindings.iter do
+                if budget field.second fits_inline_pattern ! then
+                    false return
+                fi
+            done
+        }
+        common::PatternValue::EnumVariant(variant) => budget variant fits_inline_variant return
+        _ => {
+        }
+    end
+    true
+}
+
+fn fits_inline_node node:$semantic_body::Node budget:mut$InlineBudget -> bool {
+    node match
+        semantic_body::Node::Leaf(leaf) => {
+            leaf.action match
+                semantic_body::Action::PatternTest(variant _) => budget variant fits_inline_variant return
+                semantic_body::Action::Enum(variant _) => budget variant fits_inline_variant return
+                semantic_body::Action::Struct(declaration _) => declaration.members.length budget.take return
+                semantic_body::Action::StructFields(literal _) => literal.struct_name budget
+                    .store
+                    .structs
+                    .get
+                    .unwrap
+                    .members
+                    .length budget.take return
+                _ => {
+                }
+            end
+        }
+        semantic_body::Node::Conditional(value) => {
+            for branch in value.branches.iter do
+                if 1 budget.take ! then
+                    false return
+                fi
+                if budget branch.condition fits_inline_body ! then
+                    false return
+                fi
+                if budget branch.consequent fits_inline_body ! then
+                    false return
+                fi
+            done
+            if value.alternative std::Option::Some(alternative) is then
+                if budget alternative.body fits_inline_body ! then
+                    false return
+                fi
+            fi
+        }
+        semantic_body::Node::Loop(value) => {
+            if budget value.condition fits_inline_body ! then
+                false return
+            fi
+            if budget value.body fits_inline_body ! then
+                false return
+            fi
+        }
+        semantic_body::Node::Match(value) => {
+            for arm in value.arms.iter do
+                if 1 budget.take ! then
+                    false return
+                fi
+                if budget arm.pattern fits_inline_pattern ! then
+                    false return
+                fi
+                if budget arm.guard fits_inline_body ! then
+                    false return
+                fi
+                if budget arm.body fits_inline_body ! then
+                    false return
+                fi
+            done
+        }
+        semantic_body::Node::Region(value) => budget value.body fits_inline_body return
+        semantic_body::Node::Group(value) => budget value.body fits_inline_body return
+        semantic_body::Node::Array(value) => budget value.body fits_inline_body return
+        _ => {
+        }
+    end
+    true
+}
+
+fn fits_inline_body body:$semantic_body::Body budget:mut$InlineBudget -> bool {
+    for node in body.get_nodes.iter do
+        if 1 budget.take ! then
+            false return
+        fi
+        if budget node fits_inline_node ! then
+            false return
+        fi
+    done
+    true
+}
+
+fn plan_inline_body
+    state:mut$BackendPlanner
+    function:$common::Function
+    body:$semantic_body::Body
+    context:u64
+-> std::Option[InlineExpansion] {
+    state.label_counter = label_start
+    function state FunctionPlanner::for_function = compiler
+    if compiler.locals_count MAX_INLINE_LOCALS > then
+        std::Option[InlineExpansion]::None return
+    fi
+    if context 0 != then
+        context = compiler.closure_context
+    fi
+    body compiler.prepare_local_aggregates
+    std::List[InstValue]::new = instructions
+    instructions compiler.begin_results
+    for node in body.get_nodes.iter do
+        if compiler.has_failed instructions.length MAX_INLINE_INSTRUCTIONS > || then
+            std::Option[InlineExpansion]::None return
+        fi
+        instructions node compiler.compile_node
+    done
+    instructions compiler.finish_results
+    if compiler.locals_count MAX_INLINE_LOCALS > then
+        std::Option[InlineExpansion]::None return
+    fi
+    std::List[InstValue]::new = initialized
+    function.location.clone InstValue::Source initialized.push
+    # A loop can reuse the caller frame. Reset each invocation's cleanup state.
+    for flag in compiler.owner_flags.iter do
+        0 InstValue::Push initialized.push
+        flag.second copy InstValue::LocalSet initialized.push
+    done
+    instructions initialized.append
+    if initialized.length MAX_INLINE_INSTRUCTIONS > then
+        std::Option[InlineExpansion]::None return
+    fi
+    compiler.state.label_counter label_start - = label_count
+    label_count label_start compiler.locals_count initialized InlineExpansion std::Option::Some
+}
+
+impl BackendPlanner {
+    fn find_inline_plan
+        self:mut$BackendPlanner
+        name:$str
+        symbol:$str
+        context:u64
+    -> std::Option[shared::Shared[InlineExpansion]] {
+        if context 0 == then
+            0 name self
+                .closure_targets
+                .defaults
+                .get_copy_str
+                .unwrap_or = context
+        fi
+        f"{symbol}/{context}" = key
+        if key self.inline_plans.get std::Option::Some(cached) is then
+            cached match
+                InlinePlanState::Ready(plan) => plan.clone std::Option::Some return
+                InlinePlanState::Rejected => std::Option[shared::Shared[InlineExpansion]]::None return
+                InlinePlanState::Planning => {
+                    1 += self.inline_stops
+                    std::Option[shared::Shared[InlineExpansion]]::None return
+                }
+            end
+        fi
+        if self.inline_plans.length MAX_INLINE_PLANS >= then
+            std::Option[shared::Shared[InlineExpansion]]::None return
+        fi
+        if self.inline_depth MAX_INLINE_DEPTH >= then
+            1 += self.inline_stops
+            InlinePlanState::Rejected key self.inline_plans.set
+            std::Option[shared::Shared[InlineExpansion]]::None return
+        fi
+        self.checked = checked
+        name checked
+            .get_store
+            .get_function
+            .unwrap = function
+        if
+            function.captures.is_empty ! function.extern_symbol.is_some ||
+            function.variables.length MAX_INLINE_LOCALS > ||
+        then
+            InlinePlanState::Rejected key self.inline_plans.set
+            std::Option[shared::Shared[InlineExpansion]]::None return
+        fi
+        name checked.find_body.unwrap = body
+        checked.get_store MAX_INLINE_NODES InlineBudget = budget
+        if budget body fits_inline_body ! then
+            InlinePlanState::Rejected key self.inline_plans.set
+            std::Option[shared::Shared[InlineExpansion]]::None return
+        fi
+        InlinePlanState::Planning key.clone self.inline_plans.set
+        self.inline_stops = stops
+        1 += self.inline_depth
+        context body function self plan_inline_body = candidate
+        1 -= self.inline_depth
+        if candidate std::Option::Some(expansion) is then
+            if
+                self.inline_stops stops == self.inline_retained expansion.instructions.length + MAX_INLINE_RETAINED <= &&
+            then
+                expansion.instructions.length += self.inline_retained
+                expansion shared::Shared[InlineExpansion]::new = plan
+                plan.clone InlinePlanState::Ready key self.inline_plans.set
+                plan std::Option::Some return
+            fi
+        fi
+        InlinePlanState::Rejected key self.inline_plans.set
+        std::Option[shared::Shared[InlineExpansion]]::None
+    }
+}
+
+struct InlinePlacement {
+    locals_base:  u64
+    label_start:  u64
+    label_base:   u64
+    continuation: u64
+}
+
+impl InlinePlacement {
+    fn label self:$InlinePlacement original:u64 -> u64 {
+        original self.label_start - self.label_base +
+    }
+
+    fn remap self:$InlinePlacement instruction:$InstValue -> InstValue {
+        instruction match
+            InstValue::LocalGet(slot) => slot copy self.locals_base + InstValue::LocalGet
+            InstValue::LocalSet(slot) => slot copy self.locals_base + InstValue::LocalSet
+            InstValue::LocalAddress(slot) => slot copy self.locals_base + InstValue::LocalAddress
+            InstValue::AggregateLocal(slot size) => size copy slot copy self.locals_base + InstValue::AggregateLocal
+            InstValue::Label(label) => label copy self.label InstValue::Label
+            InstValue::Jump(label) => label copy self.label InstValue::Jump
+            InstValue::JumpNe(label) => label copy self.label InstValue::JumpNe
+            InstValue::JumpTable(targets fallback) => {
+                std::List[u64]::new = remapped
+                for target in targets.iter do
+                    target copy self.label remapped.push
+                done
+                fallback copy self.label remapped InstValue::JumpTable
+            }
+            InstValue::FnReturn => self.continuation InstValue::Jump
+            # Calls retained in the plan stay calls, including recursive fallback.
+            _ => instruction.clone
+        end
+    }
+}
+
+impl FunctionPlanner {
+    fn try_inline_call
+        self:mut$FunctionPlanner
+        name:$str
+        symbol:$str
+        context:u64
+        output:mut$std::List[InstValue]
+    -> bool {
+        if
+            name self
+                .state
+                .program
+                .templates
+                .has_str
+        then
+            false return
+        fi
+        if self.inline_expansion MAX_INLINE_EXPANSION >= then
+            false return
+        fi
+        if context symbol name self.state.find_inline_plan std::Option::Some(shared_plan) is then
+            shared_plan.get = plan
+            plan.instructions.length 2 + = count
+            if self.inline_expansion count + MAX_INLINE_EXPANSION > then
+                false return
+            fi
+            if self.inline_locals plan.locals_count + MAX_INLINE_LOCALS > then
+                false return
+            fi
+            self.locals_count = locals_base
+            plan.locals_count += self.locals_count
+            plan.locals_count += self.inline_locals
+            count += self.inline_expansion
+            self.state.label_counter = label_base
+            plan.label_count += self.state.label_counter
+            self.new_label label_base plan.label_start locals_base InlinePlacement = placement
+            common::empty_location = callsite
+            output.length = index
+            while index 0 != do
+                1 -= index
+                if index output.get InstValue::Source(location) is then
+                    location.clone = callsite
+                    break
+                fi
+            done
+            for instruction in plan.instructions.iter do
+                instruction placement.remap output.push
+            done
+            placement.continuation InstValue::Label output.push
+            callsite InstValue::Source output.push
+            true return
+        fi
+        false
+    }
+}
+
 fn finalize_frame
     instructions:std::List[InstValue]
     locals_count:u64
@@ -3632,7 +4026,7 @@ enum RoundingKind derives std::Copy {
     Round
 }
 
-enum InstValue {
+enum InstValue derives std::Clone {
     # Removed into the source table before instruction selection.
     Source(common::Location)
     # Stack

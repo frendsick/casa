@@ -1,5 +1,7 @@
 import "std" as std
 import "../../compiler/common.casa" as common
+import "../../compiler/build.casa" as build
+import "../../lib/os.casa" as os
 import "../../compiler/error.casa" as error
 import "../../compiler/products.casa" as products
 import "../../compiler/typechecker.casa" as typechecker
@@ -128,11 +130,136 @@ fn test_invalid_modifiers {
     "inline bodies are checked normally" invalid.into_checked_program.is_error test::assert_true
 }
 
+fn compile source:$str -> std::String {
+    error::Diagnostics::new = diagnostics
+    diagnostics source helpers::compile_test_source = assembly
+    source diagnostics.has_errors ! test::assert_true
+    assembly helpers::generated_assembly
+}
+
+fn run_source source:$str {
+    error::Diagnostics::new = diagnostics
+    diagnostics source helpers::compile_test_source = text
+    source diagnostics.has_errors ! test::assert_true
+    text products::Target::LinuxX86_64 swap products::AssemblySource::new = assembly
+    std::List[std::String]::new = libraries
+    "/tmp/casa_inline_runtime_test" = path
+    false libraries path assembly build::NativeDriver::new.compile_binary.unwrap drop
+    std::List[std::Bytes]::new = arguments
+    path arguments.push_str
+    arguments std::run_command = status
+    path.as_cstr.unwrap os::file::remove.unwrap drop
+    "inlined program preserves observable behavior" 0 status test::assert_eq
+}
+
+fn test_named_expansion {
+    "explicit_named_inline_expansion" test::test_start
+    "inline fn marked value:i64 -> i64 { if value 0 < then value 1 - return fi value 1 + } fn plain value:i64 -> i64 { if value 0 < then value 1 - return fi value 1 + } 1 marked print 2 marked print 3 plain print"
+    compile = assembly
+    "marked branch body expands" assembly.as_str "call fn_marked" str::contains ! test::assert_true
+    "unmarked branch body keeps its call" assembly.as_str "call fn_plain" str::contains test::assert_true
+    "inline fn make -> fn[i64 -> i64] { { = value if value 0 < then value 1 - return fi value 1 + } } 41 make exec drop"
+    compile = closure_assembly
+    false = found_call
+    for line in closure_assembly.as_str "\n" str::split.unwrap.iter do
+        if line.as_str "call fn_" str::contains line.as_str "lambda__" str::contains && then
+            true = found_call
+        fi
+    done
+    "generated branchful closure keeps its call" found_call test::assert_true
+}
+
+fn test_recursive_fallback {
+    "inline_recursive_fallback" test::test_start
+    "inline fn recursive value:i64 -> i64 { if value 0 == then 0 return fi value 1 - recursive } 2 recursive print"
+    compile = direct
+    "recursive candidate keeps a call" direct.as_str "call fn_recursive" str::contains test::assert_true
+    "inline fn first value:i64 -> i64 { if value 0 == then 0 return fi value 1 - second } inline fn second value:i64 -> i64 { if value 0 == then 0 return fi value 1 - first } 2 first print"
+    compile = mutual
+    "mutual recursive candidate keeps first call" mutual.as_str "call fn_first" str::contains test::assert_true
+    "mutual recursive candidate keeps second call" mutual.as_str "call fn_second" str::contains test::assert_true
+}
+
+fn test_expansion_budgets {
+    "inline_expansion_budgets" test::test_start
+    "inline fn large value:i64 -> i64 { value ".to_str = large
+    for _ in 70 0 std::Range::new do
+        "1 + " large.append
+    done
+    "} 0 large print" large.append
+    large.as_str compile = large_assembly
+    "source budget retains the ordinary call" large_assembly.as_str "call fn_large" str::contains test::assert_true
+    "inline fn branch value:i64 -> i64 { if value 0 < then value 1 - return fi value 1 + } fn run -> i64 { 0 ".to_str = repeated
+    for _ in 100 0 std::Range::new do
+        "branch " repeated.append
+    done
+    "} if run 100 != then \"expanded caller result\" panic fi" repeated.append
+    repeated.as_str compile = repeated_assembly
+    "caller expansion budget retains later calls" repeated_assembly.as_str "call fn_branch" str::contains test::assert_true
+    repeated.as_str run_source
+    "inline fn discard data:array[u8 1024] early:bool { if early then data drop return fi data drop } [".to_str = frame
+    for index in 1024 0 std::Range::new do
+        if index 0 != then
+            "," frame.append
+        fi
+        "0" frame.append
+    done
+    "] = data: array[u8 1024] ".to_str frame.append_string
+    for _ in 5 0 std::Range::new do
+        "true data discard " frame.append
+    done
+    frame.as_str compile = frame_assembly
+    "complete aggregate extent bounds caller frame growth" frame_assembly.as_str "call fn_discard" str::contains test::assert_true
+    frame.as_str run_source
+    "inline fn many_patterns value:i64 -> i64 { value match ".to_str = patterns
+    for index in 80 0 std::Range::new do
+        if index 0 != then
+            " | " patterns.append
+        fi
+        index.to_str patterns.append_string
+    done
+    " => 1 _ => 0 end } 79 many_patterns print" patterns.append
+    patterns.as_str compile = pattern_assembly
+    "large Or-pattern retains its ordinary call" pattern_assembly.as_str "call fn_many_patterns" str::contains test::assert_true
+}
+
+fn test_expanded_runtime {
+    "inline_reused_plan_runtime" test::test_start
+    for
+        source in [
+            "import \"lib/std.casa\" as std\n\ninline fn choose value:i64 -> i64 {\n    value 3 * = local\n    if local 0 < then local 1 - return fi\n    local 2 +\n}\nif -2 choose -7 != then \"early scalar return\" panic fi\n0 = total\n0 = index\nwhile index 10 < do\n    index choose += total\n    index 1 + choose += total\n    1 += index\ndone\nif total 340 != then \"reused branch slots and labels\" panic fi\nenum Color { A B C D E }\ninline fn select color:Color -> i64 {\n    color match\n        Color::A => { 10 return }\n        Color::B => { 20 return }\n        Color::C => { 30 return }\n        Color::D => { 40 return }\n        Color::E => { 50 return }\n    end\n}\n0 = sum\n0 = round\nwhile round 3 < do\n    Color::A select += sum\n    Color::B select += sum\n    Color::C select += sum\n    Color::D select += sum\n    Color::E select += sum\n    1 += round\ndone\nif sum 450 != then \"reused jump table labels\" panic fi\n",
+            "import \"lib/std.casa\" as std\nstruct Resource { count:ptr }\nimpl Resource {\n    fn drop self:mut$Resource {\n        unsafe { self.count load64 1 + self.count store64 }\n    }\n}\ninline fn visit counter:ptr branch:bool -> i64 {\n    if branch then\n        counter Resource = owner\n        if unsafe { counter load64 } 0 == then 5 return fi\n    fi\n    7\n}\nunsafe { 8 alloc } = counter\nunsafe { 0 counter store64 }\n0 = visit_sum\n0 = visit_index\nwhile visit_index 20 < do\n    visit_index 2 % 0 == counter visit += visit_sum\n    1 += visit_index\ndone\nif visit_sum 138 != then \"early return cleanup result\" panic fi\nif unsafe { counter load64 } 10 != then \"per-invocation cleanup flags\" panic fi\nunsafe { counter free }\n",
+            "import \"lib/std.casa\" as std\nstruct Pair derives std::Copy { pub first:i64 pub second:i64 }\ninline fn make_pair early:bool -> Pair {\n    if early then Pair { first: 11 second: 12 } return fi\n    Pair { first: 21 second: 22 }\n}\ntrue make_pair = early_pair\nfalse make_pair = normal_pair\nif early_pair.first 11 != normal_pair.second 22 != || then \"Copy result destinations\" panic fi\ninline fn borrow_pair left:$Pair right:$Pair early:bool -> $Pair {\n    if early then left return fi\n    right\n}\ntrue normal_pair early_pair borrow_pair = first_borrow\nfalse normal_pair early_pair borrow_pair = second_borrow\nif first_borrow.second 12 != second_borrow.first 21 != || then \"borrowed early results\" panic fi\nfn first -> i64 { if true then 11 return fi 0 }\nfn second -> i64 { if true then 22 return fi 0 }\ninline fn invoke callback:$fn[-> i64] -> i64 {\n    if true then callback exec return fi\n    0\n}\n&first = first_callback\n&second = second_callback\nif first_callback invoke 11 != second_callback invoke 22 != || then \"specialized context identity\" panic fi\nfn make start:i64 -> fn[-> i64] { move { 1 += start start } }\n5 make = counter_callback\nif counter_callback invoke 6 != counter_callback invoke 7 != || then \"original capture state survives inline wrapper\" panic fi\n",
+            "inline fn generic_choice[T] first:T second:T early:bool -> T {\n    if early then first return fi\n    second\n}\nif true 22 11 generic_choice 11 != false 22 11 generic_choice 22 != || then \"generic inline result\" panic fi\nstruct Value { pub number:i64 }\nimpl Value {\n    pub inline fn method_value self:$Value early:bool -> i64 {\n        if early then self.number return fi\n        self.number 1 +\n    }\n}\ntrait Number {\n    fn number self:$self -> i64\n    inline fn default_value self:$self -> i64 {\n        if self.number 0 < then 0 return fi\n        self.number 2 +\n    }\n}\nimpl Value:Number { fn number self:$Value -> i64 { self.number } }\n7 Value = value\nif true value.method_value 7 != false value.method_value 8 != || then \"inline method result\" panic fi\nif value.default_value 9 != then \"inline default result\" panic fi\n",
+        ].iter
+    do
+        source compile = assembly
+        for line in assembly.as_str "\n" str::split.unwrap.iter do
+            if line.as_str "call fn_" str::contains then
+                "branch helper expands" line.as_str "choose" str::contains ! test::assert_true
+                "jump-table helper expands" line.as_str "select" str::contains ! test::assert_true
+                "owned cleanup helper expands" line.as_str "visit" str::contains ! test::assert_true
+                "Copy result helper expands" line.as_str "make_pair" str::contains ! test::assert_true
+                "borrowed result helper expands" line.as_str "borrow_pair" str::contains ! test::assert_true
+                "specialized helper expands" line.as_str "invoke" str::contains ! test::assert_true
+                "generic helper expands" line.as_str "generic_choice" str::contains ! test::assert_true
+                "method helper expands" line.as_str "method_value" str::contains ! test::assert_true
+                "trait default helper expands" line.as_str "default_value" str::contains ! test::assert_true
+            fi
+        done
+        source run_source
+    done
+}
+
 pub fn run_tests {
     test_function_modifiers
     test_specializations_keep_eligibility
     test_closures_keep_their_own_eligibility
     test_invalid_modifiers
+    test_named_expansion
+    test_recursive_fallback
+    test_expansion_budgets
+    test_expanded_runtime
     test::test_summary
 }
 run_tests

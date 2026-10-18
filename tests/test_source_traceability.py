@@ -96,6 +96,39 @@ true sample::identity print
     assert run(str(root / "empty")) == ""
 
 
+def test_inline_traceability(compiler, root):
+    module = root / "inline.casa"
+    module.write_text("""pub inline fn choose value:i64 -> i64 {
+    if value 0 < then value 1 - return fi
+    value 1 +
+}
+""")
+    source = root / "inline-main.casa"
+    source.write_text(f'''import {json.dumps(str(module))} as sample
+-2 sample::choose print
+"\\n" print
+2 sample::choose print
+"\\n" print
+''')
+    binary = root / "inline-app"
+    run(compiler, str(source), "-o", str(binary), "--keep-asm")
+    assembly = Path(str(binary) + ".s").read_text()
+    assert "call fn___casa_0__choose" not in assembly
+    assert run(str(binary)) == "-3\n3\n"
+    root_symbol = next(line.split() for line in run(
+        "nm", "-S", "--defined-only", str(binary)).splitlines()
+        if line.endswith(" _start"))
+    start, size = int(root_symbol[0], 16), int(root_symbol[1], 16)
+    addresses = [int(match[1], 16) for match in re.finditer(
+        r"^\s*([0-9a-f]+):\s", run("objdump", "-d", str(binary)), re.MULTILINE)
+        if start <= int(match[1], 16) < start + size]
+    locations = set(run("addr2line", "-e", str(binary),
+                        *(hex(address) for address in addresses)).splitlines())
+    assert {f"{module}:{line}" for line in (2, 3)} <= locations, locations
+    assert {f"{source}:{line}" for line in range(2, 6)} <= locations, locations
+
+
 if __name__ == "__main__":
     with tempfile.TemporaryDirectory(prefix="casa source traceability ") as temporary:
         test_traceability(str(Path(sys.argv[1]).resolve()), Path(temporary))
+        test_inline_traceability(str(Path(sys.argv[1]).resolve()), Path(temporary))
