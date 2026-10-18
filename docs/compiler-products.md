@@ -108,8 +108,10 @@ those removed by optimization, have no line record.
 
 Generated helpers without a source location and the fixed runtime use the
 synthetic file `<casa-generated>`. Line tables map addresses to source locations.
-They do not describe local variable storage or provide stack unwinding. Casa
-return addresses remain on the `%r14` return stack.
+They do not describe local variable storage. Return addresses and locals live on
+`%rsp`, and generated functions and runtime helpers carry call frame
+information, so debuggers and profilers can unwind Casa frames. Values live
+behind `%rbx`, which unwinders do not need.
 
 ## Source construction and semantic checking
 
