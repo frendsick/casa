@@ -41,7 +41,7 @@ See [Generics and Traits](traits.md) for type parameters and trait bounds.
 ## Inline functions
 
 Prefix a function definition with `inline` to make its calls eligible for bounded
-inline expansion:
+inline expansion. `inline` is reserved and cannot be used as an identifier.
 
 ```casa
 inline fn clamp value:i64 minimum:i64 maximum:i64 -> i64 {
