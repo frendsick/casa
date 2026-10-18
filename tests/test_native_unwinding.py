@@ -51,7 +51,7 @@ def main(compiler):
                             ["write_all", "allocation_failure", "heap_alloc", "fn_fail", "fn_outer", "_start"])
 
         source = ("fn increment value:i64 -> i64 { value 1 + }\n"
-                  "fn fail value:i64 -> i64 { value &increment exec }\n"
+                  "fn fail value:i64 -> i64 { 1 = offset { value offset + } exec }\n"
                   "fn outer { 1 fail print } outer")
         check_backtrace(compiler, root, "environment", source,
                         ["write_all", "env_stack_overflow", "fn_fail", "fn_outer", "_start"],
