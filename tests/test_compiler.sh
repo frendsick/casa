@@ -40,7 +40,7 @@ test_category() {
         test/test_typechecker|test/test_underflow_messages|error/*)
             echo compiler_analysis
             ;;
-        test/test_closure_targets|test/test_products|test/test_native_build|test/test_scalar_backend|test/test_bytecode|test/test_document|test/test_emitter|test/test_error|\
+        test/test_closure_targets|test/test_products|test/test_native_build|test/test_inline_functions|test/test_scalar_backend|test/test_bytecode|test/test_document|test/test_emitter|test/test_error|\
         test/test_extern|test/test_game_of_life|test/test_raylib|\
         test/test_lsp|test/test_workspace|test/test_module_identity|test/test_modules|test/test_qualified_import)
             echo compiler_integration

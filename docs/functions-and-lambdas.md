@@ -38,6 +38,39 @@ early. Every exit path must produce the declared outputs.
 
 See [Generics and Traits](traits.md) for type parameters and trait bounds.
 
+## Inline functions
+
+Prefix a function definition with `inline` to make its calls eligible for bounded
+inline expansion:
+
+```casa
+inline fn clamp value:i64 minimum:i64 maximum:i64 -> i64 {
+    if value minimum < then minimum return fi
+    if value maximum > then maximum return fi
+    value
+}
+
+10 0 12 clamp print # 10
+```
+
+The compiler can expand resolved named calls, including branches and early
+returns. `inline` is a best-effort request. Recursive cycles, unsupported bodies,
+and exhausted compilation or code-size budgets retain ordinary calls. Unmarked
+functions skip this expansion pass. The existing small leaf optimization also
+applies to unmarked functions.
+
+The modifier can appear on generic functions, methods, and trait methods with a
+default body. A trait method requirement and an extern declaration cannot be
+`inline`. Use `pub inline fn` for a public definition. With an unsafe function,
+both `inline unsafe fn` and `unsafe inline fn` are accepted. Calls still require
+an unsafe boundary.
+
+Inlining preserves argument order, checked failures, borrowing, and destruction.
+Taking a function reference remains valid and does not promise that indirect
+calls will be expanded. Generated closure bodies do not inherit inline eligibility
+from their enclosing function. Passed-in callbacks retain their own eligibility.
+See [the inline example](../examples/inline_functions.casa).
+
 ## Root and termination contracts
 
 Operations outside declarations form the executable root body. Casa does not

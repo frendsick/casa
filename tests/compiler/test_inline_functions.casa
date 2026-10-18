@@ -1,0 +1,136 @@
+import "std" as std
+import "../../compiler/common.casa" as common
+import "../../compiler/error.casa" as error
+import "../../compiler/products.casa" as products
+import "../../compiler/typechecker.casa" as typechecker
+import "../../lib/test.casa" as test
+import "helpers.casa" as helpers
+
+fn check source:$str -> typechecker::CheckedProgram {
+    error::Diagnostics::new = diagnostics
+    diagnostics source helpers::typecheck_test_source = result
+    source diagnostics.has_errors ! test::assert_true
+    source result.get_diagnostics.has_errors ! test::assert_true
+    result.into_checked_program.unwrap
+}
+
+fn test_function_modifiers {
+    "inline_function_modifiers" test::test_start
+    "inline" common::keyword_from_str.unwrap = keyword
+    "keyword spelling" "inline" keyword.format_source test::assert_str_eq
+    for
+        source in [
+            "inline fn marked value:i64 -> i64 { value } 42 marked drop",
+            "pub inline fn marked value:i64 -> i64 { value } 42 marked drop",
+            "inline unsafe fn marked value:i64 -> i64 { value } unsafe { 42 marked drop }",
+            "unsafe inline fn marked value:i64 -> i64 { value } unsafe { 42 marked drop }",
+            "pub unsafe inline fn marked value:i64 -> i64 { value } unsafe { 42 marked drop }",
+        ].iter
+    do
+        source check = checked
+        "marked metadata retained" "marked" checked
+            .get_store
+            .get_function
+            .unwrap
+            .is_inline test::assert_true
+    done
+    "fn plain value:i64 -> i64 { value } 42 plain drop" check = checked
+    "unmarked metadata remains false" "plain" checked
+        .get_store
+        .get_function
+        .unwrap
+        .is_inline ! test::assert_true
+}
+
+fn test_specializations_keep_eligibility {
+    "inline_specialization_metadata" test::test_start
+    "inline fn identity[T] value:T -> T { value } 42 identity drop true identity drop" check = checked
+    "two concrete specializations" 2 checked.get_function_names.length test::assert_eq
+    for name in checked.get_function_names.iter do
+        "generic specialization retains inline" name.as_str checked
+            .get_store
+            .get_function
+            .unwrap
+            .is_inline test::assert_true
+    done
+    "struct Value { pub value:i64 } impl Value { pub inline fn get self:$Value -> i64 { self.value } } 42 Value = value value.get drop"
+    check = method_checked
+    "method retains inline" "Value::get" method_checked
+        .get_store
+        .get_function
+        .unwrap
+        .is_inline test::assert_true
+    "trait Number { fn number self:$self -> i64 inline fn increment self:$self -> i64 { self.number 1 + } } struct Value { pub value:i64 } impl Value:Number { fn number self:$Value -> i64 { self.value } } 41 Value = value value.increment drop"
+    check = default_checked
+    false = found_default
+    for name in default_checked.get_function_names.iter do
+        if name.as_str "increment" str::contains then
+            "trait default specialization retains inline" name.as_str default_checked
+                .get_store
+                .get_function
+                .unwrap
+                .is_inline test::assert_true
+            true = found_default
+        fi
+    done
+    "trait default was specialized" found_default test::assert_true
+}
+
+fn test_closures_keep_their_own_eligibility {
+    "inline_closure_eligibility" test::test_start
+    "inline fn make -> fn[i64 -> i64] { { 1 + } } 41 make exec drop" check = generated
+    false = found_closure
+    for name in generated.get_function_names.iter do
+        if name.as_str "lambda__" str::starts_with then
+            "generated closure does not inherit inline" name.as_str generated
+                .get_store
+                .get_function
+                .unwrap
+                .is_inline ! test::assert_true
+            true = found_closure
+        fi
+    done
+    "generated closure remains in checked program" found_closure test::assert_true
+    "fn callback value:i64 -> i64 { value 1 + } inline fn apply operation:fn[i64 -> i64] value:i64 -> i64 { value operation exec } 41 &callback apply drop"
+    check = passed
+    "passed callback does not inherit inline" "callback" passed
+        .get_store
+        .get_function
+        .unwrap
+        .is_inline ! test::assert_true
+}
+
+fn test_invalid_modifiers {
+    "invalid_inline_modifiers" test::test_start
+    for
+        source in [
+            "inline inline fn repeated { }",
+            "unsafe unsafe fn repeated { }",
+            "extern inline fn native",
+            "inline extern fn native",
+            "inline struct Value { value:i64 }",
+            "trait Required { inline fn required self:$self -> i64 }",
+            "inline fn no_body -> i64",
+        ].iter
+    do
+        source.to_str "inline.casa".to_str products::SourceUnit products::syntax.unwrap = result
+        source result
+            .get_report
+            .get_diagnostics
+            .has_errors test::assert_true
+    done
+    error::Diagnostics::new = diagnostics
+    diagnostics "inline unsafe fn unsafe_value -> i64 { 42 } unsafe_value drop" helpers::typecheck_test_source = result
+    result.get_diagnostics.clone diagnostics.merge
+    diagnostics "inline does not weaken unsafe calls" "unsafe" helpers::assert_error_contains
+    error::Diagnostics::new = body_diagnostics
+    body_diagnostics "inline fn invalid -> i64 { true } invalid drop" helpers::typecheck_test_source = invalid
+    "inline bodies are checked normally" invalid.into_checked_program.is_error test::assert_true
+}
+
+pub fn run_tests {
+    test_function_modifiers
+    test_specializations_keep_eligibility
+    test_closures_keep_their_own_eligibility
+    test_invalid_modifiers
+}

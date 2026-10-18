@@ -337,7 +337,8 @@ not apply to lambdas or match-arm blocks.
 ### Wrapped form
 
 When the function signature would exceed 100 characters, wrap as follows.
-Keep `pub`, [unsafe](functions-and-lambdas.md#unsafe-boundaries), or `extern` before `fn` on the first line.
+Keep `pub`, `inline`, [unsafe](functions-and-lambdas.md#unsafe-boundaries), or
+`extern` before `fn` on the first line.
 
 - `fn name` alone on the first line
 - Each parameter on its own line, indented 4 spaces, `name:type` compact
