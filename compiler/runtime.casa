@@ -1,8 +1,10 @@
 # Fixed Linux x86-64 runtime, embedded by normal compilation.
-# Language helpers return through r14. Internal allocator entries use native call/ret.
+# Helpers use native call/ret on the return stack and preserve the value stack
+# pointer in rbx.
 pub const HEAP_GROWTH_SIZE 67108864
 pub const ASSEMBLY ".equ CASA_RETURN_STACK_SIZE, 1048576
 .equ CASA_RETURN_STACK_GUARD_SIZE, 65536
+.equ CASA_SIGNAL_STACK_SIZE, 65536
 .equ CASA_PAGE_SIZE, 4096
 .equ CASA_SMALL_ALLOC_LIMIT, 512
 .equ CASA_HEAP_CHUNK_HEADER_SIZE, 16
@@ -14,10 +16,11 @@ pub const ASSEMBLY ".equ CASA_RETURN_STACK_SIZE, 1048576
 .equ CASA_MPROTECT_PROT_NONE, 0
 .equ CASA_RT_SIGACTION_SYSCALL, 13
 .equ CASA_RT_SIGRETURN_SYSCALL, 15
+.equ CASA_SIGALTSTACK_SYSCALL, 131
 .equ CASA_SIGSEGV, 11
 .equ CASA_SIGSET_SIZE, 8
-# SA_SIGINFO | SA_RESTORER | SA_RESETHAND
-.equ CASA_GUARD_SIGACTION_FLAGS, 0x84000004
+# SA_SIGINFO | SA_RESTORER | SA_ONSTACK | SA_RESETHAND
+.equ CASA_GUARD_SIGACTION_FLAGS, 0x8C000004
 .equ CASA_SIGINFO_ADDRESS_OFFSET, 16
 .equ CASA_WRITE_SYSCALL, 1
 .equ CASA_EXIT_SYSCALL, 60
@@ -27,11 +30,14 @@ pub const ASSEMBLY ".equ CASA_RETURN_STACK_SIZE, 1048576
 .equ CASA_FAILURE_STATUS, 1
 
 .section .bss
-# Accesses past the return stack fault in the guard region. The emitter checks
-# reservations that could skip past it.
+# The return stack grows down from return_stack_top. Accesses below it fault in
+# the guard region. The emitter checks reservations that could skip past it.
 .balign CASA_PAGE_SIZE
-return_stack: .skip CASA_RETURN_STACK_SIZE
 return_stack_guard: .skip CASA_RETURN_STACK_GUARD_SIZE
+return_stack: .skip CASA_RETURN_STACK_SIZE
+return_stack_top:
+# The guard handler cannot run on an overflowed return stack.
+signal_stack: .skip CASA_SIGNAL_STACK_SIZE
 env_stack: .skip CASA_RETURN_STACK_SIZE
 env_sp: .skip 8
 current_env: .skip 8
@@ -65,17 +71,9 @@ allocation_failure_msg: .ascii \"fatal: allocation failed\\n\"
 # Each mmap chunk starts with the previous chunk and its end address.
 # Small blocks use exact-size bins. Larger free blocks are ordered by address
 # for first-fit reuse, splitting, and coalescing of adjacent large blocks.
-# heap_alloc: requested byte count in %rdi, pushes an aligned pointer.
+# heap_alloc: byte count in rdi, aligned pointer in rax.
 heap_alloc:
-    popq -8(%r14)
-    call heap_alloc_native
-    subq $8, %r14
-    pushq %rax
-    pushq (%r14)
-    ret
-
-# Internal native helper: byte count in rdi, aligned pointer in rax.
-heap_alloc_native:
+    .cfi_startproc
     testq %rdi, %rdi
     jz .Lheap_alloc_null
     movq %rdi, %rax
@@ -151,12 +149,16 @@ heap_alloc_native:
     jbe .Lheap_alloc_commit
 .Lheap_alloc_map:
     pushq %rsi
+    .cfi_adjust_cfa_offset 8
     pushq %r10
+    .cfi_adjust_cfa_offset 8
     pushq %r11
+    .cfi_adjust_cfa_offset 8
     pushq %rax
+    .cfi_adjust_cfa_offset 8
     movq %rax, %rsi
     addq $CASA_HEAP_CHUNK_HEADER_SIZE+8, %rsi
-    jc .Lheap_alloc_oom
+    jc .Lheap_alloc_map_size_oom
     cmpq $CASA_HEAP_GROWTH_SIZE, %rsi
     jae .Lheap_alloc_map_size_ready
     movq $CASA_HEAP_GROWTH_SIZE, %rsi
@@ -169,23 +171,27 @@ heap_alloc_native:
     movq $CASA_MMAP_SYSCALL, %rax
     syscall
     popq %rdx
+    .cfi_adjust_cfa_offset -8
     testq %rax, %rax
-    jz .Lheap_alloc_oom
+    jz .Lheap_alloc_map_oom
     cmpq $-4095, %rax
-    jae .Lheap_alloc_oom
+    jae .Lheap_alloc_map_oom
     movq heap_chunks(%rip), %r8
     movq %r8, (%rax)
     movq %rax, %rcx
     addq %rsi, %rcx
-    jc .Lheap_alloc_oom
+    jc .Lheap_alloc_map_oom
     movq %rcx, 8(%rax)
     movq %rax, heap_chunks(%rip)
     movq %rcx, heap_end(%rip)
     leaq CASA_HEAP_CHUNK_HEADER_SIZE(%rax), %rcx
     movq %rdx, %rax
     popq %r11
+    .cfi_adjust_cfa_offset -8
     popq %r10
+    .cfi_adjust_cfa_offset -8
     popq %rsi
+    .cfi_adjust_cfa_offset -8
     movq %rax, %r8
     addq $8, %r8
     addq %rcx, %r8
@@ -197,27 +203,33 @@ heap_alloc_native:
 .Lheap_alloc_null:
     xorq %rax, %rax
     ret
+.Lheap_alloc_map_size_oom:
+    .cfi_def_cfa_offset 40
+    addq $8, %rsp
+    .cfi_adjust_cfa_offset -8
+.Lheap_alloc_map_oom:
+    .cfi_def_cfa_offset 32
+    addq $24, %rsp
+    .cfi_adjust_cfa_offset -24
 .Lheap_alloc_oom:
+    call allocation_failure
+    ud2
+    .cfi_endproc
+
+allocation_failure:
+    .cfi_startproc
     movq $CASA_STDERR_FD, %rdi
     leaq allocation_failure_msg(%rip), %rsi
     movq $allocation_failure_msg_len, %rdx
-    addq $8, %r14
     call write_all
-.Lruntime_allocation_failure_write_done:
     movq $CASA_EXIT_SYSCALL, %rax
     movq $CASA_FAILURE_STATUS, %rdi
     syscall
+    .cfi_endproc
 
-# heap_free: pointer in %rdi, returns the complete allocation for reuse.
+# heap_free: allocation in rdi, returns the complete allocation for reuse.
 heap_free:
-    popq -8(%r14)
-    call heap_free_native
-    subq $8, %r14
-    pushq (%r14)
-    ret
-
-# Internal native helper: allocation in rdi, no value-stack result.
-heap_free_native:
+    .cfi_startproc
     testq %rdi, %rdi
     jz .Lheap_free_return
     leaq -8(%rdi), %rax
@@ -273,11 +285,12 @@ heap_free_native:
     movq %rcx, 8(%r8)
 .Lheap_free_return:
     ret
+    .cfi_endproc
 
-# write_all: fd in %rdi, buffer in %rsi, byte length in %rdx, returns via r14.
+# write_all: fd in rdi, buffer in rsi, byte length in rdx.
 # Output operations cannot report errors, so an unrecoverable write exits unsuccessfully.
 write_all:
-    popq -8(%r14)
+    .cfi_startproc
 .Lwrite_all_next:
     testq %rdx, %rdx
     jz .Lwrite_all_return
@@ -291,17 +304,16 @@ write_all:
     subq %rax, %rdx
     jmp .Lwrite_all_next
 .Lwrite_all_return:
-    subq $8, %r14
-    pushq (%r14)
     ret
 .Lwrite_all_fail:
     movq $CASA_EXIT_SYSCALL, %rax
     movq $CASA_FAILURE_STATUS, %rdi
     syscall
+    .cfi_endproc
 
-# print_int: value in %rdi, returns via r14
+# print_int: value in rdi.
 print_int:
-    popq -8(%r14)
+    .cfi_startproc
     movq %rdi, %rax
     leaq print_buf+32(%rip), %rsi
     testq %rax, %rax
@@ -331,16 +343,12 @@ print_int:
     leaq print_buf+32(%rip), %rdx
     subq %rsi, %rdx
     movq $CASA_STDOUT_FD, %rdi
-    addq $8, %r14
-    call write_all
-.Lruntime_print_int_write_done:
-    subq $8, %r14
-    pushq (%r14)
-    ret
+    jmp write_all
+    .cfi_endproc
 
-# print_uint: value in %rdi, returns via r14
+# print_uint: value in rdi.
 print_uint:
-    popq -8(%r14)
+    .cfi_startproc
     movq %rdi, %rax
     leaq print_buf+32(%rip), %rsi
     testq %rax, %rax
@@ -361,36 +369,28 @@ print_uint:
     leaq print_buf+32(%rip), %rdx
     subq %rsi, %rdx
     movq $CASA_STDOUT_FD, %rdi
-    addq $8, %r14
-    call write_all
-.Lruntime_print_uint_write_done:
-    subq $8, %r14
-    pushq (%r14)
-    ret
+    jmp write_all
+    .cfi_endproc
 
-# print_str: string pointer in %rdi (points to length prefix), returns via r14
+# print_str: string pointer in rdi (points to length prefix).
 print_str:
-    popq -8(%r14)
+    .cfi_startproc
     movq (%rdi), %rdx
     leaq 8(%rdi), %rsi
     movq $CASA_STDOUT_FD, %rdi
-    addq $8, %r14
-    call write_all
-.Lruntime_print_str_write_done:
-    subq $8, %r14
-    pushq (%r14)
-    ret
+    jmp write_all
+    .cfi_endproc
 
-# encode_char: Unicode scalar in %rdi, UTF-8 bytes in print_buf.
-# Returns the buffer in %rsi and its byte length in %rdx via r14.
+# encode_char: Unicode scalar in rdi, UTF-8 bytes in print_buf.
+# Returns the buffer in rsi and its byte length in rdx.
 encode_char:
-    popq -8(%r14)
+    .cfi_startproc
     leaq print_buf(%rip), %rsi
     cmpq $127, %rdi
     ja .Lec_two
     movb %dil, (%rsi)
     movq $1, %rdx
-    jmp .Lec_return
+    ret
 .Lec_two:
     cmpq $2047, %rdi
     ja .Lec_three
@@ -403,7 +403,7 @@ encode_char:
     orb $128, %al
     movb %al, 1(%rsi)
     movq $2, %rdx
-    jmp .Lec_return
+    ret
 .Lec_three:
     cmpq $65535, %rdi
     ja .Lec_four
@@ -421,7 +421,7 @@ encode_char:
     orb $128, %al
     movb %al, 2(%rsi)
     movq $3, %rdx
-    jmp .Lec_return
+    ret
 .Lec_four:
     movq %rdi, %rax
     shrq $18, %rax
@@ -442,15 +442,13 @@ encode_char:
     orb $128, %al
     movb %al, 3(%rsi)
     movq $4, %rdx
-.Lec_return:
-    subq $8, %r14
-    pushq (%r14)
     ret
+    .cfi_endproc
 
-# primitive_to_str: value in %rdi, kind in %r8, pushes an owned String.
+# primitive_to_str: value in rdi, kind in r8, owned String in rax.
 # Kinds: 0 signed integer, 1 unsigned integer, 2 bool, 3 char, 4 cstr.
 primitive_to_str:
-    popq -8(%r14)
+    .cfi_startproc
     cmpq $2, %r8
     je .Lpts_bool
     cmpq $3, %r8
@@ -501,9 +499,7 @@ primitive_to_str:
     movq $5, %rdx
     jmp .Lpts_copy
 .Lpts_char:
-    addq $8, %r14
     call encode_char
-.Lruntime_pts_char_encoded:
     jmp .Lpts_copy
 .Lpts_cstr:
     movq %rdi, %rsi
@@ -517,57 +513,55 @@ primitive_to_str:
     movq %rax, %rdx
     subq %rsi, %rdx
 .Lpts_copy:
-    pushq %rsi
-    pushq %rdx
     movq %rdx, %rdi
     addq $9, %rdi
-    jc .Lheap_alloc_oom
-    addq $8, %r14
+    jc .Lpts_oom
+    pushq %rsi
+    .cfi_adjust_cfa_offset 8
+    pushq %rdx
+    .cfi_adjust_cfa_offset 8
     call heap_alloc
-.Lruntime_primitive_string_data_done:
-    popq %r13
+    movq %rax, %r13
     popq %rdx
+    .cfi_adjust_cfa_offset -8
     popq %rsi
+    .cfi_adjust_cfa_offset -8
     movq %rdx, (%r13)
     leaq 8(%r13), %rdi
     movq %rdx, %rcx
     rep movsb
     movb $0, (%rdi)
     movq $8, %rdi
-    addq $8, %r14
     call heap_alloc
-.Lruntime_primitive_string_wrapper_done:
-    popq %rax
     movq %r13, (%rax)
-    pushq %rax
-    subq $8, %r14
-    pushq (%r14)
     ret
+.Lpts_oom:
+    call allocation_failure
+    ud2
+    .cfi_endproc
 
-# str_concat consumes N owned String wrappers and pushes one owned String.
+# str_concat consumes rdi owned String wrappers at the value stack top in rbx.
+# Returns one owned String in rax. The caller releases the consumed slots.
 str_concat:
-    popq -8(%r14)
+    .cfi_startproc
     movq %rdi, %r15
-    movq %rsp, %r12
     xorq %r10, %r10
     xorq %rcx, %rcx
 .Lsc_len_loop:
     cmpq %r15, %rcx
     jge .Lsc_len_done
-    movq (%r12, %rcx, 8), %rax
+    movq (%rbx,%rcx,8), %rax
     movq (%rax), %rax
     addq (%rax), %r10
-    jc .Lheap_alloc_oom
+    jc .Lsc_oom
     incq %rcx
     jmp .Lsc_len_loop
 .Lsc_len_done:
     movq %r10, %rdi
     addq $9, %rdi
-    jc .Lheap_alloc_oom
-    addq $8, %r14
+    jc .Lsc_oom
     call heap_alloc
-.Lruntime_concat_string_data_done:
-    popq %r13
+    movq %rax, %r13
     movq %r10, (%r13)
     leaq 8(%r13), %rdi
     movq %r15, %rcx
@@ -575,65 +569,69 @@ str_concat:
 .Lsc_copy_loop:
     cmpq $0, %rcx
     jl .Lsc_copy_done
-    movq (%r12, %rcx, 8), %rsi
+    movq (%rbx,%rcx,8), %rsi
     movq (%rsi), %rsi
     movq (%rsi), %rdx
     addq $8, %rsi
-    pushq %rcx
+    movq %rcx, %r12
     movq %rdx, %rcx
     rep movsb
-    popq %rcx
+    movq %r12, %rcx
     decq %rcx
     jmp .Lsc_copy_loop
 .Lsc_copy_done:
     movb $0, (%rdi)
-    xorq %rcx, %rcx
+    xorq %r12, %r12
 .Lsc_free_loop:
-    cmpq %r15, %rcx
+    cmpq %r15, %r12
     jge .Lsc_free_done
-    movq (%r12, %rcx, 8), %rbx
-    pushq %rcx
-    movq (%rbx), %rdi
-    addq $8, %r14
+    movq (%rbx,%r12,8), %r14
+    movq (%r14), %rdi
     call heap_free
-.Lruntime_concat_part_data_free_done:
-    movq %rbx, %rdi
-    addq $8, %r14
+    movq %r14, %rdi
     call heap_free
-.Lruntime_concat_part_wrapper_free_done:
-    popq %rcx
-    incq %rcx
+    incq %r12
     jmp .Lsc_free_loop
 .Lsc_free_done:
     movq $8, %rdi
-    addq $8, %r14
     call heap_alloc
-.Lruntime_concat_string_wrapper_done:
-    popq %rax
     movq %r13, (%rax)
-    leaq (%r12, %r15, 8), %rsp
-    pushq %rax
-    subq $8, %r14
-    pushq (%r14)
     ret
+.Lsc_oom:
+    call allocation_failure
+    ud2
+    .cfi_endproc
 
 # Arithmetic failure handler: write error to fd 2 and exit(1).
 arithmetic_error:
+    .cfi_startproc
     leaq arithmetic_error_msg(%rip), %rsi
     movq $arithmetic_error_msg_len, %rdx
     movq $CASA_STDERR_FD, %rdi
-    addq $8, %r14
     call write_all
-.Lruntime_arithmetic_error_write_done:
     movq $CASA_FAILURE_STATUS, %rdi
     movq $CASA_EXIT_SYSCALL, %rax
     syscall
+    .cfi_endproc
 
-# Internal native helper: make the guard region inaccessible and report its
-# faults as return stack overflow. Other faults keep the default action.
+# Internal helper: make the guard region inaccessible and report its faults as
+# return stack overflow. Other faults keep the default action.
 return_stack_guard_init:
-    # Kernel sigaction layout: handler, flags, restorer, and signal mask.
+    .cfi_startproc
+    # Kernel stack_t layout: base, flags, and size.
     subq $32, %rsp
+    .cfi_adjust_cfa_offset 32
+    leaq signal_stack(%rip), %rax
+    movq %rax, (%rsp)
+    movq $0, 8(%rsp)
+    movq $CASA_SIGNAL_STACK_SIZE, 16(%rsp)
+    movq $CASA_SIGALTSTACK_SYSCALL, %rax
+    movq %rsp, %rdi
+    xorq %rsi, %rsi
+    syscall
+    testq %rax, %rax
+    jnz .Lreturn_stack_guard_failure_reserved
+    # Kernel sigaction layout: handler, flags, restorer, and signal mask.
     leaq return_stack_guard_fault(%rip), %rax
     movq %rax, (%rsp)
     movabsq $CASA_GUARD_SIGACTION_FLAGS, %rax
@@ -648,6 +646,7 @@ return_stack_guard_init:
     movq $CASA_SIGSET_SIZE, %r10
     syscall
     addq $32, %rsp
+    .cfi_adjust_cfa_offset -32
     testq %rax, %rax
     jnz .Lreturn_stack_guard_failure
     movq $CASA_MPROTECT_SYSCALL, %rax
@@ -658,6 +657,10 @@ return_stack_guard_init:
     testq %rax, %rax
     jnz .Lreturn_stack_guard_failure
     ret
+.Lreturn_stack_guard_failure_reserved:
+    .cfi_def_cfa_offset 40
+    addq $32, %rsp
+    .cfi_adjust_cfa_offset -32
 .Lreturn_stack_guard_failure:
     leaq return_stack_guard_failure_msg(%rip), %rsi
     movq $return_stack_guard_failure_msg_len, %rdx
@@ -667,8 +670,9 @@ return_stack_guard_init:
     movq $CASA_FAILURE_STATUS, %rdi
     movq $CASA_EXIT_SYSCALL, %rax
     syscall
+    .cfi_endproc
 
-# SIGSEGV handler: fault address in siginfo at %rsi.
+# SIGSEGV handler on the signal stack: fault address in siginfo at rsi.
 return_stack_guard_fault:
     movq CASA_SIGINFO_ADDRESS_OFFSET(%rsi), %rax
     leaq return_stack_guard(%rip), %rcx
@@ -695,14 +699,14 @@ return_stack_overflow:
 
 # env_stack overflow handler: write error to fd 2 and exit(1).
 env_stack_overflow:
+    .cfi_startproc
     leaq env_stack_overflow_msg(%rip), %rsi
     movq $env_stack_overflow_msg_len, %rdx
     movq $CASA_STDERR_FD, %rdi
-    addq $8, %r14
     call write_all
-.Lruntime_env_stack_overflow_write_done:
     movq $CASA_FAILURE_STATUS, %rdi
     movq $CASA_EXIT_SYSCALL, %rax
     syscall
+    .cfi_endproc
 
 "
