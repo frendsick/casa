@@ -109,9 +109,16 @@ those removed by optimization, have no line record.
 Generated helpers without a source location and the fixed runtime use the
 synthetic file `<casa-generated>`. Line tables map addresses to source locations.
 They do not describe local variable storage. Return addresses and locals live on
-`%rsp`, and generated functions and runtime helpers carry call frame
+`%rsp`, and generated functions and called runtime helpers carry call frame
 information, so debuggers and profilers can unwind Casa frames. Values live
 behind `%rbx`, which unwinders do not need.
+
+Eligible Casa calls transfer up to four arguments and results through
+`%r8` through `%r11`. Named calls and typed function-value calls share the
+signature rule. Hidden aggregate result storage and larger signatures retain
+the value-stack memory convention. Extern calls keep their platform ABI. See
+[ADR-0180](adr/0180-native-call-frames-use-a-register-value-stack.md) for the
+calling convention and its consequences.
 
 ## Source construction and semantic checking
 
