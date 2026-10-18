@@ -61,10 +61,8 @@ Names such as `std::List` assume `import "std"`. See
   counter has no semantic meaning beyond position:
 
   ```casa
-  0 = i
-  while i length < do
+  for i in length 0 std::Range::new do
       i items.get process
-      1 += i
   done
   ```
 
@@ -72,14 +70,10 @@ Names such as `std::List` assume `import "std"`. See
   has semantic meaning:
 
   ```casa
-  0 = row
-  while row height < do
-      0 = col
-      while col width < do
+  for row in height 0 std::Range::new do
+      for col in width 0 std::Range::new do
           ...
-          1 += col
       done
-      1 += row
   done
   ```
 
@@ -314,9 +308,27 @@ and other naturally decimal quantities in decimal.
   done
   ```
 
+- **SHOULD** use [`std::Range`](collections.md#integer-ranges) for a counted
+  loop that advances a `u64` index by one up to a fixed bound. The range
+  evaluates its bound once.
+
+  ```casa
+  # SHOULD
+  for index in count 0 std::Range::new do
+      index process
+  done
+  ```
+
 - Use `while` when a condition controls iteration or the loop must change the
   source collection. A `for` loop can use `break` for early termination and
   `zip` to traverse two iterators together.
+- Keep a counted `while` loop when its bound changes inside the body, its step
+  differs from one, its index has another type, or code after the loop reads
+  the index.
+- Keep a counted `while` loop in performance-sensitive code: standard library
+  primitives and loops that visit each byte of program input. A `Range`
+  iteration costs several times more than a `while` iteration. Revisit these
+  loops when range iteration matches `while` on the same workload.
 
 ---
 
