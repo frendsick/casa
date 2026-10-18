@@ -128,6 +128,14 @@ _Avoid_: Typechecker-only diagnostics refactor, phase-local error schema
 The independent result of one analysis request. It owns a report with exact source text and diagnostics, plus an editor index with verified source facts.
 _Avoid_: Shared compiler session, analysis result, global compiler result
 
+**Import analysis**:
+The parsed, checked, and indexed state of the modules one root imports, built without the root's declarations. Analysis checks the root over a copy of it.
+_Avoid_: Import closure, module cache
+
+**Analysis cache**:
+A caller-owned value that keeps one import analysis for later analyses of the same root. Reuse requires unchanged inputs and never changes a published snapshot.
+_Avoid_: Shared compiler session, document cache
+
 **Array literal**:
 A bracket-delimited list of values (`[1, 2, 3]`, `["a", "b"]`, `[[1], [2]]`, `[&my_fn]`) that produces an independent owned `array[T N]`, where the element count `N` is part of the type. Elements may be primitive literals, enum variants, nested array literals, function references, lambda expressions, or struct literals. Storage placement and behavior-preserving sharing remain compiler decisions.
 _Avoid_: Static array, const array, inline array

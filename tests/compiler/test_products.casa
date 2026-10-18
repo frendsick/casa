@@ -978,6 +978,167 @@ fn test_parsed_declaration_diagnostics {
     done
 }
 
+fn make_cached_input root:$str dependency:$str -> products::CompilationInput {
+    root make_input = input
+    dependency.to_str "lib/dependency.casa".to_str input.source_overrides.set
+    "lib".to_str input.library_paths.push
+    input
+}
+
+# Diagnostics, root tokens, and root hovers, for comparing two analyses.
+fn describe_analysis snapshot:$products::AnalysisSnapshot -> std::String {
+    snapshot.get_report = report
+    std::String::new = description
+    0 = index: u64
+    while index report.count_diagnostics < do
+        f"{index report.get_presentation.format_message}\n".as_str description.append
+        1 += index
+    done
+    for token in snapshot.get_semantic_tokens.iter do
+        f"token {token.location.offset}+{token.location.length}\n".as_str description.append
+    done
+    0 = offset: u64
+    while offset snapshot.get_source.length <= do
+        if
+            offset snapshot.get_file_path.as_str snapshot.get_index.find_hover document::PointAnswer::Known(hover) is
+        then
+            f"hover {offset} {hover.content}\n".as_str description.append
+        fi
+        1 += offset
+    done
+    description
+}
+
+fn has_errors snapshot:$products::AnalysisSnapshot -> bool {
+    snapshot
+        .get_report
+        .get_diagnostics
+        .has_errors
+}
+
+fn test_cached_analysis_matches_fresh {
+    "cached_analysis_matches_fresh" test::test_start
+    products::AnalysisCache::new = cache
+    "pub fn value -> i64 { 42 }" = dependency
+    for
+        root in [
+            "import \"dependency\" as dependency\ndependency::value print",
+            "import \"dependency\" as dependency\nfn twice -> i64 { dependency::value 2 * }\ntwice print",
+            "import \"dependency\" as dependency\n\"text\" dependency::value + print",
+            "import \"dependency\" as dependency\ndependency::value print",
+        ].iter
+    do
+        dependency root make_cached_input products::analyze.unwrap describe_analysis = expected
+        cache dependency root make_cached_input products::analyze_cached.unwrap describe_analysis = actual
+        "cached analysis matches fresh" expected actual test::assert_str_eq
+    done
+}
+
+fn test_cached_analysis_lowers_structured_roots {
+    "cached_analysis_lowers_structured_roots" test::test_start
+    products::AnalysisCache::new = cache
+    "pub fn value -> i64 { 42 }" = dependency
+    for
+        root in [
+            "import \"dependency\" as dependency\nstruct Box { value: i64 }\nfn make -> Box { Box { value: dependency::value } }\nmake.value drop",
+            "import \"dependency\" as dependency\nstruct Box { value: i64 }\nfn make -> Box { Box { value: dependency::value 1 + } }\n{ make.value } drop",
+        ].iter
+    do
+        dependency root make_cached_input products::analyze.unwrap = fresh
+        cache dependency root make_cached_input products::analyze_cached.unwrap = cached
+        "fresh structured root accepted" fresh has_errors ! test::assert_true
+        "cached structured root accepted" cached has_errors ! test::assert_true
+        "structured root facts match" fresh describe_analysis cached describe_analysis test::assert_str_eq
+    done
+}
+
+fn test_cached_analysis_follows_imports {
+    "cached_analysis_follows_imports" test::test_start
+    products::AnalysisCache::new = cache
+    "import \"dependency\" as dependency\ndependency::value 1 + drop" = root
+    cache "pub fn value -> i64 { 42 }" root make_cached_input products::analyze_cached.unwrap = accepted
+    "import accepted" accepted has_errors ! test::assert_true
+    cache "pub fn value -> str { \"text\" }" root make_cached_input products::analyze_cached.unwrap = changed
+    "changed import checked again" changed has_errors test::assert_true
+    cache "pub fn value -> i64 { 7 }" root make_cached_input products::analyze_cached.unwrap = fixed
+    "fixed import accepted" fixed has_errors ! test::assert_true
+}
+
+fn test_cached_analysis_rereads_files {
+    "cached_analysis_rereads_files" test::test_start
+    "/tmp/casa_products_cached_dependency.casa" = path
+    path
+        .as_str
+        .as_cstr
+        .unwrap = path_cstr
+    f"import \"{path}\" as dependency\ndependency::value 1 + drop" = root
+    products::AnalysisCache::new = cache
+    "pub fn value -> i64 { 42 }" std::Bytes::from_str path_cstr os::file::write_all drop
+    cache root.as_str make_input products::analyze_cached.unwrap = accepted
+    "file import accepted" accepted has_errors ! test::assert_true
+    "pub fn value -> str { \"text\" }" std::Bytes::from_str path_cstr os::file::write_all drop
+    cache root.as_str make_input products::analyze_cached.unwrap = changed
+    "changed file checked again" changed has_errors test::assert_true
+    path_cstr os::file::remove drop
+    cache root.as_str make_input products::analyze_cached.unwrap = removed
+    "removed file reported" removed has_errors test::assert_true
+}
+
+# `middle` imports `dependency`, found in `extra` until `lib` provides one.
+fn make_nested_input shadowed:bool -> products::CompilationInput {
+    "import \"middle\" as middle\nmiddle::value 1 + drop" make_input = input
+    "import \"dependency\" as dependency\npub fn value -> i64 { dependency::value }".to_str
+    "lib/middle.casa".to_str input.source_overrides.set
+    "pub fn value -> i64 { 1 }".to_str "extra/dependency.casa".to_str input.source_overrides.set
+    if shadowed then
+        "pub fn value -> str { \"text\" }".to_str "lib/dependency.casa".to_str input.source_overrides.set
+    fi
+    "lib".to_str input.library_paths.push
+    "extra".to_str input.library_paths.push
+    input
+}
+
+fn test_cached_analysis_resolves_imports_again {
+    "cached_analysis_resolves_imports_again" test::test_start
+    products::AnalysisCache::new = cache
+    cache false make_nested_input products::analyze_cached.unwrap = accepted
+    "nested import accepted" accepted has_errors ! test::assert_true
+    cache true make_nested_input products::analyze_cached.unwrap = shadowed
+    "shadowing module resolved" shadowed has_errors test::assert_true
+}
+
+fn make_other_input root:$str -> products::CompilationInput {
+    "pub fn value -> i64 { 42 }" root make_cached_input = input
+    "pub fn other -> i64 { 7 }".to_str "lib/other.casa".to_str input.source_overrides.set
+    input
+}
+
+fn test_cached_analysis_follows_root_imports {
+    "cached_analysis_follows_root_imports" test::test_start
+    "/tmp/casa_products/lib/other.casa" = other_file
+    "import \"dependency\" as dependency\ndependency::value drop" = without_other
+    "import \"dependency\" as dependency\nimport \"other\" as other\nother::other dependency::value + drop"
+    = with_other
+    products::AnalysisCache::new = cache
+    cache with_other make_other_input products::analyze_cached.unwrap = first
+    "first loads other" other_file first
+        .get_sources
+        .get
+        .is_some test::assert_true
+    cache without_other make_other_input products::analyze_cached.unwrap = removed
+    "removed import accepted" removed has_errors ! test::assert_true
+    "removed import released" other_file removed
+        .get_sources
+        .get
+        .is_none test::assert_true
+    cache with_other make_other_input products::analyze_cached.unwrap = added
+    "added import accepted" added has_errors ! test::assert_true
+    "added import loaded" other_file added
+        .get_sources
+        .get
+        .is_some test::assert_true
+}
+
 pub fn run_tests {
     test_parsed_declaration_diagnostics
     test_parsed_declaration_products
@@ -1008,6 +1169,12 @@ pub fn run_tests {
     test_failed_request_report
     test_assembly_product
     test_override_identity
+    test_cached_analysis_matches_fresh
+    test_cached_analysis_lowers_structured_roots
+    test_cached_analysis_follows_imports
+    test_cached_analysis_rereads_files
+    test_cached_analysis_resolves_imports_again
+    test_cached_analysis_follows_root_imports
     test::test_summary
 }
 run_tests

@@ -95,7 +95,7 @@ impl ParseState {
     }
 }
 
-pub struct ImportedModule {
+pub struct ImportedModule derives std::Clone {
     pub failed: bool
 }
 
@@ -277,6 +277,29 @@ pub struct Parser {
     pub state:           ParseState
     pub module_contexts: std::List[ModuleContext]
     pub source_prefixes: std::Map[std::String std::String]
+    imports:             ImportRecord
+}
+
+# Import inside an imported module. Reuse resolves it again before trusting it.
+pub struct ImportResolution derives std::Clone {
+    pub importing_file: std::String
+    pub specifier:      std::String
+    pub path:           std::String
+}
+
+# Facts about the modules one root imports, recorded while they are analyzed.
+struct ImportRecord derives std::Clone {
+    # Root-level imports in analysis order, including repeated cache hits.
+    paths:       std::List[std::String]
+    resolutions: std::List[ImportResolution]
+    # False after an imported module reports a diagnostic or fails.
+    clean:       bool
+}
+
+impl ImportRecord {
+    fn new -> ImportRecord {
+        true std::List[ImportResolution]::new std::List[std::String]::new ImportRecord
+    }
 }
 
 pub struct ParseResolveResult {
@@ -303,6 +326,7 @@ impl Parser {
     -> Parser {
         std::List[ModuleContext]::new = module_contexts
         ModuleContext::new module_contexts.push
+        ImportRecord::new
         std::Map[std::String std::String]::new
         module_contexts
         diagnostics ParseState::new
@@ -4098,6 +4122,16 @@ pub fn try_resolve_import
     importing_file:$str
     spec:$str
 -> std::Option[std::String] std::String {
+    spec importing_file parser.search_paths parser.sources resolve_import_in
+}
+
+# Overrides in the source store take precedence over files on disk.
+pub fn resolve_import_in
+    sources:$lexer::SourceStore
+    search_paths:$std::List[std::String]
+    importing_file:$str
+    spec:$str
+-> std::Option[std::String] std::String {
     importing_file dir_of_path = source_dir
     importing_file lexer::absolute_normalize_path = importing_normalized
     if spec is_path_specifier then
@@ -4118,10 +4152,7 @@ pub fn try_resolve_import
     # `searched` accumulates probed dirs for the not-found error message.
     f"{source_dir}{spec}.casa" = source_candidate_path
     source_candidate_path.as_str lexer::absolute_normalize_path = source_candidate
-    source_candidate.as_str parser
-        .sources
-        .get
-        .is_some = source_is_overridden
+    source_candidate.as_str sources.get.is_some = source_is_overridden
     if source_is_overridden source_candidate.as_str path_exists || then
         source_candidate.as_str lexer::absolute_normalize_path = resolved_candidate
         if resolved_candidate.as_str importing_normalized.as_str != then
@@ -4138,16 +4169,11 @@ pub fn try_resolve_import
     fi
     = first_dir
     f"\n  {first_dir}" = searched
-    for base in parser.search_paths.iter do
+    for base in search_paths.iter do
         f"{searched}\n  {base}" = searched
         f"{base}/{spec}.casa" = candidate_path
         candidate_path.as_str lexer::absolute_normalize_path = candidate
-        if
-            candidate.as_str parser
-                .sources
-                .get
-                .is_some
-        then
+        if candidate.as_str sources.get.is_some then
             candidate std::Option::Some searched return
         fi
         if candidate.as_str path_exists then
@@ -4167,6 +4193,12 @@ pub fn resolve_import
 -> std::String {
     spec importing_file parser try_resolve_import = searched = resolved
     if resolved std::Option::Some(path) is then
+        if 1 parser.import_stack.length < then
+            path.clone spec.to_str importing_file.to_str ImportResolution parser
+                .imports
+                .resolutions
+                .push
+        fi
         path.clone return
     fi
     location f"module `{spec}` not found, searched:{searched}" common::ErrorKind::Syntax parser.state.record_error_string
@@ -4243,8 +4275,15 @@ impl Parser {
         module_prefix:$str
         location:$common::Location
     -> bool {
+        if 1 self.import_stack.length == then
+            import_path.to_str self
+                .imports
+                .paths
+                .push
+        fi
         if import_path self.module_cache.get_str std::Option::Some(cached_module) is then
             if cached_module.failed then
+                false = self.imports.clean
                 self.state.mark_output_unusable
                 false return
             fi
@@ -4258,6 +4297,9 @@ impl Parser {
             .length = diagnostic_start
         module_prefix import_path self.analyze_import = import_result
         diagnostic_start self.state.diagnostics take_diagnostics_since = imported_diagnostics
+        if imported_diagnostics.entries.is_empty ! then
+            false = self.imports.clean
+        fi
         location imported_diagnostics self
             .state
             .diagnostics
@@ -4265,6 +4307,7 @@ impl Parser {
         import_result match
             std::Result::Ok(imported) => {
                 if imported ! then
+                    false = self.imports.clean
                     true ImportedModule import_path.to_str self.module_cache.set
                     self.state.mark_output_unusable
                     false return
@@ -4273,6 +4316,7 @@ impl Parser {
                 true
             }
             std::Result::Error(read_error) => {
+                false = self.imports.clean
                 location f"Cannot read import `{import_path}`: {read_error.to_str}" common::ErrorKind::Syntax self
                     .state
                     .diagnostics
@@ -5546,6 +5590,11 @@ pub fn parse_and_resolve
     std::Map[std::String ImportedModule]::new = import_cache
     import_cache sources diagnostics common::symbol_store_new Parser::new = parser
     search_paths parser Parser::set_search_paths
+    tokens parser parse_root drop
+}
+
+# Root import cycles compare against the root's normalized identity.
+fn enter_root parser:mut$Parser tokens:$std::List[common::Token] {
     if 0 tokens.length < then
         0 tokens
             .get
@@ -5553,11 +5602,80 @@ pub fn parse_and_resolve
             .file
             .as_str lexer::absolute_normalize_path parser.import_stack.push
     fi
-    tokens parser parse_ops = ops
+}
+
+# Also returns the root's imports in analysis order.
+fn parse_root
+    parser:Parser
+    tokens:std::List[common::Token]
+-> ParseResolveResult std::List[std::String] {
+    tokens parser enter_root
+    "" tokens parser.prepare_module = root_body
+    parser
+        .imports
+        .paths
+        .clone = root_imports
+    root_body tokens parser.lower_root = ops
     std::Set[std::String]::new = skip_functions
     std::Set[std::String]::new = skip_traits
     skip_traits skip_functions ops parser.finish_resolution = included_files = result
-    result
+    result root_imports
+}
+
+# Parser state after analyzing the modules a root imports. The root stage parses
+# over copies, so one import analysis can serve several root revisions.
+pub struct ImportSource {
+    module_cache:    std::Map[std::String ImportedModule]
+    analyzed_files:  std::Set[std::String]
+    source_prefixes: std::Map[std::String std::String]
+    imports:         ImportRecord
+}
+
+impl ImportSource {
+    pub fn get_paths self:$ImportSource -> $std::List[std::String] { self.imports.paths }
+    pub fn get_resolutions self:$ImportSource -> $std::List[ImportResolution] {
+        self.imports.resolutions
+    }
+    pub fn is_clean self:$ImportSource -> bool { self.imports.clean }
+}
+
+# Import stage: analyze the root's imports without declaring the root. Root lexical
+# diagnostics limit import discovery as they do in `parse_and_resolve`.
+pub fn parse_imports
+    tokens:$std::List[common::Token]
+    search_paths:std::List[std::String]
+    diagnostics:error::Diagnostics
+    sources:mut$lexer::SourceStore
+-> ImportSource common::SymbolStore std::Map[std::String source_body::SourceBody] {
+    std::Map[std::String ImportedModule]::new = import_cache
+    import_cache sources diagnostics common::symbol_store_new Parser::new = parser
+    search_paths parser Parser::set_search_paths
+    tokens parser enter_root
+    "" tokens parser.prepare_imports
+    parser match
+        Parser { bodies: bodies store: store analyzed_files: analyzed_files source_prefixes: prefixes imports: imports } => {
+            bodies.into_bodies store imports prefixes analyzed_files
+        }
+    end = analyzed_files = prefixes = imports = store = bodies
+    imports prefixes analyzed_files import_cache ImportSource store bodies
+}
+
+# Root stage: parse the root over `store`, the checked import-stage declarations.
+# The returned root import order must match `imports` before the result is used.
+pub fn parse_root_with_imports
+    tokens:std::List[common::Token]
+    search_paths:std::List[std::String]
+    diagnostics:error::Diagnostics
+    sources:mut$lexer::SourceStore
+    imports:$ImportSource
+    store:common::SymbolStore
+-> ParseResolveResult std::List[std::String] {
+    imports.module_cache.clone = import_cache
+    import_cache sources diagnostics store Parser::new = parser
+    search_paths parser Parser::set_search_paths
+    imports.analyzed_files.clone = parser.analyzed_files
+    imports.source_prefixes.clone = parser.source_prefixes
+    tokens parser parse_root
 }
 
 # resolve_identifiers - post-parse pass
@@ -6778,6 +6896,20 @@ impl Parser {
         tokens:$std::List[common::Token]
         module_prefix:$str
     -> std::List[grammar::TermSyntax] {
+        false module_prefix tokens self.prepare_module_with
+    }
+
+    # Analyze the module's imports without declaring the module itself.
+    fn prepare_imports self:mut$Parser tokens:$std::List[common::Token] module_prefix:$str {
+        true module_prefix tokens self.prepare_module_with drop
+    }
+
+    fn prepare_module_with
+        self:mut$Parser
+        tokens:$std::List[common::Token]
+        module_prefix:$str
+        imports_only:bool
+    -> std::List[grammar::TermSyntax] {
         if tokens.is_empty then
             self.state.mark_output_unusable
             std::List[grammar::TermSyntax]::new return
@@ -6875,6 +7007,9 @@ impl Parser {
             self.state.has_usable_output imports_usable && = imports_usable
             0 self.state.diagnostics take_diagnostics_since diagnostics.merge
         done
+        if imports_only then
+            std::List[grammar::TermSyntax]::new return
+        fi
         if imports_usable ! then
             # Failed imports do not invalidate independent declarations in this module.
             true = self.state.output_usable

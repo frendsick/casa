@@ -1,6 +1,6 @@
 # Compiler products own independent snapshots
 
-status: amended by [ADR-0172](0172-editor-products-retain-verified-source-facts.md)
+status: amended by [ADR-0172](0172-editor-products-retain-verified-source-facts.md) and [ADR-0179](0179-analysis-reuses-a-verified-import-analysis.md)
 
 related issue: [Choose compiler representations and state ownership](https://github.com/frendsick/casa/issues/646).
 

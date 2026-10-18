@@ -80,6 +80,8 @@ pub struct CompileResult {
 pub struct LspState {
     pub library_paths:   std::List[std::String]
     pub open_documents:  std::Map[std::String products::AnalysisSnapshot]
+    # Reusable import analyses by open document path.
+    pub analysis_caches: std::Map[std::String products::AnalysisCache]
     pub workspace:       workspace::Workspace
     pub versions:        std::Map[std::String i64]
     pub versioned_edits: bool
@@ -99,6 +101,7 @@ impl LspState {
         LspState {
             library_paths: std::List[std::String]::new
             open_documents: std::Map[std::String products::AnalysisSnapshot]::new
+            analysis_caches: std::Map[std::String products::AnalysisCache]::new
             workspace: workspace::Workspace::new
             versions: std::Map[std::String i64]::new
             versioned_edits: false
@@ -534,6 +537,7 @@ pub fn compile_document_with_paths
     source:$str
     open_docs:$std::Map[std::String products::AnalysisSnapshot]
     library_paths:$std::List[std::String]
+    cache:mut$products::AnalysisCache
 -> std::Result[CompileResult std::List[LspDiagnostic]] {
     source.to_str file_path.to_str products::SourceUnit
     "" lexer::absolute_normalize_path swap products::CompilationInput::new = input
@@ -545,7 +549,7 @@ pub fn compile_document_with_paths
             cached_state.get_source.clone cached_state.get_file_path.clone input.source_overrides.set
         fi
     done
-    input products::analyze match
+    cache input products::analyze_cached match
         std::Result::Ok(snapshot) => snapshot
         std::Result::Error(failure) => file_path failure diagnostics_from_failure std::Result::Error return
     end = state
@@ -562,7 +566,8 @@ pub fn compile_document
     open_docs:$std::Map[std::String products::AnalysisSnapshot]
 -> std::Result[CompileResult std::List[LspDiagnostic]] {
     std::List[std::String]::new = library_paths
-    library_paths open_docs source file_path compile_document_with_paths
+    products::AnalysisCache::new = cache
+    cache library_paths open_docs source file_path compile_document_with_paths
 }
 
 pub fn ingest_document_into
@@ -583,7 +588,8 @@ pub fn ingest_document uri:$str source:$str state:mut$LspState -> std::List[LspD
         .overrides
         .set
     1 += state.workspace.generation
-    state.library_paths state.open_documents source path.as_str compile_document_with_paths
+    path.as_str state.analysis_caches find_analysis_cache = cache
+    cache state.library_paths state.open_documents source path.as_str compile_document_with_paths
     uri state.open_documents store_compile_result
 }
 
@@ -606,6 +612,16 @@ fn store_compile_result
     end
 }
 
+fn find_analysis_cache
+    caches:mut$std::Map[std::String products::AnalysisCache]
+    path:$str
+-> mut$products::AnalysisCache {
+    if path caches.has_str ! then
+        products::AnalysisCache::new path.to_str caches.set
+    fi
+    path caches.get_mut_str.unwrap
+}
+
 impl LspState {
     fn refresh_document self:mut$LspState uri:$str {
         uri uri_to_path = path
@@ -619,7 +635,8 @@ impl LspState {
         else
             return
         fi = source
-        self.library_paths self.open_documents source.as_str path.as_str compile_document_with_paths
+        path.as_str self.analysis_caches find_analysis_cache = cache
+        cache self.library_paths self.open_documents source.as_str path.as_str compile_document_with_paths
         uri self.open_documents store_compile_result = diagnostics
         diagnostics uri publish_diagnostics
     }
@@ -845,6 +862,7 @@ pub fn handle_did_close message:$json::JsonValue state:mut$LspState {
         .overrides
         .remove_str drop
     path.as_str state.versions.remove_str drop
+    path.as_str state.analysis_caches.remove_str drop
     uri.as_str state.open_documents.remove_str drop
     1 += state.workspace.generation
 }
