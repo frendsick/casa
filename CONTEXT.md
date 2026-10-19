@@ -74,6 +74,14 @@ and contributes to the identity of an instantiation. It remains symbolic in
 generic code until concrete specialization.
 _Avoid_: Named constant declaration, type variable
 
+### Control flow
+
+**Early-exit conditional**:
+An `if condition else body fi` form without `then`. The `else` body must end
+the path, and the condition bindings remain available until the end of the
+enclosing body.
+_Avoid_: Guard, guard let, let-else
+
 ### Compiler architecture
 
 **Functional compiler pass**:
@@ -326,6 +334,7 @@ _Avoid_: Release lint, tag lint
 - An owned binding is definitely available at a control-flow join only when every continuing incoming path owns or reinitialized it. Terminating paths do not participate.
 - Patterns compose recursively in enum payloads and struct fields. Match arm alternatives use `|`, bind the same names and types, and share one guard and body. Coverage tracks nested combinations across unguarded alternatives.
 - Pattern payload bindings follow the subject capability. A successful `if … is` conditionally moves non-`Copy` payloads from an owned subject, while shared and exclusive subjects produce matching borrows. Failed checks retain the complete subject, and `Copy` payload bindings do not consume it.
+- An **Early-exit conditional** keeps the same payload ownership rules. Its bindings are unavailable in the `else` body, and the owned subject stays available there.
 - `ptr` is a nullable, non-owning, `Copy` raw address. Existing load/store intrinsics and pointer arithmetic require [unsafe](docs/functions-and-lambdas.md#unsafe-boundaries). Only explicit `ptr::as_ref[T]` and `ptr::as_mut[T]` form typed borrows.
 - An inherent method wins over defaults from explicitly implemented traits. Without one, more than one applicable default-method declaration is a compile-time ambiguity rather than a declaration-order choice.
 - A trait implementation may be declared only by the module defining the type or the trait. Duplicate and overlapping implementations are rejected without specialization.
