@@ -40,6 +40,10 @@ imports rejected as invalid UTF-8, for which text lookup returns no value.
 Completed analysis and assembly reports omit unused overrides. Requests own source stores and
 compiler state, so retained results cannot affect other requests.
 
+Source locations retain immutable file-path backing and store byte spans as
+`Copy` values. Tokens from one lexer share the file-path backing. Clones and
+adjusted ranges retain that backing independently of the lexer and source store.
+
 Analysis first builds an import analysis: it parses, checks, and indexes the
 modules the root imports, without the root's declarations. It then checks the
 root over a copy of that state and adds the imported-file facts to the index.
