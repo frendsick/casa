@@ -58,6 +58,7 @@ names. Call forms below assume a list binding named `numbers`.
 | [join](#liststrjoin) | `fn join self:$List[str] separator:$str -> String` | Join a string-view list |
 | [join_strings](#liststringjoin_strings) | `fn join_strings self:$List[String] separator:$str -> String` | Join owned strings |
 | [length](#listtlength) | `fn length self:$List -> u64` | Number of elements |
+| [list_iter](#listtlist_iter) | `fn list_iter self:$List[T] -> ListIter[T]` | Concrete cursor over shared element borrows |
 | [new](#listtnew) | `fn new [T] -> List[T]` | Empty list |
 | [pop](#listtpop) | `fn pop [T] self:mut$List[T] -> T` | Remove and return the last element |
 | [push](#listtpush) | `fn push [T] self:mut$List[T] item:T` | Add at the end |
@@ -224,7 +225,8 @@ fn iter self:$List[T] -> Iter[$T]
 `iter` returns an iterator over shared element borrows. The list keeps ownership
 and remains loaned while those borrows are in use.
 
-Call `numbers.iter`.
+Call `numbers.iter`. For a concrete cursor with a statically known `next` target,
+use [list_iter](#listtlist_iter).
 
 ### List[T]::iter_mut
 
@@ -283,6 +285,29 @@ fn length self:$List -> u64
 ```
 
 `length` returns the number of elements.
+
+### List[T]::list_iter
+
+```text
+fn list_iter self:$List[T] -> ListIter[T]
+```
+
+`list_iter` returns a concrete cursor over shared element borrows in index order.
+Its `next` target is statically known. A yielded borrow remains valid after
+advancing or dropping the cursor. The list keeps ownership and remains loaned
+while the cursor or any yielded borrow is in use. Elements need neither `Copy`
+nor `Clone`. Empty and exhausted cursors keep returning `None`.
+
+`ListIter[T]` implements `Iterable[$T]` and supports its lazy and terminal
+operations. Lazy operations still return closure-backed `Iter` values. The
+cursor also provides `min` and `max` when `T` implements `Ord`. These methods
+inspect the remaining elements, retain the first equal minimum or maximum, and
+exhaust the cursor.
+
+Call `numbers.list_iter`. Use `numbers.iter` when an API requires `Iter[$T]`,
+including the `other` argument of `chain` or `zip` and the result of a `flat_map`
+callback. The cursor has no `next_fn` field.
+See [list cursor traversal](collections.md#list-cursor-traversal) for examples.
 
 ### List[T]::new
 

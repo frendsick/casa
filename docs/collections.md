@@ -894,6 +894,34 @@ and terminal operations below.
 `iter` on arrays, lists, slices, maps, and sets yields borrows because the source keeps
 owning its elements. Clone a yielded value when an owned value is needed.
 
+### List cursor traversal
+
+Lists also provide [`list_iter`](lists.md#listtlist_iter), which returns a
+concrete `ListIter[T]` cursor with a statically known `next` target. Both `iter`
+and `list_iter` yield shared element borrows in index order. Use `list_iter` to
+opt into direct cursor traversal. Existing `iter` calls keep returning
+closure-backed `Iter[$T]` values.
+
+```casa
+for value in values.list_iter do
+    value print
+done
+```
+
+`ListIter[T]` implements `Iterable[$T]`, so it supports the iterator operations
+as their receiver. Lazy operations such as `map` and `filter` still return
+`Iter` values. `chain` and `zip` require an `Iter` for their `other` argument.
+Choose `iter` for that input:
+
+```casa
+right.iter left.list_iter.zip
+right.iter left.list_iter.chain
+```
+
+A `flat_map` callback must return `Iter[U]`. A callback that traverses a list can
+keep returning `values.iter`. Explicit `Iter[$T]` bindings, parameters, return
+types, and code that accesses `next_fn` also keep using `iter`.
+
 ## Lazy iterator operations
 
 Lazy operations return `Iter` and do no work until the result is consumed.
