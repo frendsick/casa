@@ -872,7 +872,7 @@ See [examples/fizzbuzz.casa](../examples/fizzbuzz.casa) for a counted loop.
 |---|---|
 | `array[T N]` | `Iter[$T]` |
 | `Bytes` | `Iter[u8]` |
-| `List[T]` | `ListIter[T]` |
+| `List[T]` | `Iter[$T]` |
 | `Map[K V]` | `Iter[Pair[$K $V]]` |
 | `Set[K]` | `Iter[$K]` |
 | `Slice[T]` | `Iter[$T]` |
@@ -894,38 +894,33 @@ and terminal operations below.
 `iter` on arrays, lists, slices, maps, and sets yields borrows because the source keeps
 owning its elements. Clone a yielded value when an owned value is needed.
 
-### List cursor compatibility
+### List cursor traversal
 
-`ListIter[T]` implements `Iterable[$T]`. Ordinary `for` loops and iterator
-operations accept the cursor as their receiver. Lazy operations such as `map`
-and `filter` still return closure-backed `Iter` values.
-
-`List.iter` returns `ListIter[T]` rather than `Iter[$T]`. Update explicit
-parameter, return, and binding types when they name the direct cursor. When an
-existing API requires `Iter[$T]`, adapt the cursor with `into_iter`:
+Lists also provide [`list_iter`](lists.md#listtlist_iter), which returns a
+concrete `ListIter[T]` cursor with a statically known `next` target. Both `iter`
+and `list_iter` yield shared element borrows in index order. Use `list_iter` to
+opt into direct cursor traversal. Existing `iter` calls keep returning
+closure-backed `Iter[$T]` values.
 
 ```casa
-fn shared_values[T] values:$List[T] -> Iter[$T] {
-    values.iter.into_iter
-}
+for value in values.list_iter do
+    value print
+done
 ```
 
-The adapter consumes the cursor and preserves its remaining position. Dropping
-it destroys no list elements. Its yields remain valid after adapter destruction
-while the list remains borrowed. `List.into_iter` has different ownership:
-it consumes the list and transfers owned elements.
-
-`chain` and `zip` still require an `Iter` for their `other` argument. Convert a
-list cursor in that position:
+`ListIter[T]` implements `Iterable[$T]`, so it supports the iterator operations
+as their receiver. Lazy operations such as `map` and `filter` still return
+`Iter` values. `chain` and `zip` require an `Iter` for their `other` argument.
+Choose `iter` for that input:
 
 ```casa
-right.iter.into_iter left.iter.zip
-right.iter.into_iter left.iter.chain
+right.iter left.list_iter.zip
+right.iter left.list_iter.chain
 ```
 
-A `flat_map` callback must still return `Iter[U]`. A callback that previously
-returned `values.iter` can return `values.iter.into_iter`. Code that accesses
-`Iter.next_fn` also needs the adapter because `ListIter` has no callback field.
+A `flat_map` callback must return `Iter[U]`. A callback that traverses a list can
+keep returning `values.iter`. Explicit `Iter[$T]` bindings, parameters, return
+types, and code that accesses `next_fn` also keep using `iter`.
 
 ## Lazy iterator operations
 
