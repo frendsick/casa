@@ -473,6 +473,16 @@ then
 fi
 ```
 
+An early-exit `if` has no `then`. Its `else` opens the body and follows the
+same header rules as `then`. The body always uses separate lines:
+
+```casa
+if value Option::Some(number) is else
+    0 return
+fi
+number
+```
+
 ---
 
 ## `while` / `do` / `done`

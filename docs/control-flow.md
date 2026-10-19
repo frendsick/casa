@@ -19,7 +19,8 @@ fi
 print
 ```
 
-Each condition is followed by `then`. All continuing branches must leave the
+Each condition is followed by `then`, except in an
+[early-exit `if`](#leave-early-when-a-check-fails). All continuing branches must leave the
 same types on the stack. If there is no `else`, the body must leave the stack
 unchanged because the condition can be false.
 
@@ -127,7 +128,8 @@ elif shape Shape::Rectangle(width height) is then
 fi
 ```
 
-These bindings exist only in the branch whose pattern created them. They
+These bindings exist only in the branch whose pattern created them. An
+[early-exit `if`](#leave-early-when-a-check-fails) keeps them after `fi`. They
 cannot shadow an accessible local binding. A binding pattern is not valid
 outside an `if` or `elif` condition.
 
@@ -140,6 +142,54 @@ the subject.
 The original owner stays available in `else` and on other unmatched paths. It
 is unavailable after `fi` if a continuing matched path moved its payload. A
 matched path that returns does not affect the ownership join.
+
+## Leave early when a check fails
+
+An `if` without `then` runs its `else` body only when the condition is false.
+The bindings from the condition stay available after `fi`, until the end of
+the enclosing body:
+
+```casa
+import "std"
+
+fn describe value:std::Option[i64] -> str {
+    if value std::Option::Some(number) is else
+        "none" return
+    fi
+    if number 0 > then "positive" else "not positive" fi
+}
+```
+
+The `else` body must not reach `fi`. End it with `break`, `continue`, `panic`,
+`return`, or a call to a function that cannot return, such as
+`std::process::exit`. The bindings are not available in the `else` body
+because the pattern did not match there.
+
+The form has one condition and no `then` or `elif` branch. A condition without
+bindings is also valid. `if ready else return fi` continues only when `ready`
+is true.
+
+Use the form directly in a function, root, branch, loop, or match arm body. It
+is rejected inside a condition, array literal, group, match guard, f-string
+expression, or `unsafe` block.
+
+Payload ownership follows the same rules as other `is` checks. A successful
+check moves a non-`Copy` payload from an owned subject, so the subject is
+unavailable after `fi`. The `else` body still has the complete subject:
+
+```casa
+import "std"
+
+fn shout value:std::Result[std::String i64] -> std::Result[std::String i64] {
+    if value std::Result::Ok(text) is else
+        value return
+    fi
+    f"{text}!" std::Result::Ok
+}
+```
+
+Bindings that the rest of the body creates and the condition bindings are
+destroyed at the end of the enclosing body, in reverse order of creation.
 
 ## Match a value
 
@@ -282,4 +332,4 @@ with the next arm. The guard is not retried with another alternative from the
 same arm.
 
 See [examples/enum.casa](../examples/enum.casa) for nested patterns, alternatives,
-and guards on enum payloads.
+guards, and early exits on enum payloads.

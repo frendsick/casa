@@ -61,7 +61,7 @@ test_category() {
         test/test_typed_raw|test/test_unsafe)
             echo language_memory
             ;;
-        test/test_global_keyword|test/test_root_state|\
+        test/test_early_exit|test/test_global_keyword|test/test_root_state|\
         test/test_match_underflow|test/test_nested_patterns|test/test_question)
             echo language_control_flow
             ;;

@@ -104,6 +104,15 @@ pub struct SourceConditional derives std::Clone {
     pub branches:    std::List[SourceBranch]
     pub alternative: std::Option[SourceAlternative]
     pub end_origin:  common::Location
+    pub early_exit:  std::Option[SourceEarlyExit]
+}
+
+# `if condition else body fi` has one branch, which holds the rest of its
+# enclosing body, so condition bindings remain in scope after `fi`. Its
+# alternative must end the path. `rest_end` is the zero-width end of that rest,
+# absent when the rest reaches the end of the body.
+pub struct SourceEarlyExit derives std::Clone {
+    pub rest_end: std::Option[common::Location]
 }
 
 pub struct SourceLoop derives std::Clone {
@@ -368,7 +377,10 @@ impl common::Op {
 }
 
 struct SourceCursor {
-    operations: mut$std::List[common::Op]
+    operations:  mut$std::List[common::Op]
+    # The rest of the current sequence can belong to an early exit. Conditions,
+    # regions, and compound items end before their enclosing scope does.
+    exits_scope: bool
 }
 
 fn ends_sequence value:$common::OpValue -> bool {
@@ -416,6 +428,14 @@ impl SourceCursor {
         nodes SourceBody
     }
 
+    fn read_scoped self:mut$SourceCursor exits_scope:bool -> SourceBody {
+        self.exits_scope = enclosing
+        exits_scope = self.exits_scope
+        self.read_sequence = body
+        enclosing = self.exits_scope
+        body
+    }
+
     fn read_boundary self:mut$SourceCursor -> std::Result[common::Op std::String] {
         if self.operations.is_empty then
             "Incomplete structured source body".to_str std::Result::Error return
@@ -427,20 +447,65 @@ impl SourceCursor {
         self:mut$SourceCursor
         origin:common::Location
     -> std::Result[SourceBranch std::String] {
-        self.read_sequence = condition
+        false self.read_scoped = condition
         self.read_boundary ? = boundary
+        boundary condition origin self.read_consequent
+    }
+
+    fn read_consequent
+        self:mut$SourceCursor
+        origin:common::Location
+        condition:SourceBody
+        boundary:common::Op
+    -> std::Result[SourceBranch std::String] {
         if boundary.value common::OpValue::IfCondition is ! then
             "Missing source branch condition boundary".to_str std::Result::Error return
         fi
-        self.read_sequence = consequent
+        true self.read_scoped = consequent
         consequent condition boundary.into_source_origin origin SourceBranch std::Result::Ok
+    }
+
+    fn read_early_exit
+        self:mut$SourceCursor
+        origin:common::Location
+        condition:SourceBody
+        else_origin:common::Location
+    -> std::Result[SourceNode std::String] {
+        true self.read_scoped = body
+        self.read_boundary ? = boundary
+        if boundary.value common::OpValue::IfEnd is ! then
+            "Missing source branch end".to_str std::Result::Error return
+        fi
+        if self.exits_scope ! then
+            "An early-exit `if` cannot appear directly in a condition, array literal, group, match guard, f-string expression, or `unsafe` block".to_str
+            else_origin SourceRejection SourceNode::Rejected std::Result::Ok return
+        fi
+        self.read_sequence = rest
+        std::Option[common::Location]::None = rest_end
+        if self.operations.is_empty ! then
+            self.operations.length 1 - self
+                .operations
+                .get
+                .location = next: $common::Location
+            0 next.span.offset next.with_span std::Option::Some = rest_end
+        fi
+        rest condition else_origin.clone origin SourceBranch = branch
+        [branch] std::List::from_array = branches
+        rest_end SourceEarlyExit std::Option::Some boundary.into_source_origin
+        body else_origin SourceAlternative std::Option::Some branches
+        SourceConditional SourceNode::Conditional std::Result::Ok
     }
 
     fn read_conditional
         self:mut$SourceCursor
         origin:common::Location
     -> std::Result[SourceNode std::String] {
-        origin self.read_branch ? = branch
+        false self.read_scoped = condition
+        self.read_boundary ? = boundary
+        if boundary.value common::OpValue::IfElse is then
+            boundary.into_source_origin condition origin self.read_early_exit return
+        fi
+        boundary condition origin self.read_consequent ? = branch
         [branch] std::List::from_array = branches
         std::Option[SourceAlternative]::None = alternative
         while true do
@@ -450,13 +515,13 @@ impl SourceCursor {
                 continue
             fi
             if boundary.value common::OpValue::IfElse is then
-                self.read_sequence boundary.into_source_origin SourceAlternative std::Option::Some = alternative
+                true self.read_scoped boundary.into_source_origin SourceAlternative std::Option::Some = alternative
                 self.read_boundary ? = boundary
             fi
             if boundary.value common::OpValue::IfEnd is ! then
                 "Missing source branch end".to_str std::Result::Error return
             fi
-            boundary.into_source_origin alternative branches SourceConditional SourceNode::Conditional std::Result::Ok return
+            std::Option[SourceEarlyExit]::None boundary.into_source_origin alternative branches SourceConditional SourceNode::Conditional std::Result::Ok return
         done
         "Incomplete source branch".to_str std::Result::Error
     }
@@ -465,13 +530,13 @@ impl SourceCursor {
         self:mut$SourceCursor
         origin:common::Location
     -> std::Result[SourceNode std::String] {
-        self.read_sequence = condition
+        false self.read_scoped = condition
         self.read_boundary ? = boundary
         if boundary.value common::OpValue::WhileCondition is ! then
             "Missing source loop condition boundary".to_str std::Result::Error return
         fi
         boundary.into_source_origin = condition_origin
-        self.read_sequence = body
+        true self.read_scoped = body
         self.read_boundary ? = boundary
         if boundary.value common::OpValue::WhileEnd is ! then
             "Missing source loop end".to_str std::Result::Error return
@@ -503,8 +568,8 @@ impl SourceCursor {
                             common::MatchArm {
                                 pattern_value: pattern guard_ops: operations guard_end: guard_end
                             } => {
-                                operations consume_source_body = guard
-                                self.read_sequence = body
+                                false operations consume_operations = guard
+                                true self.read_scoped = body
                                 body guard_end guard pattern origin SourceArm std::Result::Ok
                             }
                         end
@@ -519,7 +584,7 @@ impl SourceCursor {
         self:mut$SourceCursor
         origin:common::Location
     -> std::Result[SourceNode std::String] {
-        self.read_sequence = body
+        false self.read_scoped = body
         self.read_boundary ? = boundary
         if boundary.value common::OpValue::UnsafeEnd is ! then
             "Missing source unsafe end".to_str std::Result::Error return
@@ -531,7 +596,7 @@ impl SourceCursor {
         self:mut$SourceCursor
         origin:common::Location
     -> std::Result[SourceNode std::String] {
-        self.read_sequence = body
+        false self.read_scoped = body
         self.read_boundary ? = boundary
         if boundary.value common::OpValue::FstringExprEnd is ! then
             "Missing source f-string expression end".to_str std::Result::Error return
@@ -552,12 +617,12 @@ impl SourceCursor {
                     common::OpValue::FstringExprStart => origin self.read_format_expr return
                     common::OpValue::PushArray(_) => {
                         if value common::OpValue::PushArray(items) is then
-                            items consume_source_body origin SourceCompound SourceNode::Array std::Result::Ok return
+                            false items consume_operations origin SourceCompound SourceNode::Array std::Result::Ok return
                         fi
                     }
                     common::OpValue::ExprGroup(_) => {
                         if value common::OpValue::ExprGroup(items) is then
-                            items consume_source_body origin SourceCompound SourceNode::Group std::Result::Ok return
+                            false items consume_operations origin SourceCompound SourceNode::Group std::Result::Ok return
                         fi
                     }
                     _ => {
@@ -572,8 +637,16 @@ impl SourceCursor {
 
 # Ownership transfers into source nodes. No semantic metadata is retained.
 pub fn consume_source_operations operations:mut$std::List[common::Op] -> SourceBody {
+    true operations consume_operations_in
+}
+
+fn consume_operations operations:std::List[common::Op] exits_scope:bool -> SourceBody {
+    exits_scope operations consume_operations_in
+}
+
+fn consume_operations_in operations:mut$std::List[common::Op] exits_scope:bool -> SourceBody {
     operations.reverse
-    operations SourceCursor = cursor
+    exits_scope operations SourceCursor = cursor
     cursor.read_sequence = body
     if cursor.operations.is_empty ! then
         cursor.operations.length 1 - cursor
@@ -650,6 +723,19 @@ impl SourceNode {
                 leaf.clone.into_operation operations.push
             }
             SourceNode::Conditional(conditional) => {
+                # An early exit lowers in source order, with its rest after `fi`.
+                if conditional.early_exit.is_some then
+                    0 conditional.branches.get = branch
+                    branch.origin.clone common::OpValue::IfStart common::Op::from_source operations.push
+                    operations branch.condition.lower_into
+                    branch.condition_origin.clone common::OpValue::IfElse common::Op::from_source operations.push
+                    if conditional.alternative std::Option::Some(alternative) is then
+                        operations alternative.body.lower_into
+                    fi
+                    conditional.end_origin.clone common::OpValue::IfEnd common::Op::from_source operations.push
+                    operations branch.consequent.lower_into
+                    return
+                fi
                 true = first
                 for branch in conditional.branches.iter do
                     if first then common::OpValue::IfStart else common::OpValue::IfElif fi = entry

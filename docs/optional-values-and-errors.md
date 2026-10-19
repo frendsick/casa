@@ -42,6 +42,21 @@ present match
 end
 ```
 
+When the absent case leaves the function or loop, an
+[early-exit `if`](control-flow.md#leave-early-when-a-check-fails) keeps the
+payload binding for the rest of the body:
+
+```casa
+import "std"
+
+fn double value:std::Option[i64] -> i64 {
+    if value std::Option::Some(number) is else
+        0 return
+    fi
+    number 2 *
+}
+```
+
 Use an optional result for an operation that can fail:
 
 ```casa
