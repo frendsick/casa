@@ -1,5 +1,7 @@
 # Native call frames use a register value stack
 
+status: amended by [ADR-0181](0181-register-storage-is-planned-within-one-function.md)
+
 Related issues: [native call frames](https://github.com/frendsick/casa/issues/879)
 and [value transfers across calls](https://github.com/frendsick/casa/issues/901).
 
@@ -19,11 +21,12 @@ establish a runtime benefit.
 
 For eligible Casa functions, transfer up to four arguments and four results in
 `%r8` through `%r11`, from the bottom to the top of the transferred stack suffix.
-Treat all four registers as caller-clobbered. Spill live values below the
-arguments, and normalize the suffix before the call. Seed the callee's incoming
-cache from the same registers and normalize results at every return. Parameter
-locals retain their existing storage. Unsupported operations materialize cached
-values before their existing lowering.
+Treat all four registers as caller-clobbered. Normalize the suffix before the
+call. [ADR-0181](0181-register-storage-is-planned-within-one-function.md) defines
+preservation of live values below the arguments and register storage for locals.
+Seed the callee's incoming cache from the same registers and normalize results at
+every return. Parameter locals follow the same allocation rules as other locals.
+Unsupported operations materialize cached values before their existing lowering.
 
 Plan eligibility from the concrete checked stack effect. Named calls and typed
 function-value calls use the same rule, including address-taken functions and
@@ -52,4 +55,5 @@ Extern-call alignment and unwind rules use `%r13` while `%rsp` is realigned.
 This remains private target planning under
 [ADR-0169](0169-backend-plans-and-renders-one-function-at-a-time.md). Keeping a
 register suffix across eligible calls reduces transfers through memory without
-adding function-wide register allocation or changing aggregate placement.
+changing aggregate placement. ADR-0181 extends it with bounded function-wide
+register allocation.

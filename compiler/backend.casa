@@ -1699,7 +1699,7 @@ impl FunctionPlanner {
         self.new_label = end_label
 
         # while index limit < do
-        start_label InstValue::Label bytecode.push
+        start_label InstValue::MemoryLabel bytecode.push
         index_local InstValue::LocalGet bytecode.push
         length element_size * i64::try_from.unwrap InstValue::Push bytecode.push
         InstValue::Lt bytecode.push
@@ -1719,7 +1719,7 @@ impl FunctionPlanner {
 
         # done
         start_label InstValue::Jump bytecode.push
-        end_label InstValue::Label bytecode.push
+        end_label InstValue::MemoryLabel bytecode.push
 
         # Push array pointer
         list_local InstValue::LocalGet bytecode.push
@@ -3532,6 +3532,8 @@ enum InstValue {
     DropFn(std::String)
     # Jumps
     Label(u64)
+    # Internal loops with a changing stack height require a memory boundary.
+    MemoryLabel(u64)
     Jump(u64)
     JumpNe(u64)
     JumpTable(std::List[u64] u64)
@@ -3676,7 +3678,10 @@ const F32_SIGN_BIT_INDEX 31
 const F64_SIGN_BIT_INDEX 63
 const ODD_INTEGER_MASK 1
 const MAX_LEAF_INSTRUCTIONS 8
-const SCALAR_REGISTER_COUNT 4
+const SCALAR_REGISTER_COUNT: u64 4
+const LOCAL_REGISTER_COUNT: u64 4
+const MIN_LOCAL_REGISTER_USES: u64 4
+const LOOP_LOCAL_WEIGHT: u64 8
 
 # Two bits per slot, initially r8, r9, r10, r11.
 const INITIAL_SCALAR_REGISTER_ORDER 0xE4
@@ -3692,6 +3697,11 @@ struct Emitter {
     stack_offset:           i64
     # Local storage below the return address, fixed for one function.
     frame_bytes:            u64
+    local_count:            u64
+    register_locals:        std::List[u64]
+    preserve_stack:         bool
+    join_depths:            std::Map[i64 u64]
+    reachable:              bool
     arithmetic_error_label: u64
     env_overflow_label:     u64
     register_results:       std::Option[u64]
@@ -3723,7 +3733,7 @@ impl Emitter {
         std::Set[std::String]::new std::Map[std::String LeafTemplate]::new
         std::Map[std::String std::String]::new
         0 header std::Map[std::String common::NativeCallPlan]::new
-        std::Map[std::String RegisterCallPlan]::new std::Option[u64]::None 0 0 0 0 0 0 std::Option[common::Location]::None std::Map[std::String u64]::new sources Emitter
+        std::Map[std::String RegisterCallPlan]::new std::Option[u64]::None 0 0 true std::Map[i64 u64]::new false std::List[u64]::new 0 0 0 0 0 std::Option[common::Location]::None std::Map[std::String u64]::new sources Emitter
     }
 
     fn intern_string self:mut$Emitter value:$str -> u64 {
@@ -3973,12 +3983,366 @@ struct LeafTemplate {
 }
 
 # A register holds one distinct value in a suffix of the value stack. Copies
-# use separate registers. Selected calls transfer the suffix in registers.
-# Other calls, branches, and unsupported operations flush it.
+# use separate registers. Calls and branch edges reconcile the suffix with
+# their register contracts. Unsupported operations materialize it in memory.
 struct ScalarStack {
     depth: u64
     first: u64
     order: u64
+}
+
+# Scalar frame slots have disjoint storage from inline aggregates. An address
+# use pins its slot in memory, including shared and exclusive borrows.
+impl Emitter {
+    fn plan_register_storage self:mut$Emitter instructions:$std::List[InstValue] {
+        std::List[u64]::new = self.register_locals
+        std::Map[i64 u64]::new = self.join_depths
+        false = self.preserve_stack
+        true = self.reachable
+        std::List[u64]::new = uses
+        std::Map[i64 u64]::new = label_positions
+        0 = depth: u64
+        0 = position: u64
+        for instruction in instructions.iter do
+            instruction match
+                InstValue::LocalGet(slot) | InstValue::LocalSet(slot) => {
+                    slot uses.get 1 + slot uses.set
+                }
+                InstValue::LocalsInit(count) => {
+                    for index in count 0 std::Range::new do
+                        0 uses.push
+                    done
+                }
+                InstValue::Label(label) | InstValue::MemoryLabel(label) => {
+                    position label label_key label_positions.set
+                    if instruction InstValue::MemoryLabel is then
+                        0 label label_key self.join_depths.set
+                    fi
+                }
+                InstValue::Jump(label) => {
+                    if label label_key label_positions.get_copy std::Option::Some(start) is then
+                        uses position start instructions weight_loop_locals
+                    fi
+                }
+                # All dispatch edges use the memory stack. Establish their
+                # contracts before a preceding branch can choose another depth.
+                InstValue::JumpTable(targets fallback) => {
+                    0 fallback label_key self.join_depths.set
+                    for target in targets.iter do
+                        0 target label_key self.join_depths.set
+                    done
+                }
+                _ => {
+                }
+            end
+            1 += position
+            depth instruction self.plan_cached_depth = depth
+        done
+        # Frameless functions keep the memory fallback for lower call values.
+        # Add a preservation-only frame if those calls become a measured bottleneck.
+        if uses.is_empty then
+            false = self.preserve_stack
+            return
+        fi
+        for instruction in instructions.iter do
+            if instruction InstValue::LocalAddress(slot) is then
+                0 slot uses.set
+            fi
+        done
+        # Dense frame indices make equal scores deterministic without sorting.
+        while self.register_locals.length LOCAL_REGISTER_COUNT < do
+            std::Option[u64]::None = selected
+            MIN_LOCAL_REGISTER_USES 1 - = score
+            for slot in uses.length 0 std::Range::new do
+                slot uses.get copy = count
+                if count score > then
+                    slot std::Option::Some = selected
+                    count = score
+                fi
+            done
+            if selected std::Option::Some(slot) is then
+                slot self.register_locals.push
+                0 slot uses.set
+            else
+                break
+            fi
+        done
+    }
+
+    # Estimate the cache in straight-line regions only to decide whether rbp
+    # needs a save slot. Emission may spill at other calls without this slot.
+    fn plan_cached_depth self:mut$Emitter instruction:$InstValue depth:u64 -> u64 {
+        if instruction InstValue::FnCall(name) is then
+            if name self.register_calls.get_copy std::Option::Some(plan) is then
+                if depth plan.arguments > name self.templates.has ! && then
+                    true = self.preserve_stack
+                fi
+                plan.results return
+            fi
+            0 return
+        fi
+        if instruction InstValue::FnExec(plan) is then
+            if plan std::Option::Some(contract) is then
+                if depth contract.arguments 1 + > then
+                    true = self.preserve_stack
+                fi
+                contract.results return
+            fi
+            0 return
+        fi
+        if instruction get_scalar_input_count std::Option::Some(inputs) is then
+            if depth inputs < then
+                inputs = depth
+            fi
+            instruction match
+                InstValue::Drop | InstValue::LocalSet | InstValue::JumpNe | InstValue::Store8 | InstValue::Store16 | InstValue::Store32 | InstValue::Store64 => 0
+                InstValue::Dup | InstValue::Swap => 2
+                InstValue::Over | InstValue::Rot => 3
+                InstValue::NumericConvert => 0
+                InstValue::NormalizeInt(builtin) => {
+                    if builtin.bit_width 64 == then 0 else 1 fi
+                }
+                _ => 1
+            end = outputs: u64
+            depth inputs - outputs + = depth
+            if depth SCALAR_REGISTER_COUNT > then
+                SCALAR_REGISTER_COUNT
+            else
+                depth
+            fi
+        else
+            0
+        fi
+    }
+
+    fn find_local_register self:$Emitter slot:u64 -> std::Option[str] {
+        for index in self.register_locals.length 0 std::Range::new do
+            if index self.register_locals.get slot == then
+                index get_local_register std::Option::Some return
+            fi
+        done
+        std::Option[str]::None
+    }
+
+    fn emit_register_slot_store self:mut$Emitter register:str slot:u64 {
+        "    movq " self.asm.append
+        register self.asm.append
+        ", " self.asm.append
+        slot self.emit_local_operand
+        "" self.line
+    }
+
+    fn emit_register_slot_load self:mut$Emitter register:str slot:u64 {
+        "    movq " self.asm.append
+        slot self.emit_local_operand
+        ", " self.asm.append
+        register self.asm.append
+        "" self.line
+    }
+
+    fn describe_saved_registers self:mut$Emitter {
+        for index in self.register_locals.length 0 std::Range::new do
+            index get_local_register = register
+            self.local_count index + 2 + common::WORD_SIZE * = offset
+            f".cfi_offset {register}, -{offset}" self.indent_string
+        done
+        if self.preserve_stack then
+            self.local_count self.register_locals.length + 2 + common::WORD_SIZE * = offset
+            f".cfi_offset %rbp, -{offset}" self.indent_string
+        fi
+    }
+
+    fn save_function_registers self:mut$Emitter {
+        for index in self.register_locals.length 0 std::Range::new do
+            self.local_count index + index get_local_register self.emit_register_slot_store
+        done
+        if self.preserve_stack then
+            self.local_count self.register_locals.length + "%rbp" self.emit_register_slot_store
+        fi
+        self.describe_saved_registers
+    }
+
+    fn restore_function_registers self:mut$Emitter {
+        for index in self.register_locals.length 0 std::Range::new do
+            index get_local_register = register
+            self.local_count index + register self.emit_register_slot_load
+            f".cfi_restore {register}" self.indent_string
+        done
+        if self.preserve_stack then
+            self.local_count self.register_locals.length + "%rbp" self.emit_register_slot_load
+            ".cfi_restore %rbp" self.indent
+        fi
+    }
+
+    # Runtime helpers and native adapters predate the callee-saved local ABI.
+    # Preserve every register they clobber, including callers' unallocated ones.
+    fn get_local_clobbers self:$Emitter instruction:$InstValue -> u64 {
+        instruction match
+            InstValue::ExternCall => 0xA
+            InstValue::PrimitiveToStr => 0xA
+            InstValue::FstringConcat => 0xF
+            InstValue::PrintInt => 0x8
+            InstValue::PrintString => 0x1
+            _ => 0
+        end
+    }
+
+    fn save_clobbered_registers self:mut$Emitter mask:u64 {
+        ".cfi_remember_state" self.indent
+        self.frame_bytes common::WORD_SIZE + = offset
+        for index in LOCAL_REGISTER_COUNT 0 std::Range::new do
+            if mask index >> 1 & 0 == then
+                continue
+            fi
+            index get_local_register = register
+            register "pushq" self.emit_unary_register
+            common::WORD_SIZE += offset
+            ".cfi_adjust_cfa_offset 8" self.indent
+            # An allocated register's prologue slot holds the caller's value.
+            # This temporary push holds our local, so retain the earlier rule.
+            if index self.register_locals.length >= then
+                f".cfi_offset {register}, -{offset}" self.indent_string
+            fi
+        done
+    }
+
+    fn restore_clobbered_registers self:mut$Emitter mask:u64 {
+        LOCAL_REGISTER_COUNT = remaining
+        while remaining 0 > do
+            1 -= remaining
+            if mask remaining >> 1 & 0 == then
+                continue
+            fi
+            remaining get_local_register "popq" self.emit_unary_register
+            ".cfi_adjust_cfa_offset -8" self.indent
+        done
+        ".cfi_restore_state" self.indent
+    }
+
+    # Each label has one canonical register suffix. The first incoming edge
+    # chooses its depth, and later edges spill or refill to that contract.
+    fn prepare_join self:mut$Emitter cache:mut$ScalarStack label:u64 {
+        if label label_key self.join_depths.get_copy std::Option::Some(depth) is then
+            depth
+        else
+            cache.depth label label_key self.join_depths.set
+            cache.depth
+        fi = depth
+        depth cache self.prepare_register_transfer
+        self.sync_value_stack
+    }
+
+    # Keep the highest live value below the arguments in a callee-saved
+    # register. Deeper live values spill in order. Revisit this one-value limit
+    # if measured call sites justify taking registers away from hot locals.
+    fn preserve_call_value self:mut$Emitter cache:mut$ScalarStack arguments:u64 -> bool {
+        if self.preserve_stack ! cache.depth arguments <= || then
+            false return
+        fi
+        cache.depth arguments - = lower_count
+        for index in lower_count 1 - 0 std::Range::new do
+            index cache.get_register self.emit_push
+        done
+        "%rbp" lower_count 1 - cache.get_register "movq" self.emit_binary_registers
+        cache.first lower_count + SCALAR_REGISTER_COUNT % = cache.first
+        arguments = cache.depth
+        true
+    }
+
+    fn restore_call_value self:mut$Emitter cache:mut$ScalarStack {
+        if cache.depth SCALAR_REGISTER_COUNT == then
+            "%rbp" self.emit_push
+        else
+            cache.first SCALAR_REGISTER_COUNT + 1 - SCALAR_REGISTER_COUNT % = cache.first
+            0 cache.get_register "%rbp" "movq" self.emit_binary_registers
+            1 += cache.depth
+        fi
+    }
+
+    fn emit_register_normalization self:mut$Emitter builtin:common::BuiltinType target:str {
+        if builtin.bit_width 64 == then
+            return
+        fi
+        "%rax" target "movq" self.emit_binary_registers
+        builtin match
+            common::BuiltinType::I8 => target "%al" "movsbq" self.emit_binary_registers
+            common::BuiltinType::I16 => target "%ax" "movswq" self.emit_binary_registers
+            common::BuiltinType::I32 => target "%eax" "movslq" self.emit_binary_registers
+            common::BuiltinType::U8 => target "%al" "movzbq" self.emit_binary_registers
+            common::BuiltinType::U16 => target "%ax" "movzwq" self.emit_binary_registers
+            common::BuiltinType::U32 => {
+                "movl %eax, %eax" self.indent
+                target "%rax" "movq" self.emit_binary_registers
+            }
+            _ => {
+            }
+        end
+    }
+
+    fn emit_float_literal self:mut$Emitter value:str builtin:common::BuiltinType target:str {
+        ".pushsection .rodata" self.line
+        if builtin common::BuiltinType::F32 == then ".align 4" else ".align 8" fi self.line
+        "0:" self.line
+        if builtin common::BuiltinType::F32 == then
+            f".float {value}"
+        else
+            f".double {value}"
+        fi self.line_string
+        ".popsection" self.line
+        if builtin common::BuiltinType::F32 == then
+            "movl 0b(%rip), %eax" self.indent
+            target "%rax" "movq" self.emit_binary_registers
+        else
+            f"movq 0b(%rip), {target}" self.indent_string
+        fi
+    }
+
+    fn emit_register_float_binary self:mut$Emitter instruction:$InstValue top:str below:str {
+        instruction match
+            InstValue::FloatAdd32 => "addss"
+            InstValue::FloatAdd64 => "addsd"
+            InstValue::FloatSub32 => "subss"
+            InstValue::FloatSub64 => "subsd"
+            InstValue::FloatMul32 => "mulss"
+            InstValue::FloatMul64 => "mulsd"
+            InstValue::FloatDiv32 => "divss"
+            InstValue::FloatDiv64 => "divsd"
+            _ => "Invalid register float operation" panic
+        end = operation
+        "%xmm0" below "movq" self.emit_binary_registers
+        "%xmm1" top "movq" self.emit_binary_registers
+        "%xmm0" "%xmm1" operation self.emit_binary_registers
+        below "%xmm0" "movq" self.emit_binary_registers
+    }
+}
+
+# Backward jumps delimit already-lowered loop bodies. Weight their local uses
+# without retaining a control-flow graph or iterating a dataflow analysis.
+fn weight_loop_locals
+    instructions:$std::List[InstValue]
+    start:u64
+    end_index:u64
+    uses:mut$std::List[u64]
+{
+    for index in end_index start std::Range::new do
+        index instructions.get match
+            InstValue::LocalGet(slot) | InstValue::LocalSet(slot) => {
+                slot uses.get LOOP_LOCAL_WEIGHT + slot uses.set
+            }
+            _ => {
+            }
+        end
+    done
+}
+
+fn get_local_register index:u64 -> str {
+    index match
+        0 => "%r12"
+        1 => "%r13"
+        2 => "%r14"
+        3 => "%r15"
+        _ => "Invalid local register index" panic
+    end
 }
 
 impl ScalarStack {
@@ -4031,12 +4395,11 @@ fn get_scalar_input_count inst:$InstValue -> std::Option[u64] {
         InstValue::Store32 => 2
         InstValue::Store64 => 2
         InstValue::NormalizeInt(builtin) => {
-            if 64 builtin.bit_width == then
-                0
-            else
-                std::Option[u64]::None return
-            fi
+            if builtin.bit_width 64 == then 0 else 1 fi
         }
+        InstValue::PushFloat32 => 0
+        InstValue::PushFloat64 => 0
+        InstValue::FloatAdd32 | InstValue::FloatAdd64 | InstValue::FloatSub32 | InstValue::FloatSub64 | InstValue::FloatMul32 | InstValue::FloatMul64 | InstValue::FloatDiv32 | InstValue::FloatDiv64 => 2
         InstValue::NumericConvert(conversion) => {
             if
                 conversion.kind common::NumericConversionKind::FromBits ==
@@ -4355,6 +4718,7 @@ impl Emitter {
         is_global:bool
         call_plan:std::Option[RegisterCallPlan]
     {
+        bytecode self.plan_register_storage
         ScalarStack::new = cache
         std::Option[u64]::None = self.register_results
         if call_plan std::Option::Some(plan) is then
@@ -4405,6 +4769,10 @@ impl Emitter {
         while index end_index < do
             index bytecode.get = inst
             index locations.get self.emit_location
+            if self.reachable ! inst InstValue::Label is ! && inst InstValue::MemoryLabel is ! && then
+                1 += index
+                continue
+            fi
             if inst InstValue::LocalSet(written) is index 1 + end_index < && then
                 if index 1 + bytecode.get InstValue::LocalGet(read) is written read == && then
                     cache inst self.emit_scalar_inst drop
@@ -4560,11 +4928,22 @@ impl Emitter {
         cache.depth 1 - cache.get_register = top
         cache.depth 2 - cache.get_register = below
         2 -= cache.depth
-        # Flushing preserves the operand registers. Synchronize first so cmp
-        # and the conditional jump remain adjacent for hardware branch fusion.
-        cache self.flush_scalar_stack
-        self.sync_value_stack
-        below top "cmpq" self.emit_binary_registers
+        # Keep cmp and jcc adjacent for branch fusion. Only nonempty suffixes
+        # can overwrite operand registers while reconciling the edge.
+        if
+            cache.depth 0 != 0 label label_key self
+                .join_depths
+                .get_copy
+                .unwrap_or 0 != ||
+        then
+            "%rax" top "movq" self.emit_binary_registers
+            "%rdx" below "movq" self.emit_binary_registers
+            label cache self.prepare_join
+            "%rdx" "%rax" "cmpq" self.emit_binary_registers
+        else
+            label cache self.prepare_join
+            below top "cmpq" self.emit_binary_registers
+        fi
         f"{branch} .L{label}" self.indent_string
         true
     }
@@ -4626,7 +5005,9 @@ impl Emitter {
 
     fn reserve_scalar_register self:mut$Emitter cache:mut$ScalarStack -> str {
         if SCALAR_REGISTER_COUNT cache.depth == then
-            cache self.flush_scalar_stack
+            0 cache.get_register self.emit_push
+            cache.first 1 + SCALAR_REGISTER_COUNT % = cache.first
+            1 -= cache.depth
         fi
         cache.depth cache.get_register = register
         1 += cache.depth
@@ -4684,12 +5065,43 @@ impl Emitter {
     }
 
     fn emit_scalar_or_inst self:mut$Emitter inst:$InstValue cache:mut$ScalarStack is_global:bool {
+        inst match
+            InstValue::Label(label) | InstValue::MemoryLabel(label) => {
+                if self.reachable then
+                    label cache self.prepare_join
+                else
+                    0 label label_key self
+                        .join_depths
+                        .get_copy
+                        .unwrap_or = cache.depth
+                    cache.depth label label_key self.join_depths.set
+                    0 = cache.first
+                    INITIAL_SCALAR_REGISTER_ORDER = cache.order
+                    0 = self.stack_offset
+                fi
+                true = self.reachable
+                is_global inst self.emit_inst
+                return
+            }
+            InstValue::Jump(label) => {
+                label cache self.prepare_join
+                is_global inst self.emit_inst
+                false = self.reachable
+                return
+            }
+            _ => {
+            }
+        end
         if inst InstValue::FnCall(name) is then
             if name self.register_calls.get_copy std::Option::Some(plan) is then
+                plan.arguments cache self.preserve_call_value = preserved
                 plan.arguments cache self.prepare_register_transfer
                 self.sync_value_stack
                 f"call fn_{name.as_str self.function_label}" self.indent_string
                 plan.results = cache.depth
+                if preserved then
+                    cache self.restore_call_value
+                fi
                 return
             fi
         fi
@@ -4699,9 +5111,13 @@ impl Emitter {
                 cache.depth 1 - cache.get_register = closure
                 "%rax" closure "movq" self.emit_binary_registers
                 1 -= cache.depth
+                plan.arguments cache self.preserve_call_value = preserved
                 plan.arguments cache self.prepare_register_transfer
                 self.emit_execute
                 plan.results = cache.depth
+                if preserved then
+                    cache self.restore_call_value
+                fi
                 return
             fi
         fi
@@ -4710,6 +5126,7 @@ impl Emitter {
                 result_count cache self.prepare_register_transfer
                 is_global inst self.emit_inst
                 0 = cache.depth
+                false = self.reachable
                 return
             fi
             if inst InstValue::LocalsInit is inst InstValue::LocalsUninit is || then
@@ -4719,7 +5136,17 @@ impl Emitter {
         fi
         if cache inst self.emit_scalar_inst ! then
             cache self.flush_scalar_stack
+            inst self.get_local_clobbers = clobbers
+            if clobbers 0 != then
+                clobbers self.save_clobbered_registers
+            fi
             is_global inst self.emit_inst
+            if clobbers 0 != then
+                clobbers self.restore_clobbered_registers
+            fi
+            if inst InstValue::FnReturn is inst InstValue::JumpTable is || inst InstValue::Panic is || then
+                false = self.reachable
+            fi
         fi
     }
 
@@ -4758,6 +5185,10 @@ impl Emitter {
             }
             InstValue::LocalGet(index) => {
                 cache self.reserve_scalar_register = target
+                if index self.find_local_register std::Option::Some(source) is then
+                    target source "movq" self.emit_binary_registers
+                    true return
+                fi
                 "    movq " self.asm.append
                 index self.emit_local_operand
                 ", " self.asm.append
@@ -4773,6 +5204,11 @@ impl Emitter {
                 "" self.line
             }
             InstValue::LocalSet(index) => {
+                if index self.find_local_register std::Option::Some(target) is then
+                    target top "movq" self.emit_binary_registers
+                    1 -= cache.depth
+                    true return
+                fi
                 "    movq " self.asm.append
                 top self.asm.append
                 ", " self.asm.append
@@ -4782,9 +5218,8 @@ impl Emitter {
             }
             InstValue::JumpNe(label) => {
                 1 -= cache.depth
-                cache self.flush_scalar_stack
-                self.sync_value_stack
                 top top "testq" self.emit_binary_registers
+                label cache self.prepare_join
                 f"jz .L{label}" self.indent_string
             }
             InstValue::Drop => 1 -= cache.depth
@@ -4830,9 +5265,20 @@ impl Emitter {
                 2 -= cache.depth
             }
             InstValue::BitNot => top "notq" self.emit_unary_register
-            # These eligible conversions leave the representation unchanged.
-            InstValue::NormalizeInt => {
+            InstValue::NormalizeInt(builtin) => top builtin self.emit_register_normalization
+            InstValue::PushFloat32(value) => {
+                cache self.reserve_scalar_register = target
+                target common::BuiltinType::F32 value.as_str self.emit_float_literal
             }
+            InstValue::PushFloat64(value) => {
+                cache self.reserve_scalar_register = target
+                target common::BuiltinType::F64 value.as_str self.emit_float_literal
+            }
+            InstValue::FloatAdd32 | InstValue::FloatAdd64 | InstValue::FloatSub32 | InstValue::FloatSub64 | InstValue::FloatMul32 | InstValue::FloatMul64 | InstValue::FloatDiv32 | InstValue::FloatDiv64 => {
+                below top inst self.emit_register_float_binary
+                1 -= cache.depth
+            }
+            # These eligible conversions leave the representation unchanged.
             InstValue::NumericConvert => {
             }
             InstValue::Not => {
@@ -5491,14 +5937,6 @@ impl Emitter {
         "%rax" self.emit_push
     }
 
-    fn emit_float_binary self:mut$Emitter instruction:str {
-        "%xmm0" self.emit_pop
-        0 self.stack_operand = top
-        f"movq {top}, %xmm1" self.indent_string
-        f"{instruction} %xmm0, %xmm1" self.indent_string
-        f"movq %xmm1, {top}" self.indent_string
-    }
-
     fn emit_float_comparison self:mut$Emitter setcc:str instruction:str {
         "%xmm1" self.emit_pop
         0 self.stack_operand = top
@@ -5805,24 +6243,6 @@ impl Emitter {
     # Scalar operations have already been consumed by emit_scalar_inst.
     fn emit_inst self:mut$Emitter inst:$InstValue is_global:bool {
         inst match
-            InstValue::PushFloat32(value) => {
-                ".pushsection .rodata" self.line
-                ".align 4" self.line
-                "0:" self.line
-                f".float {value}" self.line_string
-                ".popsection" self.line
-                "movl 0b(%rip), %eax" self.indent
-                "%rax" self.emit_push
-            }
-            InstValue::PushFloat64(value) => {
-                ".pushsection .rodata" self.line
-                ".align 8" self.line
-                "0:" self.line
-                f".double {value}" self.line_string
-                ".popsection" self.line
-                "movq 0b(%rip), %rax" self.indent
-                "%rax" self.emit_push
-            }
             InstValue::PushStaticArray(array_index byte_count) => {
                 f"movq {0 self.stack_operand}, %rdi" self.indent_string
                 f"leaq static_array_{array_index}(%rip), %rsi" self.indent_string
@@ -5885,14 +6305,6 @@ impl Emitter {
             InstValue::FloatRound(kind target) => target kind self.emit_float_round
             InstValue::FloatFromDecimal => self.emit_float_from_decimal
             InstValue::FloatSignificand => self.emit_float_significand
-            InstValue::FloatAdd32 => "addss" self.emit_float_binary
-            InstValue::FloatAdd64 => "addsd" self.emit_float_binary
-            InstValue::FloatSub32 => "subss" self.emit_float_binary
-            InstValue::FloatSub64 => "subsd" self.emit_float_binary
-            InstValue::FloatMul32 => "mulss" self.emit_float_binary
-            InstValue::FloatMul64 => "mulsd" self.emit_float_binary
-            InstValue::FloatDiv32 => "divss" self.emit_float_binary
-            InstValue::FloatDiv64 => "divsd" self.emit_float_binary
             InstValue::FloatEq32 => "ucomiss" "sete" self.emit_float_comparison
             InstValue::FloatEq64 => "ucomisd" "sete" self.emit_float_comparison
             InstValue::FloatNe32 => "ucomiss" "setne" self.emit_float_comparison
@@ -5907,7 +6319,7 @@ impl Emitter {
             InstValue::FloatGe64 => "ucomisd" "setae" self.emit_float_comparison
 
             # Control flow / variables / functions
-            InstValue::Label(label) => {
+            InstValue::Label(label) | InstValue::MemoryLabel(label) => {
                 self.sync_value_stack
                 f".L{label}:" self.line_string
             }
@@ -5933,15 +6345,19 @@ impl Emitter {
                 if 0 count == then
                     return
                 fi
-                count common::WORD_SIZE * = byte_count
+                count = self.local_count
+                count self.register_locals.length +
+                if self.preserve_stack then 1 else 0 fi + common::WORD_SIZE * = byte_count
                 byte_count = self.frame_bytes
                 # Every value slot is assigned before use. Ownership flags are
                 # initialized explicitly when the complete frame is finalized.
                 byte_count self.emit_return_stack_reservation
+                self.save_function_registers
             }
             InstValue::LocalsUninit(count) => {
                 if 0 count != then
-                    count common::WORD_SIZE * = byte_count
+                    self.restore_function_registers
+                    self.frame_bytes = byte_count
                     f"addq ${byte_count}, %rsp" self.indent_string
                     f".cfi_adjust_cfa_offset -{byte_count}" self.indent_string
                 fi
@@ -6076,6 +6492,7 @@ impl Emitter {
                     # Code after an early return remains inside the frame.
                     if 0 self.frame_bytes != then
                         f".cfi_adjust_cfa_offset {self.frame_bytes}" self.indent_string
+                        self.describe_saved_registers
                     fi
                 fi
             }
@@ -6280,12 +6697,16 @@ impl Emitter {
             fi
         fi
         for action in plan.actions.iter do
-            if action InstValue::Label(label) is then
-                if label label_key labels.has label label_key self.labels.has || then
-                    "Duplicate machine label".to_str std::Result::Error return
-                fi
-                label label_key labels.add
-            fi
+            action match
+                InstValue::Label(label) | InstValue::MemoryLabel(label) => {
+                    if label label_key labels.has label label_key self.labels.has || then
+                        "Duplicate machine label".to_str std::Result::Error return
+                    fi
+                    label label_key labels.add
+                }
+                _ => {
+                }
+            end
         done
         for action in plan.actions.iter do
             true = valid
@@ -6371,9 +6792,11 @@ impl Emitter {
             }
         end
         for action in plan.actions.iter do
-            if action InstValue::Label(label) is then
-                label label_key self.labels.add
-            fi
+            action match
+                InstValue::Label(label) | InstValue::MemoryLabel(label) => label label_key self.labels.add
+                _ => {
+                }
+            end
         done
         std::Unit::Value std::Result::Ok
     }
