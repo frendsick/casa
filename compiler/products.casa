@@ -166,9 +166,12 @@ impl SyntaxResult {
 }
 
 pub struct AnalysisSnapshot {
-    report:    Report
-    index:     document::EditorIndex
-    root_file: std::String
+    report:        Report
+    index:         document::EditorIndex
+    root_file:     std::String
+    # Search order and import resolutions that `is_current` checks again.
+    library_paths: std::List[std::String]
+    resolutions:   std::List[parser::ImportResolution]
 }
 
 impl AnalysisSnapshot {
@@ -264,31 +267,45 @@ fn is_current
             .sources
             .iter
     do
-        if imported.first.as_str sources.get std::Option::Some(text) is then
-            if text imported.second != then
-                false return
-            fi
-        elif imported.first.as_str read_text std::Option::Some(text) is then
-            if text imported.second != then
-                false return
-            fi
-        else
+        if imports.texts sources imported.first.as_str has_same_text ! then
             false return
         fi
     done
-    for
-        resolution in imports
-            .source
-            .get_resolutions
-            .iter
-    do
+    sources library_paths imports.source.get_resolutions resolves_same
+}
+
+# Whether `path` still has the text that `analyzed` holds: its override, else the
+# file on disk. A file without analyzed text, such as a missing import, never matches.
+fn has_same_text path:$str sources:$lexer::SourceStore analyzed:$lexer::SourceStore -> bool {
+    if path analyzed.get std::Option::Some(previous) is then
+        if path sources.get std::Option::Some(text) is then
+            text previous == return
+        fi
+        if path read_text std::Option::Some(text) is then
+            text previous == return
+        fi
+    fi
+    false
+}
+
+# Whether each import still resolves to the recorded file, or still to none.
+fn resolves_same
+    resolutions:$std::List[parser::ImportResolution]
+    library_paths:$std::List[std::String]
+    sources:$lexer::SourceStore
+-> bool {
+    for resolution in resolutions.iter do
         resolution.specifier.as_str resolution.importing_file.as_str library_paths sources
         parser::resolve_import_in drop = resolved
         if resolved std::Option::Some(path) is then
-            if path resolution.path != then
+            if resolution.path std::Option::Some(recorded) is then
+                if path recorded != then
+                    false return
+                fi
+            else
                 false return
             fi
-        else
+        elif resolution.path.is_some then
             false return
         fi
     done
@@ -345,16 +362,27 @@ fn analyze_root
     imports
         .check
         .get_store
-        .clone imports.source root_sources diagnostics library_paths tokens
+        .clone imports.source root_sources diagnostics library_paths.clone tokens
     parser::parse_root_with_imports = root_imports = parsed
     if imports.source.get_paths root_imports same_paths ! then
         std::Option[AnalysisSnapshot]::None return
     fi
+    imports
+        .source
+        .get_resolutions
+        .clone = resolutions
+    parsed.get_resolutions.clone resolutions.append
     { drop } imports.check root_sources parsed check_root_with_imports.into_parts
     = checked = root_sources = diagnostics
     imports.index root_file.to_str diagnostics root_sources checked document::project_index_with_imports
     = diagnostics = root_sources = index
-    root_file.to_str index root_sources diagnostics Report AnalysisSnapshot std::Option::Some
+    AnalysisSnapshot {
+        report: root_sources diagnostics Report
+        index: index
+        root_file: root_file.to_str
+        library_paths: library_paths
+        resolutions: resolutions
+    } std::Option::Some
 }
 
 fn same_paths left:$std::List[std::String] right:$std::List[std::String] -> bool {
@@ -438,11 +466,19 @@ fn analyze_combined
     root_file:std::String
     input:CompilationInput
 -> std::Result[AnalysisSnapshot CompilerFailure] {
+    input.resolve_library_paths = library_paths
     { drop } input parse_input = sources = parsed
+    parsed.get_resolutions.clone = resolutions
     { drop } sources parsed check.into_parts = checked = sources = diagnostics
     root_file.clone diagnostics sources checked document::project_index
     = diagnostics = sources = index
-    root_file index sources diagnostics Report AnalysisSnapshot std::Result::Ok
+    AnalysisSnapshot {
+        report: sources diagnostics Report
+        index: index
+        root_file: root_file
+        library_paths: library_paths
+        resolutions: resolutions
+    } std::Result::Ok
 }
 
 # Source errors cannot reach emission. Native assembly, linking and launch are caller work.
@@ -723,6 +759,43 @@ impl AnalysisSnapshot {
             .unwrap
     }
     pub fn is_incomplete self:$AnalysisSnapshot -> bool { self.index.is_incomplete }
+
+    # Whether analyzing `input` would produce this snapshot again. Reads each
+    # resolved file without an override from disk.
+    pub fn is_current self:$AnalysisSnapshot input:$CompilationInput -> bool {
+        if input.validate.is_some then
+            false return
+        fi
+        input
+            .root
+            .file
+            .as_str input.resolve_path = root_file
+        input.resolve_library_paths = library_paths
+        if
+            root_file self.root_file != library_paths self.library_paths same_paths ! ||
+            input.root.text self.get_source != ||
+        then
+            false return
+        fi
+        root_file.as_str input.request_sources = sources
+        if sources library_paths self.resolutions resolves_same ! then
+            false return
+        fi
+        # Files without text, such as missing path-style imports, need a new analysis.
+        # Revisit if editors spend long in that state on large import graphs.
+        std::Set[std::String]::new = compared
+        for resolution in self.resolutions.iter do
+            if resolution.path std::Option::Some(path) is then
+                if path compared.has ! then
+                    if self.report.sources sources path.as_str has_same_text ! then
+                        false return
+                    fi
+                    path.clone compared.add
+                fi
+            fi
+        done
+        true
+    }
     pub fn find_symbol_identity_at
         self:$AnalysisSnapshot
         position:$common::SourcePosition

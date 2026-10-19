@@ -81,7 +81,7 @@ request types find the same libraries.
 |---|---|
 | Completion | Names, keywords, intrinsics, dot methods, and qualified names |
 | Definition | Functions, bindings, structs, enum variants, and qualified methods |
-| Diagnostics | Analyze on open, full-document change, save, and local editor queries |
+| Diagnostics | Analyze on open and full-document change, and on save or local editor queries after inputs change |
 | Hover | Types and stack effects for symbols, literals, operators, and intrinsics |
 | References | Verified uses across discovered workspace roots and imports |
 | Rename | Validated workspace edits for functions and bindings |
@@ -101,8 +101,12 @@ from other open Casa documents is included in analysis. Queries use a source
 index built during analysis. Replacing a document releases its old snapshot.
 Query results own their presentation text and source ranges.
 
-Hover, definition, completion, and semantic-token requests refresh the document
-analysis and publish diagnostics before returning their result.
+Hover, definition, completion, and semantic-token requests first check that
+the document's analysis is current. The server reads the imported files again,
+resolves each import again, and compares the result with the analysis. If an
+input changed, the server analyzes the document again and publishes diagnostics
+before it returns the result. Otherwise the request uses the existing analysis.
+Save notifications use the same check.
 
 Each open document keeps the analysis of its imports between edits. The server
 reads the imported files again on each analysis and reuses the earlier import
@@ -162,6 +166,8 @@ return no result until it analyzes again.
   root can prevent rename even when some references remain queryable.
 - An open document whose imports report diagnostics gets no import reuse. Each
   edit then analyzes all of its imports again.
+- An import that resolves to a file without text, such as a missing path-style
+  import, makes each local query analyze the document again.
 - Workspace requests reanalyze roots on each request. Large workspaces can be slow.
   Exclude generated files and intentionally invalid fixtures with `excludePaths`.
 

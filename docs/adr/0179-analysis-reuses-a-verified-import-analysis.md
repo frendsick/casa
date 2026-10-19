@@ -19,7 +19,8 @@ analysis. A later request reuses it only when all of these still match:
 
 - the root identity, base directory, and ordered library paths
 - the text of every imported file, read from its override or from disk
-- the file that each import inside an imported module resolves to
+- the file that each import in the root and its imported modules resolves
+  to, or the absence of that file
 - the order of the root's imports reported by the root stage
 
 Any mismatch analyzes the imports again. The root stage always works on a copy,
@@ -33,6 +34,10 @@ assembly does, and the cache stays empty. Assembly does not use two stages.
 
 The language server keeps one cache per open document and drops it when the
 document closes. Workspace reference and rename analyses use `analyze`.
+
+A snapshot records its library paths and import resolutions. Before a local
+query, the language server reuses the open document's snapshot when the root
+text, library paths, import resolutions, and imported text still match.
 
 ## Considered options
 
