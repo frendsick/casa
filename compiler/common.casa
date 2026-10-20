@@ -1,6 +1,5 @@
 # Shared types, enums, and data structures used across the Casa compiler.
 import "std" as std
-import "shared" as shared
 
 pub enum TokenKind derives std::Eq std::Copy {
     Comment
@@ -236,28 +235,19 @@ impl SourcePosition {
     pub fn new line:u64 column:u64 -> SourcePosition { column line SourcePosition }
 }
 
-# Each location owns a reference to its file path and stores its own byte range.
+# Each location shares its file path and stores its own byte range.
 # Locations can outlive the lexer, source store, and other compilation products.
-pub struct Location {
-    data:  ptr
+pub struct Location derives std::Clone {
+    path:  std::Shared[std::String]
     range: Span
-}
-
-struct SourceFileData {
-    references: u64
-    file:       std::String
 }
 
 impl Location {
     pub fn new file:std::String offset:u64 length:u64 -> Location {
-        # SAFETY: The first location owns the complete file-path backing.
-        unsafe { length offset Span file 1 SourceFileData ptr::into_raw Location }
+        length offset Span file std::Shared::new Location
     }
 
-    pub fn file self:$Location -> $std::String {
-        # SAFETY: The handle retains immutable backing for the returned borrow.
-        unsafe { self.data ptr::as_ref[SourceFileData].file }
-    }
+    pub fn file self:$Location -> $std::String { self.path.get }
 
     pub fn span self:$Location -> Span { self.range copy }
 
@@ -268,26 +258,7 @@ impl Location {
     }
 
     pub fn with_span self:$Location offset:u64 length:u64 -> Location {
-        # SAFETY: This location retains the file path while creating another owner.
-        unsafe { length offset Span self.data shared::retain Location }
-    }
-
-    pub fn drop self:mut$Location {
-        # SAFETY: The location owns one reference to SourceFileData. A final
-        # release transfers the complete backing for typed destruction.
-        unsafe {
-            if self.data shared::release then
-                self.data ptr::from_raw[SourceFileData] drop
-            fi
-        }
-        ptr::null = self.data
-    }
-}
-
-impl Location: std::Clone {
-    pub fn clone self:$Location -> Location {
-        # SAFETY: The shared handle retains the backing during this count change.
-        unsafe { self.range copy self.data shared::retain Location }
+        length offset Span self.path.clone Location
     }
 }
 
@@ -1470,14 +1441,13 @@ pub fn parse_builtin source:$str -> std::Option[BuiltinType] {
 
 # Generic type trees are immutable. Clones share their backing until the last
 # owner is destroyed. Substitution constructs a new tree.
-pub struct GenericType {
-    data: ptr
+pub struct GenericType derives std::Clone {
+    data: std::Shared[GenericTypeData]
 }
 
 struct GenericTypeData {
-    references: u64
-    base:       std::String
-    params:     std::List[Type]
+    base:   std::String
+    params: std::List[Type]
 }
 
 impl GenericType {
@@ -1486,37 +1456,12 @@ impl GenericType {
     }
 
     pub fn with_params name:std::String parameters:std::List[Type] -> GenericType {
-        # SAFETY: The new backing has one owner. GenericType::drop releases the last owner.
-        unsafe { parameters name 1 GenericTypeData ptr::into_raw GenericType }
+        parameters name GenericTypeData std::Shared::new GenericType
     }
 
-    pub fn base self:$GenericType -> $std::String {
-        # SAFETY: self keeps the immutable backing live for the returned borrow.
-        unsafe { self.data ptr::as_ref[GenericTypeData].base }
-    }
+    pub fn base self:$GenericType -> $std::String { self.data.get.base }
 
-    pub fn params self:$GenericType -> $std::List[Type] {
-        # SAFETY: self keeps the immutable backing live for the returned borrow.
-        unsafe { self.data ptr::as_ref[GenericTypeData].params }
-    }
-
-    pub fn drop self:mut$GenericType {
-        # SAFETY: The handle owns one reference to GenericTypeData. A final
-        # release transfers the complete backing for typed destruction.
-        unsafe {
-            if self.data shared::release then
-                self.data ptr::from_raw[GenericTypeData] drop
-            fi
-        }
-        ptr::null = self.data
-    }
-}
-
-impl GenericType: std::Clone {
-    pub fn clone self:$GenericType -> GenericType {
-        # SAFETY: The shared handle retains the backing during this count change.
-        unsafe { self.data shared::retain GenericType }
-    }
+    pub fn params self:$GenericType -> $std::List[Type] { self.data.get.params }
 }
 
 pub struct FunctionType derives std::Clone {
@@ -1824,9 +1769,7 @@ impl Type {
     pub fn type_params self:$Type -> std::Option[$std::List[Type]] {
         if self Type::Generic(generic) is then
             if 0 generic.params.length != then
-                # SAFETY: self retains the shared backing for the returned view.
-                unsafe { generic.data ptr::as_ref[GenericTypeData].params }
-                std::Option[$std::List[Type]]::Some return
+                generic.params std::Option[$std::List[Type]]::Some return
             fi
         fi
         std::Option::None
@@ -2166,7 +2109,8 @@ impl Type {
             }
             Type::Generic(g_self) => {
                 if other Type::Generic(g_other) is then
-                    if g_other.data g_self.data == then
+                    # Clones share one immutable backing.
+                    if g_other.data.get ptr::from_ref g_self.data.get ptr::from_ref == then
                         true return
                     fi
                     if g_other.base g_self.base != then
