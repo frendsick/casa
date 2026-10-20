@@ -153,6 +153,27 @@ struct ArrayCleanupHolder {
     tail:  u8
 }
 
+struct WrappedResource {
+    inner: Resource
+}
+
+struct WrappedHolder {
+    tag:   u8
+    value: WrappedResource
+    tail:  u8
+}
+
+enum ResourceSlot {
+    Held(Resource)
+    Empty
+}
+
+struct SharedHolder {
+    tag:  u8
+    text: std::Shared[std::String]
+    tail: u8
+}
+
 fn move_through_raw [T] value:T -> T {
     unsafe {
         size_of[T] alloc = storage
@@ -306,15 +327,12 @@ fn test_excluded_layouts {
     "empty size" 1 size_of[Empty] test::assert_eq
     "empty struct stays indirect" 24 size_of[EmptyHolder] test::assert_eq
     "borrow stays one pointer" 8 size_of[Borrowed] test::assert_eq
-    "borrowed struct stays indirect" 24 size_of[BorrowedHolder] test::assert_eq
     "zero length array stays direct" 3 size_of[ZeroArray] test::assert_eq
     "zero length array struct stays indirect" 24 size_of[ZeroArrayHolder] test::assert_eq
     "recursive edge stays indirect" 16 size_of[Recursive] test::assert_eq
     "recursive struct stays indirect" 24 size_of[RecursiveHolder] test::assert_eq
     "mutually recursive edge stays indirect" 8 size_of[MutualFirst] test::assert_eq
-    "resource struct stays indirect" 24 size_of[ResourceHolder] test::assert_eq
     "owned field struct stays indirect" 24 size_of[OwnedHolder] test::assert_eq
-    "array cleanup struct stays indirect" 24 size_of[ArrayCleanupHolder] test::assert_eq
 
     3 = generic_value: u8
     generic_value true 2 Inner 1 Generic = generic
@@ -332,9 +350,6 @@ fn test_excluded_layouts {
         test::assert_true
     }
     3 Empty 1 EmptyHolder move_through_raw drop
-    2 = value: u16
-    3 value Borrowed 1 BorrowedHolder = borrowed
-    "borrowed owner" 2 borrowed.value.value test::assert_eq
     3 "owned".to_str Owned 1 OwnedHolder move_through_raw = owned
     "owned value" "owned" owned
         .value
@@ -342,19 +357,105 @@ fn test_excluded_layouts {
         .as_str test::assert_str_eq
     8 std::RawBuffer::new = count
     unsafe { 0 count.data store64 }
+    count.data Resource true 2 Inner 1 Generic = generic_resource
+    unsafe {
+        generic_resource ptr::from_ref = base
+        "generic affine field keeps its pointer" base 16 + ptr::read[ptr]
+        generic_resource.value ptr::from_ref == test::assert_true
+    }
+    generic_resource drop
+    unsafe { "generic affine cleanup once" 1 count.data load64 test::assert_eq }
+}
+
+fn test_one_word_affine_fields {
+    "one-word affine fields" test::test_start
+    "resource holder size" 24 size_of[ResourceHolder] test::assert_eq
+    "borrowed holder size" 24 size_of[BorrowedHolder] test::assert_eq
+    "array cleanup holder size" 24 size_of[ArrayCleanupHolder] test::assert_eq
+    "wrapped holder size" 24 size_of[WrappedHolder] test::assert_eq
+    "resource slot size" 16 size_of[ResourceSlot] test::assert_eq
+    "shared holder size" 24 size_of[SharedHolder] test::assert_eq
+
+    2 = value: u16
+    3 value Borrowed 1 BorrowedHolder = borrowed
+    "borrowed owner" 2 borrowed.value.value test::assert_eq
+    unsafe {
+        "borrowed body is inline" borrowed ptr::from_ref 8 + borrowed.value ptr::from_ref == test::assert_true
+    }
+
+    8 std::RawBuffer::new = count
+    unsafe { 0 count.data store64 }
     3 count.data Resource 1 ResourceHolder move_through_raw = resource
+    unsafe {
+        "resource body is inline" resource ptr::from_ref 8 + resource.value ptr::from_ref == test::assert_true
+    }
+    "resource field reads its body" count.data resource.value.count == test::assert_true
     count.data Resource = resource.value
-    unsafe { "custom replacement cleanup once" 1 count.data load64 test::assert_eq }
+    unsafe { "replacement cleanup once" 1 count.data load64 test::assert_eq }
     resource drop
-    unsafe { "custom final cleanup once" 2 count.data load64 test::assert_eq }
+    unsafe { "final cleanup once" 2 count.data load64 test::assert_eq }
+
+    3 count.data Resource 1 ResourceHolder = source
+    source match
+        ResourceHolder { value: moved } => {
+            unsafe {
+                "moved field keeps its cleanup" 2 count.data load64 test::assert_eq
+            }
+            moved move_through_raw drop
+        }
+    end
+    unsafe { "moved field cleanup once" 3 count.data load64 test::assert_eq }
+
+    3 count.data Resource WrappedResource 1 WrappedHolder = wrapped
+    unsafe {
+        "nested body is inline" wrapped ptr::from_ref 8 + wrapped.value.inner ptr::from_ref == test::assert_true
+    }
+    count.data Resource WrappedResource = wrapped.value
+    unsafe { "nested replacement cleanup once" 4 count.data load64 test::assert_eq }
+    wrapped drop
+    unsafe { "nested final cleanup once" 5 count.data load64 test::assert_eq }
+
+    count.data Resource ResourceSlot::Held = slot
+    slot match
+        ResourceSlot::Held(held) => {
+            unsafe {
+                "payload move keeps its cleanup" 5 count.data load64 test::assert_eq
+            }
+            held drop
+        }
+        ResourceSlot::Empty => {
+        }
+    end
+    unsafe { "payload cleanup once" 6 count.data load64 test::assert_eq }
+    count.data Resource ResourceSlot::Held drop
+    unsafe { "unbound payload cleanup once" 7 count.data load64 test::assert_eq }
+
     3 [ArrayCleanupElement { count: count.data }] ArrayCleanup 1 ArrayCleanupHolder = array_owner
     [ArrayCleanupElement { count: count.data }] = array_owner.value.values
-    unsafe { "array replacement cleanup once" 3 count.data load64 test::assert_eq }
+    unsafe { "array replacement cleanup once" 8 count.data load64 test::assert_eq }
     array_owner drop
-    unsafe { "array final cleanup once" 4 count.data load64 test::assert_eq }
+    unsafe { "array final cleanup once" 9 count.data load64 test::assert_eq }
+
+    "shared".to_str std::Shared::new = text
+    3 text.clone 1 SharedHolder move_through_raw = shared
+    unsafe {
+        "shared body is inline" shared ptr::from_ref 8 + shared.text ptr::from_ref == test::assert_true
+    }
+    "shared field reads its value" "shared" shared
+        .text
+        .get
+        .as_str test::assert_str_eq
+    "replaced".to_str std::Shared::new = shared.text
+    "shared replacement" "replaced" shared
+        .text
+        .get
+        .as_str test::assert_str_eq
+    shared drop
+    "other handle keeps value" "shared" text.get.as_str test::assert_str_eq
 }
 test_c_layouts
 test_inline_lifecycle
 test_imported_ordinary_fields
 test_excluded_layouts
+test_one_word_affine_fields
 test::test_summary
