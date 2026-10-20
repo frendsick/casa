@@ -75,7 +75,9 @@ fn area shape:Shape -> i64 {
 ```
 
 See [Control Flow and Patterns](control-flow.md#test-and-bind-an-enum-variant)
-for `is`, pattern bindings, guards, and exhaustive `match`.
+for `is`, pattern bindings, guards, and exhaustive `match`. An
+[early-exit `if`](control-flow.md#leave-early-when-a-check-fails) keeps pattern
+bindings after a failed check leaves the scope.
 
 ## Other enum operations
 

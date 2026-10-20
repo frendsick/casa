@@ -237,6 +237,23 @@ without a type-name prefix is acceptable.
   fi
   ```
 
+- **SHOULD** use an early-exit `if … is else … fi` when a failed check leaves the
+  scope and later code needs the bindings:
+
+  ```casa
+  # SHOULD
+  if value std::Option::Some(inner) is else
+      return
+  fi
+  inner process
+  # SHOULD NOT
+  if value.is_none then
+      return
+  fi
+  value.unwrap = inner
+  inner process
+  ```
+
 ---
 
 ## `match` for enum dispatch

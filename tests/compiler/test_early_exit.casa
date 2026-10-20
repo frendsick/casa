@@ -1,0 +1,205 @@
+import "std" as std
+import "../../compiler/error.casa" as error
+import "../../lib/test.casa" as test
+import "helpers.casa" as helpers
+
+struct Resource {
+    value: i64
+    drops: ptr
+}
+
+impl Resource {
+    fn drop self:mut$Resource {
+        unsafe { self.drops load64 1 + self.drops store64 }
+    }
+}
+
+fn owned_value value:std::Option[Resource] -> i64 {
+    if value std::Option::Some(resource) is else
+        -1 return
+    fi
+    resource.value
+}
+
+# A failed check keeps the owned subject for the exit path.
+fn keep_on_failure value:std::Option[Resource] -> std::Option[Resource] {
+    if value std::Option::Some(Resource { value: 1 }) is else
+        value return
+    fi
+    std::Option[Resource]::None
+}
+
+fn shared_value value:$std::Option[Resource] -> i64 {
+    if value std::Option::Some(resource) is else
+        -1 return
+    fi
+    resource.value
+}
+
+fn increment value:mut$std::Option[Resource] {
+    if value std::Option::Some(resource) is else
+        return
+    fi
+    10 += resource.value
+}
+
+# A Copy payload binding does not consume the owned subject.
+fn copy_payload value:std::Option[i64] -> i64 {
+    if value std::Option::Some(number) is else
+        0 return
+    fi
+    value match
+        std::Option::Some(again) => number again +
+        std::Option::None => 0
+    end
+}
+
+fn nested value:std::Option[std::Result[i64 i64]] -> i64 {
+    if value std::Option::Some(std::Result::Ok(number)) is else
+        -1 return
+    fi
+    number
+}
+
+fn chained first:std::Option[i64] second:std::Option[i64] -> i64 {
+    if first std::Option::Some(left) is else
+        -1 return
+    fi
+    if second std::Option::Some(right) is else
+        -2 return
+    fi
+    left right +
+}
+
+fn plain_condition number:i64 -> i64 {
+    if number 0 > else
+        0 return
+    fi
+    number
+}
+
+fn sum_present values:$std::List[std::Option[i64]] -> i64 {
+    0 = total
+    for value in values.iter do
+        if value std::Option::Some(number) is else
+            continue
+        fi
+        number copy += total
+    done
+    total
+}
+
+fn sum_until_missing values:$std::List[std::Option[i64]] -> i64 {
+    0 = total
+    for value in values.iter do
+        if value std::Option::Some(number) is else
+            break
+        fi
+        number copy += total
+    done
+    total
+}
+
+fn panics value:std::Option[i64] -> i64 {
+    if value std::Option::Some(number) is else
+        "missing value" panic
+    fi
+    number
+}
+
+# Each destruction appends its value as one decimal digit.
+struct Ordered {
+    value: u64
+    order: ptr
+}
+
+impl Ordered {
+    fn drop self:mut$Ordered {
+        unsafe { self.order load64 10 * self.value + self.order store64 }
+    }
+}
+
+# Later bindings are destroyed before earlier ones at the end of the body.
+fn ordered first:std::Option[Ordered] second:std::Option[Ordered] order:ptr {
+    if first std::Option::Some(left) is else
+        return
+    fi
+    if second std::Option::Some(right) is else
+        return
+    fi
+    Ordered { value: 3 order: order } = third
+}
+
+fn exits value:std::Option[i64] -> i64 {
+    if value std::Option::Some(number) is else
+        1 std::process::exit
+    fi
+    number
+}
+
+fn reject source:$str expected:$str {
+    error::Diagnostics::new = diagnostics
+    diagnostics source helpers::typecheck_test_source = checked
+    checked.get_diagnostics.clone diagnostics.merge
+    diagnostics source expected helpers::assert_error_contains
+}
+
+pub fn run_tests root_number:i64 {
+    "early_exit" test::test_start
+    "root binding after fi" 5 root_number test::assert_eq
+    8 std::RawBuffer::new = counter
+    unsafe { 0 counter.data store64 }
+    "owned payload after fi" 4 Resource { value: 4 drops: counter.data } std::Option::Some owned_value test::assert_eq
+    unsafe { "owned payload destroyed once" 1 counter.data load64 test::assert_eq }
+    "exit path" -1 std::Option[Resource]::None owned_value test::assert_eq
+    Resource { value: 2 drops: counter.data } std::Option::Some keep_on_failure = kept
+    if kept std::Option::Some(resource) is then
+        "failed check keeps subject" 2 resource.value test::assert_eq
+    else
+        "failed check keeps subject" false test::assert_true
+    fi
+    unsafe { "returned subject destroyed once" 2 counter.data load64 test::assert_eq }
+    Resource { value: 5 drops: counter.data } std::Option::Some = shared
+    "shared payload after fi" 5 shared shared_value test::assert_eq
+    shared increment
+    "exclusive payload after fi" 15 shared shared_value test::assert_eq
+    shared drop
+    unsafe { "borrowed subject destroyed once" 3 counter.data load64 test::assert_eq }
+    "Copy payload keeps subject" 14 7 std::Option::Some copy_payload test::assert_eq
+    "nested pattern" 3 3 std::Result[i64 i64]::Ok std::Option::Some nested test::assert_eq
+    "nested pattern failure" -1 3 std::Result[i64 i64]::Error std::Option::Some nested test::assert_eq
+    "chained exits" 5 3 std::Option::Some 2 std::Option::Some chained test::assert_eq
+    "second exit" -2 std::Option[i64]::None 2 std::Option::Some chained test::assert_eq
+    "plain condition" 3 3 plain_condition test::assert_eq
+    "plain condition exit" 0 -3 plain_condition test::assert_eq
+    std::List[std::Option[i64]]::new = values
+    1 std::Option::Some values.push
+    std::Option[i64]::None values.push
+    4 std::Option::Some values.push
+    "continue exit" 5 values sum_present test::assert_eq
+    "break exit" 1 values sum_until_missing test::assert_eq
+    "non-returning exit" 6 6 std::Option::Some exits test::assert_eq
+    "panic exit" 8 8 std::Option::Some panics test::assert_eq
+    8 std::RawBuffer::new = order
+    unsafe { 0 order.data store64 }
+    Ordered { value: 1 order: order.data } std::Option::Some = first
+    Ordered { value: 2 order: order.data } std::Option::Some = second
+    order.data second first ordered
+    unsafe { "reverse destruction order" 321 order.data load64 test::assert_eq }
+    "already moved" "struct S { v:i64 } enum E { Some(S) None } fn f x:E { if x E::Some(s) is else return fi x drop s drop }" reject
+    "while it is borrowed" "struct S { v:i64 } enum E { Some(S) None } fn peek x:$E { } fn f x:mut$E { if x E::Some(s) is else return fi x peek 1 += s.v }" reject
+    "must not reach `fi`" "fn f x:bool { if x else 1 drop fi }" reject
+    "must not reach `fi`" "fn f x:bool y:bool { if x else if y then return fi fi }" reject
+    "not accessible" "enum E { Some(i64) None } fn f x:E { if x E::Some(value) is else value drop return fi }" reject
+    "not accessible" "enum E { Some(i64) None } fn f x:E { if true then if x E::Some(value) is else return fi fi value drop }" reject
+    "cannot appear directly" "fn f x:bool { unsafe { if x else return fi } }" reject
+    "cannot appear directly" "fn f x:bool { while if x else return fi true do break done }" reject
+    "cannot appear directly" "fn f x:bool { x match true if if x else 0 panic fi true => {} _ => {} end }" reject
+    test::test_summary
+}
+
+# The root body keeps early-exit bindings until its end.
+if 5 std::Option::Some std::Option::Some(root_number) is else
+    "root early exit failed" panic
+fi
+root_number run_tests
