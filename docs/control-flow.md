@@ -140,6 +140,17 @@ Combine binding checks and other conditions with `&&`. A condition such as
 can be true without the match. The same applies when `!`, an assignment, or a
 call consumes the `is` result.
 
+The condition that creates a binding cannot read, assign, or capture it.
+Because `&&` is eager, the rest of the condition runs even when the match
+failed and the binding has no value. Test the payload in a nested `if`
+instead:
+
+```casa
+if shape Shape::Circle(radius) is then
+    if radius 10 > then "large circle\n" print fi
+fi
+```
+
 The payload binding follows the subject capability. An owned subject gives an
 owned binding for a non-`Copy` payload and is consumed only when the check
 succeeds. A `$T` subject gives a shared payload borrow. A `mut$T` subject gives

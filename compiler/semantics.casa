@@ -2091,6 +2091,9 @@ struct TypeChecker {
     current_op_context:         std::String
     current_expect_ctx:         ExpectationContext
     in_branch_condition:        bool
+    # `is` bindings whose condition has not ended. A failed match leaves them
+    # unset while the rest of the eager condition still runs.
+    open_condition_bindings:    std::Set[std::String]
     path_continues:             bool
     store:                      mut$common::SymbolStore
     param_cap:                  std::Option[u64]
@@ -2909,6 +2912,7 @@ impl TypeChecker {
         std::Option[u64]::None # param_cap
         store # store
         true # path_continues
+        std::Set[std::String]::new # open_condition_bindings
         false # in_branch_condition
         ExpectationContext::None # current_expect_ctx
         "".to_str # current_op_context
@@ -7885,6 +7889,9 @@ impl TypeChecker {
                 .branched_stacks
                 .pop
                 .into_if = if_ctx
+            for name in if_ctx.condition_bindings.iter do
+                name.as_str tc.open_condition_bindings.remove_str
+            done
             tc.facts_available errors_before_condition tc.diagnostics.error_count == &&
             if_ctx.entry_facts_available && = if_ctx.entry_facts_available
             tc.current_ownership_flow = if_ctx.flow_before
@@ -11005,6 +11012,7 @@ impl TypeChecker {
         if frame BranchFrame::BranchIf(if_ctx) is then
             for name in binding_names.iter do
                 name.clone if_ctx.condition_bindings.push
+                name.as_str tc.open_condition_bindings.add_str
             done
         fi
     }
@@ -12984,6 +12992,39 @@ impl TypeChecker {
         common::make_u64_type self.stack_push_type
     }
 
+    # A failed `is` match does not stop the eager condition, so the condition
+    # cannot read, assign, or capture a binding that it creates.
+    fn reject_open_condition_binding self:mut$TypeChecker operation:$common::Op {
+        if self.open_condition_bindings.is_empty then
+            return
+        fi
+        std::List[std::String]::new = names
+        operation.value match
+            common::OpValue::AssignVar(name) => name.clone names.push
+            common::OpValue::AssignYield(name) => name.clone names.push
+            common::OpValue::AssignInc(name) => name.clone names.push
+            common::OpValue::AssignDec(name) => name.clone names.push
+            common::OpValue::PushVar(name) => name.clone names.push
+            common::OpValue::FnPush(function_name) => {
+                if function_name.as_str self.store.get_function std::Option::Some(function) is then
+                    for capture in function.captures.iter do
+                        capture.name.clone names.push
+                    done
+                fi
+            }
+            _ => return
+        end
+        for name in names.iter do
+            0 name.as_str "." str::split.unwrap.get = root
+            if root.as_str self.open_condition_bindings.has_str then
+                f"Binding `{root}` cannot be used in its own condition because the match may have failed"
+                = message
+                operation.location message common::ErrorKind::InvalidScope
+                self.diagnostics.record_error_string
+            fi
+        done
+    }
+
     fn run_type_check_op
         self:mut$TypeChecker
         current_op:mut$common::Op
@@ -12991,6 +13032,7 @@ impl TypeChecker {
         emitted_ops:mut$std::List[common::Op]
         function_opt:mut$std::Option[common::Function]
     {
+        current_op self.reject_open_condition_binding
         if
             current_op.value common::OpValue::Dup is
             current_op.value common::OpValue::Over is ||
