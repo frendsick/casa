@@ -54,6 +54,18 @@ An empty generic variant often needs context:
 Option::None = result: Option[i64]
 ```
 
+An inner constructor can need explicit type arguments when only a later call
+determines a missing parameter. That call's parameter type does not propagate
+through an outer constructor:
+
+```casa
+fn read value:Option[Result[i64 i64]] { value drop }
+3 Result[i64 i64]::Ok Option::Some read
+```
+
+Without `[i64 i64]`, the compiler reports `Cannot infer constructor type` at
+`Result::Ok`. Supply the missing type arguments there.
+
 A directly bound payload enum can use function-local storage without implementing
 Copy when its uses prove that the storage cannot escape. Tag tests and local
 destruction qualify. Payload bindings and uncertain uses retain heap storage.
