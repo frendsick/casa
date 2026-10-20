@@ -8,6 +8,7 @@ that owner remains responsible for cleanup.
 - [Reborrow without moving](#reborrow-without-moving)
 - [Return a borrow](#return-a-borrow)
 - [Borrow disjoint fields](#borrow-disjoint-fields)
+- [Share an immutable value](#share-an-immutable-value)
 - [Cleanup and captured values](#cleanup-and-captured-values)
 
 ## Move a value
@@ -141,6 +142,34 @@ fn split pair:mut$Pair -> mut$Item mut$Item {
 The compiler rejects duplicate or nested overlapping outputs. After a call,
 the returned borrows keep the complete borrowed input loaned because field
 paths are not part of a public [function type](notation.md#function-types).
+
+## Share an immutable value
+
+`std::Shared[T]` lets several owners share one immutable `T`. `Shared::new`
+moves the value into a heap allocation. `clone` returns another handle to the
+same value without cloning `T`. `get` borrows the value while the handle
+remains live. The last handle to be destroyed destroys the value:
+
+```casa
+import "std"
+
+"settings".to_str std::Shared::new = first
+first.clone = second
+first drop
+second.get.as_str print # The value survives until second is destroyed.
+```
+
+The shared value cannot be mutated or moved out. It is complete before
+`Shared::new` takes it, so safe code cannot make it refer to its own handle.
+Use one owner plus IDs or indices for cyclic or mutable graphs.
+
+Equality, ordering, hashing, and display use the shared value's
+implementations when `T` implements those traits. Two handles to equal
+separate values compare equal. `Clone` does not require `T: Clone`.
+
+Reference counts are not atomic because Casa programs run on one thread.
+`Shared[T]` does not retain the borrow origins of a `T` that contains borrows.
+Store owned values in it.
 
 ## Cleanup and captured values
 

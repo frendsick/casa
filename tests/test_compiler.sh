@@ -72,7 +72,7 @@ test_category() {
         test/test_argparse|test/test_bytes|test/test_collection_is_empty|\
         test/test_collection_reclamation|test/test_destruction|test/test_file|test/test_heap_allocator|\
         test/test_iterator_combinators|test/test_json|test/test_list_contains|test/test_list_iteration|\
-        test/test_map_iter|test/test_map_storage|test/test_parser_borrows|test/test_range|test/test_set_iter|\
+        test/test_map_iter|test/test_map_storage|test/test_parser_borrows|test/test_range|test/test_set_iter|test/test_shared|\
         test/test_slice|test/test_sorting|test/test_storage_invariants|test/test_string_iteration|\
         test/test_string_utilities|runtime_error/*)
             echo runtime

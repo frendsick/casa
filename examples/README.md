@@ -33,11 +33,12 @@ The examples are ordered from introductory programs to low-level system code.
 | 21 | [sized_memory.casa](sized_memory.casa) | [unsafe](../docs/functions-and-lambdas.md#unsafe-boundaries) allocation and sized memory access |
 | 22 | [unicode.casa](unicode.casa) | Direct Unicode, Unicode escapes, and code-point conversion |
 | 23 | [owned_string.casa](owned_string.casa) | Owned string growth, borrowing, and cloning |
-| 24 | [bytes.casa](bytes.casa) | Compact binary storage, iteration, and validated text conversion |
-| 25 | [game_of_life.casa](game_of_life.casa) | Resizable raylib graphics and toroidal Conway simulation |
-| 26 | [root_owned_state.casa](root_owned_state.casa) | Root-owned runtime state, explicit parameters, and cleanup |
-| 27 | [foreign_function.casa](foreign_function.casa) | C ABI scalars, an aggregate return, and native library linking |
-| 28 | [hexadecimal.casa](hexadecimal.casa) | Hexadecimal integer literals, contextual widths, and an alignment mask |
+| 24 | [shared_value.casa](shared_value.casa) | One immutable value shared by several owners |
+| 25 | [bytes.casa](bytes.casa) | Compact binary storage, iteration, and validated text conversion |
+| 26 | [game_of_life.casa](game_of_life.casa) | Resizable raylib graphics and toroidal Conway simulation |
+| 27 | [root_owned_state.casa](root_owned_state.casa) | Root-owned runtime state, explicit parameters, and cleanup |
+| 28 | [foreign_function.casa](foreign_function.casa) | C ABI scalars, an aggregate return, and native library linking |
+| 29 | [hexadecimal.casa](hexadecimal.casa) | Hexadecimal integer literals, contextual widths, and an alignment mask |
 
 The [borrow lookup example](borrow_lookup.casa) reuses map and JSON lookup keys
 while the returned values remain borrowed from their collections.
