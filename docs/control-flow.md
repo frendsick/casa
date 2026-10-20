@@ -56,7 +56,8 @@ done
 ```
 
 Use `break` to leave the innermost loop. Use `continue` to start its next
-condition check.
+condition check. Both keywords require an enclosing loop in the same function
+or lambda. A loop in the caller does not provide a target.
 
 The stack at the end of the body, at `break`, and at `continue` must match the
 stack before the loop. A loop cannot accumulate values between iterations.
