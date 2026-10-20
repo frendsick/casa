@@ -133,6 +133,12 @@ These bindings exist only in the branch whose pattern created them. An
 cannot shadow an accessible local binding. A binding pattern is not valid
 outside an `if` or `elif` condition.
 
+The condition must be true only when every binding pattern in it matched.
+Combine binding checks and other conditions with `&&`. A condition such as
+`shape Shape::Circle(radius) is ready ||` is a compile-time error because it
+can be true without the match. The same applies when `!`, an assignment, or a
+call consumes the `is` result.
+
 The payload binding follows the subject capability. An owned subject gives an
 owned binding for a non-`Copy` payload and is consumed only when the check
 succeeds. A `$T` subject gives a shared payload borrow. A `mut$T` subject gives

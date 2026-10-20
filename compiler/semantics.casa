@@ -126,6 +126,8 @@ struct TypedValue derives std::Clone {
     loan_spans:          std::Map[Origin std::Option[LoanSpan]]
     is_literal_constant: bool
     callables:           std::Set[std::String]
+    # Pattern bindings that matched whenever this boolean is true.
+    matched_bindings:    std::List[std::String]
 }
 
 struct LoanConflict derives std::Clone {
@@ -1251,6 +1253,8 @@ struct IfContext {
     condition_present:       bool
     default_present:         bool
     conditional_moves:       std::List[std::String]
+    # Pattern bindings that the current branch condition creates.
+    condition_bindings:      std::List[std::String]
     current_branch_label:    std::String
     current_branch_location: common::Location
     entry_facts_available:   bool
@@ -1350,6 +1354,7 @@ impl IfContext {
         true true
         common::empty_location
         "".to_str
+        std::List[std::String]::new
         std::List[std::String]::new
         false
         false
@@ -3482,6 +3487,7 @@ impl TypeChecker {
         if type_value.is_function then
             CALLABLE_CONTRACT callables.add_str
         fi
+        std::List[std::String]::new
         callables
         false std::Map[Origin std::Option[LoanSpan]]::new
         std::Option[std::List[Origin]]::None
@@ -3558,6 +3564,7 @@ impl TypeChecker {
                 fi
             fi
         fi
+        std::List[std::String]::new
         std::Set[std::String]::new
         false loan_spans cleanup_origins origins source binding capability place
         std::List[LiteralRef]::new tc.current_location.clone stack_type
@@ -3577,6 +3584,7 @@ impl TypeChecker {
         fi
         std::List[LiteralRef]::new = literals
         literal_kind integer_value op.id LiteralRef literals.push
+        std::List[std::String]::new
         std::Set[std::String]::new
         true std::Map[Origin std::Option[LoanSpan]]::new
         std::Option[std::List[Origin]]::None
@@ -3885,6 +3893,7 @@ impl TypeChecker {
                         .clone = parameter_callables
                 fi
                 parameter_type.clone common::Parameter::new tc.parameters.push
+                std::List[std::String]::new
                 parameter_callables
                 false std::Map[Origin std::Option[LoanSpan]]::new
                 std::Option[std::List[Origin]]::None
@@ -3894,6 +3903,7 @@ impl TypeChecker {
                 std::List[LiteralRef]::new common::empty_location parameter_type tc.parameters.length 1 - std::Option::Some TypedValue return
             fi
             tc.stack_underflow_message tc.report_stack_underflow
+            std::List[std::String]::new
             std::Set[std::String]::new
             false std::Map[Origin std::Option[LoanSpan]]::new
             std::Option[std::List[Origin]]::None
@@ -3944,6 +3954,7 @@ impl TypeChecker {
             if inferred.is_unknown_placeholder ! inferred common::make_missing_type.eq ! && then
                 tc.literal_resolutions tc.diagnostics inferred right.resolve_literals drop
                 inferred common::Parameter::new tc.parameters.push
+                std::List[std::String]::new
                 std::Set[std::String]::new
                 false std::Map[Origin std::Option[LoanSpan]]::new
                 std::Option[std::List[Origin]]::None
@@ -4319,6 +4330,7 @@ impl TypeChecker {
         return_type bindings resolve_return_type_t = resolved
         if return_type.type_var_name std::Option::Some(type_variable) is then
             if type_variable.as_str literal_bindings.get_str std::Option::Some(literals) is then
+                std::List[std::String]::new
                 std::Set[std::String]::new
                 false std::Map[Origin std::Option[LoanSpan]]::new
                 std::Option[std::List[Origin]]::None
@@ -6409,6 +6421,48 @@ impl TypeChecker {
 }
 
 impl TypeChecker {
+    pub fn check_and
+        tc:mut$TypeChecker
+        op:mut$common::Op
+        function_opt:mut$std::Option[common::Function]
+    {
+        # A true `&&` result means that both operands were true, so it keeps
+        # the pattern bindings that either operand matched.
+        std::List[std::String]::new = matched_bindings
+        tc
+            .stack
+            .values
+            .length = depth
+        if 2 depth <= then
+            depth 2 - tc
+                .stack
+                .values
+                .get
+                .matched_bindings
+                .clone = matched_bindings
+            depth 1 - tc
+                .stack
+                .values
+                .get
+                .matched_bindings
+                .clone matched_bindings.append
+        fi
+        function_opt op tc.apply_fixed_semantics
+        if matched_bindings.is_empty then
+            return
+        fi
+        tc
+            .stack
+            .values
+            .length 1 - tc
+            .stack
+            .values
+            .get_mut = result
+        matched_bindings = result.matched_bindings
+    }
+}
+
+impl TypeChecker {
     pub fn check_bitwise tc:mut$TypeChecker op:mut$common::Op {
         std::Option[common::Function]::None op tc.apply_fixed_semantics
     }
@@ -7804,7 +7858,24 @@ impl TypeChecker {
         elif if_value common::OpValue::IfCondition is then
             false = tc.in_branch_condition
             tc.diagnostics.error_count = errors_before_condition
+            std::List[std::String]::new = matched_bindings
             if tc.path_continues then
+                if
+                    tc
+                        .stack
+                        .values
+                        .is_empty !
+                then
+                    tc
+                        .stack
+                        .values
+                        .length 1 - tc
+                        .stack
+                        .values
+                        .get
+                        .matched_bindings
+                        .clone = matched_bindings
+                fi
                 common::make_bool_type tc.expect_type_t
             fi
             if 0 tc.branched_stacks.length == then
@@ -7827,7 +7898,18 @@ impl TypeChecker {
                 tc.stack if_ctx IfContext::after.restore
                 "if".to_str if_ctx IfContext::set_current_branch_label
             fi
-            if tc.path_continues ! then
+            if tc.path_continues then
+                # `||`, `!`, and other operations produce a result that can be
+                # true without the match, so the branch cannot use its bindings.
+                for name in if_ctx.condition_bindings.iter do
+                    if name.as_str matched_bindings common::string_list_contains ! then
+                        f"Binding `{name}` may be unbound when the condition is true; combine binding `is` checks with `&&`"
+                        = message
+                        op common::Op::location message common::ErrorKind::InvalidScope
+                        tc.diagnostics.record_error_string
+                    fi
+                done
+            else
                 false = if_ctx.entry_continues
             fi
             if_ctx BranchFrame::BranchIf tc.branched_stacks.push
@@ -7861,6 +7943,7 @@ impl TypeChecker {
             if_ctx.entry_facts_available = tc.facts_available
             if_ctx.flow_before tc.restore_ownership_flow
             if_ctx.entry_continues = tc.path_continues
+            std::List[std::String]::new = if_ctx.condition_bindings
             if if_value common::OpValue::IfElse is then
                 true if_ctx IfContext::set_default_present
                 false = tc.in_branch_condition
@@ -10835,6 +10918,7 @@ impl TypeChecker {
             return
         fi
         op.value.clone = is_value
+        std::List[std::String]::new = binding_names
         if is_value common::OpValue::IsCheck(variant) is then
             # Validate the variant belongs to the correct enum
             if "" variant common::EnumVariant::enum_name.as_str != then
@@ -10899,6 +10983,26 @@ impl TypeChecker {
             fi
         fi
         common::make_bool_type tc.stack_push_type
+        if binding_names.is_empty then
+            return
+        fi
+        tc
+            .stack
+            .values
+            .length 1 - tc
+            .stack
+            .values
+            .get_mut = result
+        binding_names.clone = result.matched_bindings
+        if tc.branched_stacks.is_empty then
+            return
+        fi
+        tc.branched_stacks.length 1 - tc.branched_stacks.get_mut = frame
+        if frame BranchFrame::BranchIf(if_ctx) is then
+            for name in binding_names.iter do
+                name.clone if_ctx.condition_bindings.push
+            done
+        fi
     }
 }
 
@@ -12909,6 +13013,10 @@ impl TypeChecker {
         fi
         if current_op.value common::OpValue::Drop is then
             function_opt current_op self.check_stack_ops
+            return
+        fi
+        if current_op.value common::OpValue::And is then
+            function_opt current_op self.check_and
             return
         fi
         if current_op.value rules::operation_uses_fixed_typecheck_effect then
