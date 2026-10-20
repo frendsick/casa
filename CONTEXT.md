@@ -16,6 +16,12 @@ A value with one possible state, constructed with `std::Unit::Value`. A
 Unit is an ordinary value and remains distinct from an empty output stack.
 _Avoid_: Void, empty result, zero-sized value
 
+**Shared value**:
+One immutable heap value owned by every `Shared[T]` handle that refers to it.
+Cloning a handle shares the value without cloning `T`, and the last handle
+destroys it. Comparison, hashing, and display use the shared value.
+_Avoid_: Shared borrow, Rc, shared pointer
+
 **OS byte value**:
 An owned `Bytes` value from a Linux interface that does not guarantee UTF-8. It
 preserves the exact bytes until code validates them as text or borrows them as a
