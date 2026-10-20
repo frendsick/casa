@@ -1,5 +1,7 @@
 # Backend plans and renders one function at a time
 
+status: amended by [ADR-0181](0181-register-storage-is-planned-within-one-function.md)
+
 related issue: [Choose the backend and runtime seams](https://github.com/frendsick/casa/issues/649).
 
 Keep a private machine
@@ -76,6 +78,8 @@ instructions. Direct text emission would need another way to size frames before
 writing prologues and returns. Discovering locals during lowering requires frame finalization before rendering. A whole-program machine product has no additional demonstrated
 consumer. Do not add a second semantic tree, a general control-flow graph, a
 backend registry, or an optimization framework.
+[ADR-0181](0181-register-storage-is-planned-within-one-function.md) permits a
+bounded per-function register plan and canonical register suffixes at labels.
 
 Remove public `Program` and `InstValue` construction, the whole-program bytecode
 list, repeated instruction-family matching, the flat source control-flow

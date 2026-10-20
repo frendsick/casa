@@ -42,7 +42,7 @@ def main(compiler):
                         if re.match(r"^\s+[a-z]", line)]
         found = 0
         for index, instruction in enumerate(instructions):
-            if re.fullmatch(r"cmpq %r(?:8|9|10|11), %r(?:8|9|10|11)", instruction):
+            if re.fullmatch(r"cmpq %(?:r(?:8|9|10|11)|rax), %(?:r(?:8|9|10|11)|rdx)", instruction):
                 following = instructions[index + 1]
                 assert re.match(r"j(?:a|ae|b|be|e|g|ge|l|le|ne) ", following), following
                 found += 1

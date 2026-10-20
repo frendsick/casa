@@ -27,10 +27,37 @@ def check_backtrace(compiler, root, name, source, expected, setup=(), stop="brea
     assert "exited with code 01" in result.stdout, result.stdout + result.stderr
 
 
+def check_caller_register(compiler, root):
+    path = root / "caller-register.casa"
+    path.write_text('fn fail value:i64 { value 1 + = second '
+                    'value value + second + drop f"{value}" print '
+                    'value second + second + drop } '
+                    'fn outer { 10 fail } outer')
+    output = root / "caller-register"
+    subprocess.run([compiler, "-L", "lib", str(path), "-o", str(output)],
+                   check=True, timeout=30)
+    commands = ["set pagination off", "set disable-randomization off",
+                "break *fn_fail", "run", "set $r13 = 0x12345678",
+                "break *primitive_to_str", "continue", "frame 1",
+                'printf "local_r13=%llx\\n", $r13', "frame 2",
+                'printf "caller_r13=%llx\\n", $r13',
+                "disable breakpoints", "continue"]
+    arguments = ["gdb", "-nx", "-batch"]
+    for command in commands:
+        arguments.extend(["-ex", command])
+    result = subprocess.run([*arguments, str(output)], capture_output=True,
+                            text=True, timeout=20)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "local_r13=b" in result.stdout, result.stdout + result.stderr
+    assert "caller_r13=12345678" in result.stdout, result.stdout + result.stderr
+    assert "exited normally" in result.stdout, result.stdout + result.stderr
+
+
 def main(compiler):
     compiler = str(Path(compiler).resolve())
     with tempfile.TemporaryDirectory(prefix="casa unwind ") as temporary:
         root = Path(temporary)
+        check_caller_register(compiler, root)
         for name, declaration, value in (
             ("cached", "fn fail value:i64 -> i64 { value 1 + }", "9223372036854775807"),
             ("early_return", "fn fail value:i64 -> i64 { if value 0 < then value return fi value 1 + }", "9223372036854775807"),
