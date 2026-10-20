@@ -7,6 +7,9 @@ pub const ASSEMBLY ".equ CASA_RETURN_STACK_SIZE, 1048576
 .equ CASA_SIGNAL_STACK_SIZE, 65536
 .equ CASA_PAGE_SIZE, 4096
 .equ CASA_SMALL_ALLOC_LIMIT, 512
+.equ CASA_SMALL_PAGE_SIZE, 65536
+.equ CASA_SMALL_PAGE_HEADER_SIZE, 16
+.equ CASA_SMALL_PAGE_NEXT, 8
 .equ CASA_HEAP_CHUNK_HEADER_SIZE, 16
 .equ CASA_HEAP_GROWTH_SIZE, 67108864
 .equ CASA_MMAP_SYSCALL, 9
@@ -46,7 +49,7 @@ heap_chunks: .skip 8
 heap_ptr: .skip 8
 heap_end: .skip 8
 free_list: .skip 8
-small_free_lists: .skip CASA_SMALL_ALLOC_LIMIT
+small_pages: .skip CASA_SMALL_ALLOC_LIMIT
 __argc: .skip 8
 __argv: .skip 8
 __envp: .skip 8
@@ -68,9 +71,14 @@ allocation_failure_msg: .ascii \"fatal: allocation failed\\n\"
 .equ allocation_failure_msg_len, . - allocation_failure_msg
 
 .section .text
-# Each mmap chunk starts with the previous chunk and its end address.
-# Small blocks use exact-size bins. Larger free blocks are ordered by address
-# for first-fit reuse, splitting, and coalescing of adjacent large blocks.
+# Each mmap chunk starts with the previous chunk and its end address. Large
+# blocks grow up from the chunk start and small-block pages grow down from its
+# end. Each page holds blocks of one small size, and its own free list keeps
+# reuse within the page, so allocations stay close together after many frees.
+# Empty pages keep their size. Return them to a shared pool if memory grows
+# when workloads move between sizes.
+# Larger free blocks are ordered by address for first-fit reuse, splitting, and
+# coalescing of adjacent large blocks.
 # heap_alloc: byte count in rdi, aligned pointer in rax.
 heap_alloc:
     .cfi_startproc
@@ -82,15 +90,56 @@ heap_alloc:
     andq $-8, %rax
     cmpq $CASA_SMALL_ALLOC_LIMIT, %rax
     ja .Lheap_alloc_large
-    leaq small_free_lists(%rip), %r9
+.Lheap_alloc_small:
+    leaq small_pages(%rip), %r9
     leaq -8(%r9,%rax), %r9
     movq (%r9), %rcx
     testq %rcx, %rcx
-    jz .Lheap_alloc_bump
-    movq 8(%rcx), %r8
+    jz .Lheap_alloc_page
+.Lheap_alloc_small_pop:
+    # A listed page always has a free block. Unlist the page when it runs out.
+    movq (%rcx), %rdx
+    movq 8(%rdx), %r8
+    movq %r8, (%rcx)
+    testq %r8, %r8
+    jnz .Lheap_alloc_small_return
+    movq CASA_SMALL_PAGE_NEXT(%rcx), %r8
     movq %r8, (%r9)
-    leaq 8(%rcx), %rax
+.Lheap_alloc_small_return:
+    leaq 8(%rdx), %rax
     ret
+.Lheap_alloc_page:
+    movq heap_ptr(%rip), %rdx
+    testq %rdx, %rdx
+    jz .Lheap_alloc_page_grow
+    movq heap_end(%rip), %rcx
+    andq $-CASA_SMALL_PAGE_SIZE, %rcx
+    subq $CASA_SMALL_PAGE_SIZE, %rcx
+    cmpq %rdx, %rcx
+    jae .Lheap_alloc_page_init
+.Lheap_alloc_page_grow:
+    call heap_grow
+    jmp .Lheap_alloc_small
+.Lheap_alloc_page_init:
+    # Link every block of the new page in address order.
+    movq %rcx, heap_end(%rip)
+    leaq CASA_SMALL_PAGE_HEADER_SIZE(%rcx), %rdx
+    movq %rdx, (%rcx)
+    movq $0, CASA_SMALL_PAGE_NEXT(%rcx)
+    leaq CASA_SMALL_PAGE_SIZE-8(%rcx), %rdi
+    subq %rax, %rdi
+.Lheap_alloc_page_link:
+    movq %rax, (%rdx)
+    leaq 8(%rdx,%rax), %r8
+    cmpq %rdi, %r8
+    ja .Lheap_alloc_page_last
+    movq %r8, 8(%rdx)
+    movq %r8, %rdx
+    jmp .Lheap_alloc_page_link
+.Lheap_alloc_page_last:
+    movq $0, 8(%rdx)
+    movq %rcx, (%r9)
+    jmp .Lheap_alloc_small_pop
 .Lheap_alloc_large:
     movq free_list(%rip), %rcx
     xorq %rdx, %rdx
@@ -106,24 +155,16 @@ heap_alloc:
     movq 8(%rcx), %r8
     movq (%rcx), %r9
     subq %rax, %r9
-    # A remainder needs an eight-byte header and at least eight payload bytes.
-    cmpq $16, %r9
-    jb .Lheap_alloc_unlink
+    # Small sizes belong to pages, so a remainder needs an eight-byte header and
+    # a large payload. A smaller remainder stays in the allocation.
+    cmpq $CASA_SMALL_ALLOC_LIMIT+8, %r9
+    jbe .Lheap_alloc_unlink
     subq $8, %r9
     leaq 8(%rcx,%rax), %rdi
     movq %r9, (%rdi)
     movq %rax, (%rcx)
-    cmpq $CASA_SMALL_ALLOC_LIMIT, %r9
-    jbe .Lheap_alloc_small_remainder
     movq %r8, 8(%rdi)
     movq %rdi, %r8
-    jmp .Lheap_alloc_unlink
-.Lheap_alloc_small_remainder:
-    leaq small_free_lists(%rip), %rax
-    leaq -8(%rax,%r9), %rax
-    movq (%rax), %r9
-    movq %r9, 8(%rdi)
-    movq %rdi, (%rax)
 .Lheap_alloc_unlink:
     testq %rdx, %rdx
     jz .Lheap_alloc_reuse_head
@@ -137,7 +178,7 @@ heap_alloc:
 .Lheap_alloc_bump:
     movq heap_ptr(%rip), %rcx
     testq %rcx, %rcx
-    jz .Lheap_alloc_map
+    jz .Lheap_alloc_grow
     addq $7, %rcx
     andq $-8, %rcx
     movq %rax, %r8
@@ -147,7 +188,26 @@ heap_alloc:
     jc .Lheap_alloc_oom
     cmpq heap_end(%rip), %r8
     jbe .Lheap_alloc_commit
-.Lheap_alloc_map:
+.Lheap_alloc_grow:
+    call heap_grow
+    jmp .Lheap_alloc_bump
+.Lheap_alloc_commit:
+    movq %rax, (%rcx)
+    movq %r8, heap_ptr(%rip)
+    leaq 8(%rcx), %rax
+    ret
+.Lheap_alloc_null:
+    xorq %rax, %rax
+    ret
+.Lheap_alloc_oom:
+    call allocation_failure
+    ud2
+    .cfi_endproc
+
+# heap_grow: block size in rax. Maps a chunk that fits the block and makes it
+# the bump region. Preserves rax, rsi, r10, and r11.
+heap_grow:
+    .cfi_startproc
     pushq %rsi
     .cfi_adjust_cfa_offset 8
     pushq %r10
@@ -158,11 +218,11 @@ heap_alloc:
     .cfi_adjust_cfa_offset 8
     movq %rax, %rsi
     addq $CASA_HEAP_CHUNK_HEADER_SIZE+8, %rsi
-    jc .Lheap_alloc_map_size_oom
+    jc .Lheap_grow_oom
     cmpq $CASA_HEAP_GROWTH_SIZE, %rsi
-    jae .Lheap_alloc_map_size_ready
+    jae .Lheap_grow_size_ready
     movq $CASA_HEAP_GROWTH_SIZE, %rsi
-.Lheap_alloc_map_size_ready:
+.Lheap_grow_size_ready:
     xorq %rdi, %rdi
     movq $CASA_MMAP_PROT_READ_WRITE, %rdx
     movq $CASA_MMAP_PRIVATE_ANONYMOUS, %r10
@@ -170,48 +230,31 @@ heap_alloc:
     xorq %r9, %r9
     movq $CASA_MMAP_SYSCALL, %rax
     syscall
-    popq %rdx
-    .cfi_adjust_cfa_offset -8
     testq %rax, %rax
-    jz .Lheap_alloc_map_oom
+    jz .Lheap_grow_oom
     cmpq $-4095, %rax
-    jae .Lheap_alloc_map_oom
+    jae .Lheap_grow_oom
     movq heap_chunks(%rip), %r8
     movq %r8, (%rax)
     movq %rax, %rcx
     addq %rsi, %rcx
-    jc .Lheap_alloc_map_oom
+    jc .Lheap_grow_oom
     movq %rcx, 8(%rax)
     movq %rax, heap_chunks(%rip)
     movq %rcx, heap_end(%rip)
-    leaq CASA_HEAP_CHUNK_HEADER_SIZE(%rax), %rcx
-    movq %rdx, %rax
+    addq $CASA_HEAP_CHUNK_HEADER_SIZE, %rax
+    movq %rax, heap_ptr(%rip)
+    popq %rax
+    .cfi_adjust_cfa_offset -8
     popq %r11
     .cfi_adjust_cfa_offset -8
     popq %r10
     .cfi_adjust_cfa_offset -8
     popq %rsi
     .cfi_adjust_cfa_offset -8
-    movq %rax, %r8
-    addq $8, %r8
-    addq %rcx, %r8
-.Lheap_alloc_commit:
-    movq %rax, (%rcx)
-    movq %r8, heap_ptr(%rip)
-    leaq 8(%rcx), %rax
     ret
-.Lheap_alloc_null:
-    xorq %rax, %rax
-    ret
-.Lheap_alloc_map_size_oom:
+.Lheap_grow_oom:
     .cfi_def_cfa_offset 40
-    addq $8, %rsp
-    .cfi_adjust_cfa_offset -8
-.Lheap_alloc_map_oom:
-    .cfi_def_cfa_offset 32
-    addq $24, %rsp
-    .cfi_adjust_cfa_offset -24
-.Lheap_alloc_oom:
     call allocation_failure
     ud2
     .cfi_endproc
@@ -236,11 +279,19 @@ heap_free:
     movq (%rax), %rdx
     cmpq $CASA_SMALL_ALLOC_LIMIT, %rdx
     ja .Lheap_free_large
-    leaq small_free_lists(%rip), %rcx
-    leaq -8(%rcx,%rdx), %rcx
-    movq (%rcx), %rdx
-    movq %rdx, 8(%rax)
+    # The block's page is listed again when the block is its only free block.
+    movq %rax, %rcx
+    andq $-CASA_SMALL_PAGE_SIZE, %rcx
+    movq (%rcx), %r8
+    movq %r8, 8(%rax)
     movq %rax, (%rcx)
+    testq %r8, %r8
+    jnz .Lheap_free_return
+    leaq small_pages(%rip), %r9
+    leaq -8(%r9,%rdx), %r9
+    movq (%r9), %r8
+    movq %r8, CASA_SMALL_PAGE_NEXT(%rcx)
+    movq %rcx, (%r9)
     jmp .Lheap_free_return
 .Lheap_free_large:
     movq free_list(%rip), %rcx

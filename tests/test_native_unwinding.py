@@ -42,13 +42,18 @@ def main(compiler):
             check_backtrace(compiler, root, name, source,
                             ["write_all", "arithmetic_error", "fn_fail", "fn_outer", "_start"])
 
-        # These fail before mmap, with four saved words, and with three saved
-        # words after mmap. None allocates a large block of physical memory.
-        for size in (18446744073709551615, 18446744073709551608, 9223372036854775808):
+        # These fail while aligning the size, and in heap_grow with four saved
+        # words before and after mmap. None allocates a large block of physical
+        # memory.
+        for size, frames in (
+            (18446744073709551615, ["heap_alloc"]),
+            (18446744073709551608, ["heap_grow", "heap_alloc"]),
+            (9223372036854775808, ["heap_grow", "heap_alloc"]),
+        ):
             source = ("fn fail size:u64 { unsafe { size alloc free } }\n"
                       f"fn outer {{ {size} fail }} outer")
             check_backtrace(compiler, root, f"allocation_{size}", source,
-                            ["write_all", "allocation_failure", "heap_alloc", "fn_fail", "fn_outer", "_start"])
+                            ["write_all", "allocation_failure", *frames, "fn_fail", "fn_outer", "_start"])
 
         source = ("fn increment value:i64 -> i64 { value 1 + }\n"
                   "fn fail value:i64 -> i64 { value &increment exec }\n"
