@@ -14,7 +14,7 @@ The compiler validates every required method and inherited supertrait requiremen
 An empty implementation block explicitly adopts a trait whose requirements are all defaults or whose purpose is marking a capability:
 
 ```casa
-impl Item: Described { }
+impl Item: Described {}
 ```
 
 ## Considered options

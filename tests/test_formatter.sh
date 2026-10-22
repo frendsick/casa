@@ -347,7 +347,7 @@ check_formatter_case missing_unresolved_struct_field_value 1 \
     'Missing value for field'
 check_formatter_case ambiguous_empty_braces 0 \
     $'fn N { }\nstruct S { }\nfn use { N { } S { } }\n' \
-    $'fn N { }\n\nstruct S {\n}\n\nfn use {\n    N { } S { }\n}\n'
+    $'fn N {}\n\nstruct S {}\n\nfn use {\n    N {} S {}\n}\n'
 check_formatter_case generic_bracket_whitespace 1 \
     $'fn use { std::List [i64] :: new drop }\n' \
     $'fn use { std::List [i64] :: new drop }\n' \

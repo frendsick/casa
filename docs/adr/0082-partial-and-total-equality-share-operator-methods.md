@@ -8,10 +8,10 @@ trait PartialEq {
     fn ne $self other:$self -> bool { other self.eq ! }
 }
 
-trait Eq: PartialEq { }
+trait Eq: PartialEq {}
 ```
 
-The compiler validates effective trait shape after collecting inherited methods. A reserved Eq declaration must therefore expose correctly typed `eq` and `ne` operator methods either directly or through supertraits. An empty standalone `trait Eq { }` is invalid as the language Eq contract.
+The compiler validates effective trait shape after collecting inherited methods. A reserved Eq declaration must therefore expose correctly typed `eq` and `ne` operator methods either directly or through supertraits. An empty standalone `trait Eq {}` is invalid as the language Eq contract.
 
 Explicit implementation distinguishes semantic strength, so separate method names such as `partial_eq` are unnecessary. A float may implement PartialEq without adopting Eq, while a lawful total value explicitly implements both. Equality operators accept PartialEq and lower to `eq` or `ne`. Hashable requires Eq.
 

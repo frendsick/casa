@@ -68,6 +68,15 @@ fn fizzbuzz number:i64 {
 
 ---
 
+## Empty braces
+
+Write all empty curly-brace constructs as `{}`, with no space or newline between
+braces. This includes declarations, function bodies, lambdas, match arms, struct
+literals and patterns, and unsafe blocks. Keep this spelling when a function
+signature wraps. A block that contains a comment is not empty.
+
+---
+
 ## Blank lines
 
 - **1 blank line** before top-level definitions (`fn`, `struct`, `enum`,
@@ -322,17 +331,17 @@ line** only when all of these hold:
 - The body has at most one nonblank composition line, with no comment, no nested
   block, and no delimited form.
 
-Write an empty body as `{ }`. The formatter joins an eligible definition even
+Write an empty body as `{}`. The formatter joins an eligible definition even
 when the source splits its braces across lines:
 
 ```casa
 fn add a:i64 b:i64 -> i64 { a b + }
 
-fn noop { }
+fn noop {}
 ```
 
-Any definition that is not eligible uses a **multiline body**. This rule does
-not apply to lambdas or match-arm blocks.
+Any non-empty definition that is not eligible uses a **multiline body**. This
+rule does not apply to lambdas or match-arm blocks.
 
 ### Wrapped form
 
@@ -521,7 +530,8 @@ done
 
 - Put `match` arms on indented lines and align `end` with the matched value.
 - Keep a single operation or expression on the arm line.
-- Expand a block arm with its braces and body on separate lines.
+- Write an empty block arm as `_ => {}`, with no space between the braces.
+- Expand a non-empty block arm with its braces and body on separate lines.
 
 ```casa
 color match
@@ -536,6 +546,7 @@ shape match
         "\n" print
     }
     Shape::Point => "point\n" print
+    _ => {}
 end
 ```
 

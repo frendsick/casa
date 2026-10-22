@@ -7,9 +7,9 @@ trait Base {
     fn show $self -> str { ... }
 }
 
-trait Left: Base { }
-trait Right: Base { }
-trait Both: Left + Right { }
+trait Left: Base {}
+trait Right: Base {}
+trait Both: Left + Right {}
 ```
 
 `Both` inherits one `Base.show`, identified by its original declaration. Two distinct inherited declarations with the same name and compatible stack effects remain competing defaults under the ordinary ambiguity rule.

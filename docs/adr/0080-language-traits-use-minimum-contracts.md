@@ -9,14 +9,14 @@ methods and supertraits. Those remain ordinary trait behavior. Additional
 bodyless required methods are rejected because compiler-provided primitive
 implementations and derivation could not implement unknown behavior.
 
-Copy has the smallest contract: it is a methodless marker whose implementations the compiler validates for representation-safe, allocation-free duplication. Its declaration may have ordinary supertraits, but the compiler does not require Clone unconditionally. Casa's standard declaration is `trait Copy: Clone { }`, so every standard Copy type also satisfies Clone through ordinary supertrait checking.
+Copy has the smallest contract: it is a methodless marker whose implementations the compiler validates for representation-safe, allocation-free duplication. Its declaration may have ordinary supertraits, but the compiler does not require Clone unconditionally. Casa's standard declaration is `trait Copy: Clone {}`, so every standard Copy type also satisfies Clone through ordinary supertrait checking.
 
 When that declaration is active, `derives Copy` supplies complete structural
 Clone behavior under
 [ADR-0163](0163-standard-trait-derivation-is-a-complete-implementation.md).
 An explicit Clone implementation cannot replace part of the derived family.
 The compiler does not synthesize behavior for unrelated Copy supertraits.
-A freestanding canonical `trait Copy { }` permits Copy without Clone, so its
+A freestanding canonical `trait Copy {}` permits Copy without Clone, so its
 Copy-only types cannot satisfy a Clone bound or Clone derivation until they
 also implement Clone. Generic explicit duplication uses a Clone bound, while
 implicit and stack duplication use Copy.
