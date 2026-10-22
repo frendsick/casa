@@ -265,6 +265,25 @@ if matches_filter run_absolute "$@"; then
     )
 fi
 
+if matches_filter run_failures "$@"; then
+    matched=true
+    # A signal exits with 128 plus the signal number, as a shell reports it.
+    printf 'import "std"\nunsafe { 1 ptr::null store8 }\n' >"$CLI_TMP/run_signal.casa"
+    set +e
+    "$COMPILER" -L lib -r "$CLI_TMP/run_signal.casa" >"$CLI_TMP/run.out" 2>&1
+    actual_status=$?
+    set -e
+    [ "$actual_status" -eq 139 ]
+    # An execve failure names the path and errno instead of exiting silently.
+    printf 'import "std"\nstd::List[std::Bytes]::new = command\n"/nonexistent/program" command.push_str\ncommand std::run_command = status\nstatus u8::wrapping_from std::process::exit\n' >"$CLI_TMP/run_exec.casa"
+    set +e
+    "$COMPILER" -L lib -r "$CLI_TMP/run_exec.casa" >"$CLI_TMP/run.out" 2>&1
+    actual_status=$?
+    set -e
+    [ "$actual_status" -eq 127 ]
+    grep -q '^error: cannot execute /nonexistent/program: errno 2$' "$CLI_TMP/run.out"
+fi
+
 if matches_filter source_traceability "$@"; then
     matched=true
     python3 tests/test_source_traceability.py "$COMPILER"

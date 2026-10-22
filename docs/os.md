@@ -232,10 +232,18 @@ command std::run_command = exit_code
 ```
 
 The executable path is passed directly to `execve`. There is no `PATH` search.
-An argument with an interior NUL returns `-22` before launch. The return value
-extracts bits 8–15 of the wait status. It does not distinguish signal termination
-or report launch and wait errors through `Result`. A fork failure terminates the
-calling process, and an exec failure exits the child with status `1`.
+The return value is one of these:
+
+- The exit status `0`–`255` when the process exits.
+- `127` when `execve` fails. The child prints the path and errno to standard
+  error first, for example `error: cannot execute /bin/missing: errno 2`.
+- `128` plus the signal number when a signal terminates the process. This is the
+  shell convention, so SIGSEGV gives `139`.
+- A negative errno when `fork` or `wait4` fails. An argument with an interior
+  NUL gives `-22` before launch.
+
+A process that exits with `127` or with `128` or more gives the same value as
+these cases.
 
 See the [argument parser example](../examples/argparse.casa) for a command-line
 interface and the [OS example](../examples/os_interaction.casa) for

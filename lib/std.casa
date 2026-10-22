@@ -4060,44 +4060,58 @@ impl Bytes {
 }
 
 # Process execution
+# Returns the exit status, 128 plus the signal number after signal termination,
+# or a negative errno when fork or wait4 fails. An execve failure prints the
+# error and exits the child with status 127.
 pub fn run_command args:List[Bytes] -> i64 {
+    args.length 1 + 8 * RawBuffer::new = argv_buf
+    0 = argv_index: u64
     for argument in args.iter do
-        if argument.as_cstr.is_none then
+        if argument.as_cstr Option::Some(text) is then
+            # SAFETY: argv_buf has one pointer slot per argument plus a terminator.
+            # The borrowed NUL-terminated argument remains live through wait4.
+            unsafe { text ptr::from_ref argv_buf.data argv_index 8 * + ptr::write[ptr] }
+        else
             -22 return
         fi
+        1 += argv_index
     done
+    # Null terminator
+    unsafe { ptr::null argv_buf.data args.length 8 * + ptr::write[ptr] }
     # fork()
     unsafe { 57 syscall0 = child_pid }
-    if child_pid 0 < then
-        "error: fork failed\n" eprint
-        unsafe { 1 60 syscall1 drop }
+    if 0 child_pid > then
+        child_pid return
     fi
     if 0 child_pid == then
-        # Child process: build execve argv array
-        args.length 1 + 8 * RawBuffer::new = argv_buf
-        for argv_index in args.length 0 Range::new do
-            # SAFETY: argv_buf has one pointer slot per argument and every argument passed
-            # the interior-NUL check above.
-            unsafe {
-                argv_index args
-                    .get
-                    .as_cstr
-                    .unwrap ptr::from_ref
-                argv_buf.data argv_index 8 * + ptr::write[ptr]
-            }
-        done
-        # Null terminator
-        unsafe { ptr::null argv_buf.data args.length 8 * + ptr::write[ptr] }
-        unsafe { envp argv_buf.data argv_buf.data read_pointer 59 syscall3 drop }
-        # If execve returns, it failed — exit directly via syscall
-        argv_buf drop
-        unsafe { 1 60 syscall1 drop }
+        # SAFETY: argv_buf is terminated and its borrowed arguments are still live.
+        unsafe { envp argv_buf.data argv_buf.data read_pointer 59 syscall3 = exec_result }
+        # execve returns only on failure
+        "error: cannot execute " eprint
+        if args.is_empty ! then
+            0 args.get = program
+            # SAFETY: program has `size` initialized bytes.
+            unsafe { program.size program.data 2 1 syscall3 drop }
+        fi
+        f": errno {0 exec_result -}\n".as_str eprint
+        unsafe { 127 60 syscall1 drop }
     fi
     # Parent: wait4(pid, &status, 0, 0)
+    # Casa installs no interrupting signal handlers, so wait4 does not return
+    # EINTR. Add a retry if a program can install one.
     8 RawBuffer::new = wait_status
-    unsafe { ptr::null 0 wait_status.data child_pid 61 syscall4 drop }
-    # Extract exit code: bits 8-15 of status word
-    unsafe { wait_status.data load64 8 >> 0xFF & i64::try_from.unwrap }
+    unsafe { ptr::null 0 wait_status.data child_pid 61 syscall4 = wait_result }
+    if 0 wait_result > then
+        wait_result return
+    fi
+    # Bits 0-6 hold the terminating signal and bits 8-15 the exit status.
+    # SAFETY: Successful wait4 initialized the i32 status word.
+    unsafe { wait_status.data ptr::read[i32] i64::from = status }
+    status 0x7F & = signal
+    if 0 signal != then
+        128 signal + return
+    fi
+    status 8 >> 0xFF &
 }
 
 # Display implementations for container and enum types
