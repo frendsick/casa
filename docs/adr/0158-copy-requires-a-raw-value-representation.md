@@ -22,7 +22,9 @@ Every owned field must satisfy Copy. Shared-borrow fields preserve their origins
 under [ADR-0150](0150-shared-borrow-duplication-is-not-copy-conformance.md).
 Exclusive borrows, custom destruction, and ownership-bearing recursive
 indirection remain ineligible. Generic Copy bodies use the concrete field
-layouts. Generic instances that do not satisfy Copy retain their affine layout.
+layouts. Generic instances that do not satisfy Copy retain their affine field
+layout. Their standalone bodies also use automatic storage under
+[ADR-0162](0162-ordinary-and-extern-structs-share-field-storage-planning.md).
 Ordinary layouts remain compiler-owned and have no C ABI guarantee.
 
 Owned callable fields remain affine because a function value can own a capture

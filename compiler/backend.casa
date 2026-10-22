@@ -7,7 +7,6 @@ import "semantic_body" as semantic_body
 import "error" as error
 import "typechecker" as typechecker
 import "runtime" as runtime
-import "local_storage" as local_storage
 import "lexer" as lexer
 
 pub struct BytecodeFailure {
@@ -25,23 +24,11 @@ pub enum AssemblyError {
 
 const ENUM_DISPATCH_MIN_ARMS 4
 const SHORT_COPY_LIMIT 64
-const LOCAL_AGGREGATE_BYTES: u64 4096
+const AUTOMATIC_AGGREGATE_BYTES: u64 4096
 
 enum StorageKind derives std::Copy {
     Heap
     Local
-}
-
-struct LocalAggregates {
-    constructions: std::Map[i64 u64]
-    owners:        std::Set[std::String]
-    drops:         std::Set[i64]
-}
-
-impl LocalAggregates {
-    fn new -> LocalAggregates {
-        std::Set[i64]::new std::Set[std::String]::new std::Map[i64 u64]::new LocalAggregates
-    }
 }
 
 enum FunctionWork {
@@ -73,15 +60,14 @@ struct LoopTargets {
 }
 
 struct FunctionPlanner {
-    loop_targets:     std::List[LoopTargets]
-    function:         std::Option[$common::Function]
-    local_slots:      std::Map[std::String u64]
-    capture_slots:    std::Map[std::String u64]
-    locals_count:     u64
-    state:            mut$BackendPlanner
-    owner_flags:      std::Map[std::String u64]
-    result_slot:      std::Option[u64]
-    local_aggregates: LocalAggregates
+    loop_targets:  std::List[LoopTargets]
+    function:      std::Option[$common::Function]
+    local_slots:   std::Map[std::String u64]
+    capture_slots: std::Map[std::String u64]
+    locals_count:  u64
+    state:         mut$BackendPlanner
+    owner_flags:   std::Map[std::String u64]
+    result_slot:   std::Option[u64]
 }
 
 struct ResolvedStructField {
@@ -145,7 +131,6 @@ impl BackendPlanner {
 impl FunctionPlanner {
     fn new state:mut$BackendPlanner -> FunctionPlanner {
         state.layouts state.checked state.store.variables index_root_variable_map = locals_count = local_slots
-        LocalAggregates::new
         std::Option[u64]::None
         std::Map[std::String u64]::new
         state
@@ -159,7 +144,6 @@ impl FunctionPlanner {
 
     fn for_function state:mut$BackendPlanner function:$common::Function -> FunctionPlanner {
         state.layouts state.checked function.variables index_local_variable_list = locals_count = local_slots
-        LocalAggregates::new
         std::Option[u64]::None
         std::Map[std::String u64]::new
         state
@@ -203,7 +187,7 @@ impl FunctionPlanner {
             bytecode declared_type compiler.emit_typed_load
         else
             InstValue::Load64 bytecode.push
-            if declared_type compiler.is_copy_aggregate then
+            if declared_type compiler.uses_automatic_storage then
                 bytecode declared_type compiler.emit_inline_copy
             fi
         fi
@@ -240,7 +224,7 @@ impl FunctionPlanner {
             bytecode declared_type compiler.emit_typed_store
         else
             if declared_type.has_unresolved_type_var ! then
-                if declared_type compiler.is_copy_aggregate then
+                if declared_type compiler.uses_automatic_storage then
                     InstValue::Swap bytecode.push
                     bytecode declared_type compiler.emit_heap_copy
                     InstValue::Swap bytecode.push
@@ -356,8 +340,45 @@ fn index_variable_list variables:$std::List[common::Variable] -> std::Map[std::S
     slots
 }
 
-fn uses_inline_local_storage typ:$common::Type checked:$typechecker::CheckedProgram -> bool {
-    typ common::get_concrete_array_length.is_some typ checked.is_copy_aggregate ||
+# Standalone aggregates use automatic storage across Casa calls. Recursive
+# edges and indirect fields keep their existing independently owned allocations.
+fn uses_automatic_storage
+    typ:$common::Type
+    checked:$typechecker::CheckedProgram
+    layouts:mut$common::LayoutPlanner
+-> bool {
+    if typ common::Type::Generic is ! then
+        false return
+    fi
+    typ checked.get_shape match
+        typechecker::CheckedShape::Struct | typechecker::CheckedShape::Enum => {
+            if
+                checked.get_store typ common::type_value_representation.unwrap common::VALUE_REPR_INDIRECT !=
+            then
+                false return
+            fi
+            # Keep large affine bodies on the heap instead of forcing a return
+            # stack overflow. Copy retains its allocation-free representation.
+            if typ layouts.inline_size std::Option::Some(size) is else
+                # Native-call planning reports unsupported or overflowing layouts.
+                false return
+            fi
+            if size AUTOMATIC_AGGREGATE_BYTES <= then
+                true return
+            fi
+            typ checked.is_copy_aggregate
+        }
+        typechecker::CheckedShape::Array => typ checked.is_copy_aggregate
+        _ => false
+    end
+}
+
+fn uses_inline_local_storage
+    typ:$common::Type
+    checked:$typechecker::CheckedProgram
+    layouts:mut$common::LayoutPlanner
+-> bool {
+    typ common::get_concrete_array_length.is_some layouts checked typ uses_automatic_storage ||
 }
 
 fn local_variable_slot_width
@@ -365,7 +386,7 @@ fn local_variable_slot_width
     checked:$typechecker::CheckedProgram
     layouts:mut$common::LayoutPlanner
 -> u64 {
-    if checked variable.typ uses_inline_local_storage then
+    if layouts checked variable.typ uses_inline_local_storage then
         if variable.typ layouts.inline_size std::Option::Some(size) is then
             size common::WORD_SIZE u64::try_from.unwrap 1 - +
             common::WORD_SIZE u64::try_from.unwrap / return
@@ -477,10 +498,11 @@ impl FunctionPlanner {
         self:mut$FunctionPlanner
         variable_name:$str
     -> std::Option[common::Type] {
+        self.state.checked = checked
         if self.function std::Option::Some(function) is then
             for variable in function.variables.iter do
                 if variable.name.as_str variable_name == then
-                    if self.state.checked variable.typ uses_inline_local_storage then
+                    if self.state.layouts checked variable.typ uses_inline_local_storage then
                         variable.typ.clone std::Option::Some return
                     fi
                 fi
@@ -492,7 +514,7 @@ impl FunctionPlanner {
                 .variables
                 .get_str std::Option::Some(variable) is
         then
-            if self.state.checked variable.typ uses_inline_local_storage then
+            if self.state.layouts checked variable.typ uses_inline_local_storage then
                 variable.typ.clone std::Option::Some return
             fi
         fi
@@ -546,6 +568,19 @@ impl FunctionPlanner {
             .is_copy_aggregate
     }
 
+    fn uses_automatic_storage self:mut$FunctionPlanner typ:$common::Type -> bool {
+        self.state.checked = checked
+        self.state.layouts checked typ uses_automatic_storage
+    }
+
+    fn value_storage self:mut$FunctionPlanner typ:$common::Type -> StorageKind {
+        if typ self.uses_automatic_storage then
+            StorageKind::Local
+        else
+            StorageKind::Heap
+        fi
+    }
+
     fn finish_destruction
         self:mut$FunctionPlanner
         storage_kind:StorageKind
@@ -555,38 +590,6 @@ impl FunctionPlanner {
             StorageKind::Heap => InstValue::HeapFree bytecode.push
             StorageKind::Local => InstValue::Drop bytecode.push
         end
-    }
-
-    fn prepare_local_aggregates self:mut$FunctionPlanner body:$semantic_body::Body {
-        self.state.checked body local_storage::find_candidates = candidates
-        0 = used_bytes: u64
-        for candidate in candidates.iter do
-            candidate.typ self
-                .state
-                .layouts
-                .inline_size
-                .unwrap = size
-            common::WORD_SIZE u64::try_from.unwrap = word_size
-            size word_size 1 - + word_size / word_size * = aligned
-            if LOCAL_AGGREGATE_BYTES used_bytes aligned + < then
-                continue
-            fi
-            size self.allocate_value_storage candidate.construction self
-                .local_aggregates
-                .constructions
-                .set
-            candidate.name.clone self
-                .local_aggregates
-                .owners
-                .add
-            for identity in candidate.drops.iter do
-                identity copy self
-                    .local_aggregates
-                    .drops
-                    .add
-            done
-            aligned += used_bytes
-        done
     }
 
     fn compile_drop_hook
@@ -861,7 +864,7 @@ impl FunctionPlanner {
         typ:$common::Type
         bytecode:mut$std::List[InstValue]
     {
-        StorageKind::Heap bytecode typ self.compile_destruction_in_storage
+        typ self.value_storage bytecode typ self.compile_destruction_in_storage
     }
 
     fn compile_destruction_in_storage
@@ -920,28 +923,11 @@ impl FunctionPlanner {
         then
             variable_name compiler.resolve_local = local_index
             local_index InstValue::LocalAddress bytecode.push
-            bytecode aggregate_type compiler.compile_drop_hook
-            if aggregate_type common::get_array_length_parameter std::Option::Some(array_length) is then
-                if aggregate_type.array_element_type std::Option::Some(element_type) is then
-                    bytecode array_length element_type compiler.compile_array_destruction
-                    InstValue::Drop bytecode.push
-                    return
-                fi
-            fi
-            InstValue::Drop bytecode.push
+            StorageKind::Local bytecode aggregate_type compiler.compile_destruction_in_storage
             return
         fi
         variable_name compiler.resolve_local InstValue::LocalGet bytecode.push
-        if
-            variable_name compiler
-                .local_aggregates
-                .owners
-                .has_str
-        then
-            StorageKind::Local bytecode typ compiler.compile_destruction_in_storage
-        else
-            bytecode typ compiler.compile_destruction
-        fi
+        bytecode typ compiler.compile_destruction
     }
 
     fn compile_active_owner_cleanup
@@ -1119,11 +1105,11 @@ impl FunctionPlanner {
                     if capture_type compiler.is_copy_aggregate then
                         InstValue::HeapFree bytecode.push
                     else
-                        bytecode capture_type compiler.compile_destruction
+                        StorageKind::Heap bytecode capture_type compiler.compile_destruction_in_storage
                     fi
                     inactive_label InstValue::Label bytecode.push
                 fi
-                if owns_capture capture_type compiler.is_copy_aggregate && then
+                if owns_capture capture_type compiler.uses_automatic_storage && then
                     bytecode capture_type compiler.emit_heap_copy
                 fi
                 capture_index InstValue::CaptureSet bytecode.push
@@ -1394,12 +1380,22 @@ impl FunctionPlanner {
         typ:$common::Type
         bytecode:mut$std::List[InstValue]
         storage:StorageKind
+        facts:$semantic_body::OperationFacts
     {
         if typ.is_borrow typ self.is_copy_aggregate || then
             InstValue::Drop bytecode.push return
         fi
-        if value common::PatternValue::Binding is then
-            InstValue::Drop bytecode.push return
+        if value common::PatternValue::Binding(binding) is then
+            if storage StorageKind::Heap is typ self.uses_automatic_storage && then
+                # Guards used a snapshot. Refresh after enclosing cleanup hooks,
+                # then release the backing that the moved binding no longer needs.
+                bytecode typ self.move_heap_value
+                binding.name.as_str facts.resolve_storage_name = storage_name
+                bytecode storage_name.as_str self.emit_variable_set
+            else
+                InstValue::Drop bytecode.push
+            fi
+            return
         fi
         if value pattern::binding_names.is_empty then
             storage bytecode typ self.compile_destruction_in_storage return
@@ -1417,6 +1413,7 @@ impl FunctionPlanner {
                 bytecode field.plan field.typ self.compile_field_destruction
             else
                 bytecode field.plan field.typ self.emit_field_projection
+                facts
                 if field.plan.stores_inline then
                     StorageKind::Local
                 else
@@ -1436,16 +1433,15 @@ impl FunctionPlanner {
         casa_struct:$common::CasaStruct
         typ:$common::Type
         bytecode:mut$std::List[InstValue]
-        local_slot:std::Option[u64]
     {
         if casa_struct.type_vars.is_empty ! typ compiler.is_copy_aggregate && then
             casa_struct typ common::copy_storage_struct = concrete
-            local_slot bytecode typ concrete compiler.compile_struct_new
+            bytecode typ concrete compiler.compile_struct_new
             return
         fi
         casa_struct.type_vars typ common::aggregate_type_bindings = substitutions
         casa_struct common::CasaStruct::members.length = count
-        local_slot bytecode typ compiler.emit_value_storage
+        bytecode typ compiler.emit_value_storage
         for index in count 0 std::Range::new do
             InstValue::Swap bytecode.push
             InstValue::Over bytecode.push
@@ -1469,15 +1465,14 @@ impl FunctionPlanner {
         casa_enum:$common::CasaEnum
         typ:$common::Type
         bytecode:mut$std::List[InstValue]
-        local_slot:std::Option[u64]
     {
         if casa_enum.type_vars.is_empty ! typ compiler.is_copy_aggregate && then
             casa_enum typ common::copy_storage_enum = concrete
-            local_slot bytecode typ concrete variant compiler.compile_enum_variant
+            bytecode typ concrete variant compiler.compile_enum_variant
             return
         fi
         casa_enum.type_vars typ common::aggregate_type_bindings = substitutions
-        local_slot bytecode typ compiler.emit_value_storage
+        bytecode typ compiler.emit_value_storage
         InstValue::Dup bytecode.push
         compiler variant require_variant_ordinal InstValue::Push bytecode.push
         InstValue::Swap bytecode.push
@@ -1521,7 +1516,7 @@ impl FunctionPlanner {
             done
             if ownership.conditional_move std::Option::Some(subject_name) is then
                 subject InstValue::LocalGet bytecode.push
-                StorageKind::Heap bytecode subject_type value compiler.compile_pattern_destruction
+                op subject_type compiler.value_storage bytecode subject_type value compiler.compile_pattern_destruction
                 subject_name.as_str op.resolve_storage_name = storage
                 bytecode 0 storage.as_str compiler.set_owner_flag
             fi
@@ -1542,7 +1537,6 @@ impl FunctionPlanner {
         literal:$common::StructLiteral
         typ:$common::Type
         bytecode:mut$std::List[InstValue]
-        local_slot:std::Option[u64]
     {
         literal.struct_name store.structs.get = casa_struct_opt
         if casa_struct_opt.is_none then
@@ -1570,7 +1564,7 @@ impl FunctionPlanner {
             local_index InstValue::LocalSet bytecode.push
         done
 
-        local_slot bytecode typ compiler.emit_value_storage
+        bytecode typ compiler.emit_value_storage
 
         # Store each field at its correct offset
         for member_index in casa_struct common::CasaStruct::members.length 0 std::Range::new do
@@ -1648,7 +1642,7 @@ impl FunctionPlanner {
         if 0 byte_count == then
             1 = byte_count: u64
         fi
-        std::Option[u64]::None bytecode typ compiler.emit_value_storage
+        bytecode typ compiler.emit_value_storage
         byte_count array_index InstValue::PushStaticArray bytecode.push
     }
 }
@@ -1689,7 +1683,7 @@ impl FunctionPlanner {
         # An array stores only its elements (ADR-0152), so the allocation
         # is exactly the element storage.
         self.allocate_local = list_local
-        std::Option[u64]::None bytecode array.typ self.emit_value_storage
+        bytecode array.typ self.emit_value_storage
         list_local InstValue::LocalSet bytecode.push
 
         # Store elements starting at offset 0
@@ -1800,7 +1794,7 @@ impl FunctionPlanner {
     fn result_storage_size self:mut$FunctionPlanner returns:$std::List[common::Type] -> u64 {
         0 = size: u64
         for typ in returns.iter do
-            if typ self.is_copy_aggregate then
+            if typ self.uses_automatic_storage then
                 typ self
                     .state
                     .layouts
@@ -1864,7 +1858,7 @@ impl FunctionPlanner {
             0 = offset: u64
             for typ in returns.iter do
                 values.pop InstValue::LocalGet bytecode.push
-                if typ self.is_copy_aggregate then
+                if typ self.uses_automatic_storage then
                     destination InstValue::LocalGet bytecode.push
                     offset i64::try_from.unwrap InstValue::Push bytecode.push
                     InstValue::Add bytecode.push
@@ -1896,7 +1890,8 @@ impl FunctionPlanner {
             closure InstValue::LocalSet bytecode.push
             bytecode function.return_types self.prepare_results drop
             closure InstValue::LocalGet bytecode.push
-            function.return_types function.parameters.length self.state.checked plan_register_call
+            self.state.checked = checked
+            self.state.layouts function.return_types function.parameters.length checked plan_register_call
             InstValue::FnExec bytecode.push
             if owned then
                 closure InstValue::LocalGet bytecode.push
@@ -1994,9 +1989,10 @@ impl FunctionPlanner {
                     capture_name op.resolve_storage_name = storage_name
                     bytecode owns_capture copies_aggregate ! && storage_name.as_str
                     compiler.emit_variable_get
-                    if copies_aggregate then
+                    if owns_capture capture.typ compiler.uses_automatic_storage && then
                         bytecode capture.typ compiler.emit_heap_copy
-                    elif owns_capture then
+                    fi
+                    if owns_capture copies_aggregate ! && then
                         if storage_name.as_str compiler.owner_flags.get_copy_str std::Option::Some(flag) is then
                             0 InstValue::Push bytecode.push
                             flag InstValue::LocalSet bytecode.push
@@ -2053,7 +2049,7 @@ impl FunctionPlanner {
         target:$common::Type
         bytecode:mut$std::List[InstValue]
     {
-        if target compiler.is_copy_aggregate then
+        if target compiler.uses_automatic_storage then
             bytecode target compiler.emit_inline_copy return
         fi
         if
@@ -2145,16 +2141,13 @@ impl FunctionPlanner {
         self:mut$FunctionPlanner
         typ:$common::Type
         bytecode:mut$std::List[InstValue]
-        local_slot:std::Option[u64]
     {
         typ self
             .state
             .layouts
             .inline_size
             .unwrap = size
-        if local_slot std::Option::Some(slot) is then
-            slot InstValue::LocalAddress bytecode.push
-        elif typ self.is_copy_aggregate then
+        if typ self.uses_automatic_storage then
             size self.allocate_value_storage InstValue::LocalAddress bytecode.push
         else
             size i64::try_from.unwrap InstValue::Push bytecode.push
@@ -2176,6 +2169,21 @@ impl FunctionPlanner {
         copy_local InstValue::LocalAddress bytecode.push
         size InstValue::MoveBytes bytecode.push
         copy_local InstValue::LocalAddress bytecode.push
+    }
+
+    # Move an independently allocated body into this frame. Its fields keep
+    # their owners, and only the old backing allocation is released.
+    fn move_heap_value
+        self:mut$FunctionPlanner
+        typ:$common::Type
+        bytecode:mut$std::List[InstValue]
+    {
+        self.allocate_local = source
+        InstValue::Dup bytecode.push
+        source InstValue::LocalSet bytecode.push
+        bytecode typ self.emit_inline_copy
+        source InstValue::LocalGet bytecode.push
+        InstValue::HeapFree bytecode.push
     }
 
     # Escaping raw owners and closure captures need storage with their own lifetime.
@@ -2206,7 +2214,7 @@ impl FunctionPlanner {
                     .inline_size std::Option::Some(size) is
             then
                 if common::VALUE_REPR_INDIRECT representation == then
-                    if target compiler.is_copy_aggregate then
+                    if target compiler.uses_automatic_storage then
                         size InstValue::MoveBytes bytecode.push
                     else
                         size InstValue::WriteIndirect bytecode.push
@@ -2451,22 +2459,11 @@ impl FunctionPlanner {
     {
         bytecode leaf.facts self.compile_facts
         leaf.action match
-            semantic_body::Action::Primitive(kind typ) => {
-                if
-                    leaf.facts.identity self
-                        .local_aggregates
-                        .drops
-                        .has
-                then
-                    StorageKind::Local bytecode typ self.compile_destruction_in_storage
-                else
-                    bytecode leaf.facts typ kind self.compile_primitive
-                fi
-            }
+            semantic_body::Action::Primitive(kind typ) => bytecode leaf.facts typ kind self.compile_primitive
             semantic_body::Action::Intrinsic(kind) => bytecode kind self.compile_intrinsic
             semantic_body::Action::Execute(typ owned) => bytecode owned typ self.compile_execute
             semantic_body::Action::IntoRaw(typ) => {
-                if typ self.is_copy_aggregate then
+                if typ self.uses_automatic_storage then
                     bytecode typ self.emit_heap_copy
                 fi
             }
@@ -2508,10 +2505,7 @@ impl FunctionPlanner {
                         .get std::Option::Some(declaration) is
                 then
                     if declaration common::has_inner_values then
-                        leaf.facts.identity self
-                            .local_aggregates
-                            .constructions
-                            .get_copy bytecode typ declaration variant self.compile_enum_variant
+                        bytecode typ declaration variant self.compile_enum_variant
                     else
                         self variant require_variant_ordinal InstValue::Push bytecode.push
                     fi
@@ -2520,14 +2514,8 @@ impl FunctionPlanner {
                 fi
             }
             semantic_body::Action::PatternTest(variant typ) => bytecode leaf.facts typ variant self.state.store self.compile_is_check
-            semantic_body::Action::Struct(shape typ) => leaf.facts.identity self
-                .local_aggregates
-                .constructions
-                .get_copy bytecode typ shape self.compile_struct_new
-            semantic_body::Action::StructFields(literal typ) => leaf.facts.identity self
-                .local_aggregates
-                .constructions
-                .get_copy bytecode typ literal self.state.store self.compile_struct_literal
+            semantic_body::Action::Struct(shape typ) => bytecode typ shape self.compile_struct_new
+            semantic_body::Action::StructFields(literal typ) => bytecode typ literal self.state.store self.compile_struct_literal
             semantic_body::Action::ConstrainedCall(_) => "Deferred dispatch reached target planning" self.record_failure
             semantic_body::Action::ConstrainedClosure(_) => "Deferred dispatch reached target planning" self.record_failure
             semantic_body::Action::SizeOf(typ) => {
@@ -2549,13 +2537,8 @@ impl FunctionPlanner {
             semantic_body::Action::PtrAsRef(typ) => bytecode typ self.emit_typed_borrow
             semantic_body::Action::PtrAsMut(typ) => bytecode typ self.emit_typed_borrow
             semantic_body::Action::PtrFromRaw(typ) => {
-                if typ self.is_copy_aggregate then
-                    self.allocate_local = source
-                    InstValue::Dup bytecode.push
-                    source InstValue::LocalSet bytecode.push
-                    bytecode typ self.emit_inline_copy
-                    source InstValue::LocalGet bytecode.push
-                    InstValue::HeapFree bytecode.push
+                if typ self.uses_automatic_storage then
+                    bytecode typ self.move_heap_value
                 fi
             }
             semantic_body::Action::PtrRead(typ) => bytecode typ self.emit_typed_load
@@ -2577,9 +2560,23 @@ impl FunctionPlanner {
                 bytecode wrapper.as_str self.compile_call
             }
             semantic_body::Action::FloatRound(rounding) => bytecode rounding self.compile_float_round
-            semantic_body::Action::FstringConcat(count) => count InstValue::FstringConcat bytecode.push
-            semantic_body::Action::PrimitiveToStr(builtin) => builtin copy InstValue::PrimitiveToStr bytecode.push
+            semantic_body::Action::FstringConcat(count) => {
+                count InstValue::FstringConcat bytecode.push
+                bytecode self.store_runtime_string
+            }
+            semantic_body::Action::PrimitiveToStr(builtin) => {
+                builtin copy InstValue::PrimitiveToStr bytecode.push
+                bytecode self.store_runtime_string
+            }
         end
+    }
+
+    # Runtime formatting returns the owned text buffer. String's one-word
+    # wrapper lives in this frame, like a source-level String construction.
+    fn store_runtime_string self:mut$FunctionPlanner bytecode:mut$std::List[InstValue] {
+        self.allocate_local = slot
+        slot InstValue::LocalSet bytecode.push
+        slot InstValue::LocalAddress bytecode.push
     }
 
     fn compile_binding_value
@@ -2593,12 +2590,15 @@ impl FunctionPlanner {
         if kind semantic_body::BindingKind::PushCapture == then
             if binding.name self.capture_slots.get_copy std::Option::Some(index) is then
                 index InstValue::CaptureLoad bytecode.push
-                if typ self.is_copy_aggregate then
-                    if facts.moves_owner then
+                if facts.moves_owner then
+                    if typ self.is_copy_aggregate then
                         bytecode typ self.emit_inline_copy
+                    else
+                        if typ self.uses_automatic_storage then
+                            bytecode typ self.move_heap_value
+                        fi
+                        index InstValue::CaptureFlagClear bytecode.push
                     fi
-                elif facts.moves_owner then
-                    index InstValue::CaptureFlagClear bytecode.push
                 fi
             else
                 f"Capture `{binding.name}` is missing during target planning" self.record_failure_string
@@ -2958,7 +2958,7 @@ impl FunctionPlanner {
                     next_destruction InstValue::JumpNe bytecode.push
                 fi
                 subject InstValue::LocalGet bytecode.push
-                StorageKind::Heap bytecode arm.subject_type alternative self.compile_pattern_destruction
+                arm.entry arm.subject_type self.value_storage bytecode arm.subject_type alternative self.compile_pattern_destruction
                 committed InstValue::Jump bytecode.push
                 next_destruction InstValue::Label bytecode.push
                 1 += destruction_index
@@ -3068,7 +3068,6 @@ fn plan_function
                 .unwrap = function
             name.as_str checked.find_body.unwrap = body
             function state FunctionPlanner::for_function = compiler
-            body compiler.prepare_local_aggregates
             function.location.clone InstValue::Source output.push
             compiler.new_label InstValue::Label output.push
             output compiler.begin_results
@@ -3101,7 +3100,7 @@ fn plan_function
                     if capture.typ compiler.is_copy_aggregate then
                         InstValue::HeapFree output.push
                     else
-                        output capture.typ compiler.compile_destruction
+                        StorageKind::Heap output capture.typ compiler.compile_destruction_in_storage
                     fi
                     end_label InstValue::Label output.push
                 fi
@@ -3247,7 +3246,7 @@ fn is_leaf_candidate
 }
 
 # Each current Casa value has a word carrier, including indirect aggregate
-# addresses. Copy aggregate results additionally need hidden destination storage.
+# addresses. Automatic aggregate results also need hidden destination storage.
 # Keep that convention and signatures larger than the cache on the memory ABI.
 struct RegisterCallPlan derives std::Copy {
     arguments: u64
@@ -3258,12 +3257,13 @@ fn plan_register_call
     checked:$typechecker::CheckedProgram
     argument_count:u64
     returns:$std::List[common::Type]
+    layouts:mut$common::LayoutPlanner
 -> std::Option[RegisterCallPlan] {
     if argument_count SCALAR_REGISTER_COUNT > returns.length SCALAR_REGISTER_COUNT > || then
         std::Option[RegisterCallPlan]::None return
     fi
     for typ in returns.iter do
-        if typ checked.is_copy_aggregate then
+        if layouts checked typ uses_automatic_storage then
             std::Option[RegisterCallPlan]::None return
         fi
     done
@@ -3290,7 +3290,7 @@ pub fn compile_checked
                 .return_types
                 .iter
         do
-            typ checked.is_copy_aggregate = caller_owned_result
+            state.layouts checked typ uses_automatic_storage = caller_owned_result
         done
         if
             caller_owned_result diagnostics state.layouts state.store signature abi::plan_checked_extern std::Option::Some(plan) is
@@ -3312,7 +3312,7 @@ pub fn compile_checked
             .get_store
             .get_function
             .unwrap = function
-        function.stack_effect.return_types function
+        state.layouts function.stack_effect.return_types function
             .stack_effect
             .parameters
             .length checked plan_register_call
@@ -3364,7 +3364,6 @@ pub fn compile_checked
     done
     std::List[InstValue]::new = instructions
     state FunctionPlanner::new = compiler
-    checked.get_root compiler.prepare_local_aggregates
     compiler.new_label InstValue::Label instructions.push
     instructions checked.get_root compiler.compile_body
     true compiler.owner_flags compiler.locals_count instructions finalize_frame = root
@@ -6533,8 +6532,6 @@ impl Emitter {
                 "movq (%r12), %rdi" self.indent
                 "call print_str" self.indent
                 "movq (%r12), %rdi" self.indent
-                "call heap_free" self.indent
-                "movq %r12, %rdi" self.indent
                 "call heap_free" self.indent
             }
             InstValue::PrintChar => self.select_print_char
