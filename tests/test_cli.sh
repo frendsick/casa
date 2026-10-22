@@ -219,6 +219,28 @@ if matches_filter default_output "$@"; then
     )
 fi
 
+if matches_filter default_output_rejected "$@"; then
+    matched=true
+    compiler_path=$(cd "$(dirname "$COMPILER")" && pwd)/$(basename "$COMPILER")
+    mkdir -p "$CLI_TMP/default_output_rejected/dir.v2"
+    (
+        cd "$CLI_TMP/default_output_rejected"
+        for source in script .script dir.v2/script dir.v2/.script trailing.; do
+            printf 'import "std"\n"ok" std::println\n' >"$source"
+            set +e
+            "$compiler_path" -L "$ROOT_DIR/lib" "$source" >reject.out 2>&1
+            actual_status=$?
+            set -e
+            [ "$actual_status" -eq 1 ]
+            grep -q "error: cannot derive an output path from $source, pass -o" reject.out
+            # The source stays text.
+            grep -q '^import "std"$' "$source"
+        done
+        "$compiler_path" -L "$ROOT_DIR/lib" script -o script_out
+        [ "$(./script_out)" = ok ]
+    )
+fi
+
 if matches_filter run_absolute "$@"; then
     matched=true
     compiler_path=$(cd "$(dirname "$COMPILER")" && pwd)/$(basename "$COMPILER")
