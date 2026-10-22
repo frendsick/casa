@@ -492,6 +492,54 @@ raylib stub ok"
             pass=$((pass+1))
         fi
     fi
+
+    # Without a capacity check, the overflowing copy writes below the guard
+    # region and the process dies by SIGSEGV instead.
+    if matches_filter "extern_large_argument_native" "$@"; then
+        matched=true
+        native_object="$TEST_TMP/extern_large_argument.o"
+        native_library="$TEST_TMP/libcasa_extern_large_argument_fixture.a"
+        native_binary="$TEST_TMP/extern_large_argument_native"
+
+        printf "Running: native/extern_large_argument ... "
+        if ! cc -std=c11 -Wall -Wextra -Werror \
+            -c "$TESTS_DIR/fixtures/extern_large_argument.c" -o "$native_object" \
+            2>"$TEST_TMP/native_c_err"
+        then
+            printf "${RED}C FIXTURE COMPILE FAIL${RESET}\n"
+            cat "$TEST_TMP/native_c_err"
+            fail=$((fail+1))
+        elif ! ar rcs "$native_library" "$native_object"; then
+            printf "${RED}C FIXTURE ARCHIVE FAIL${RESET}\n"
+            fail=$((fail+1))
+        elif ! LIBRARY_PATH="$TEST_TMP${LIBRARY_PATH:+:$LIBRARY_PATH}" \
+            "$COMPILER" -L "$LIB_DIR" -l casa_extern_large_argument_fixture \
+            "$TESTS_DIR/fixtures/extern_large_argument.casa" -o "$native_binary" \
+            2>"$TEST_TMP/native_casa_err"
+        then
+            printf "${RED}CASA COMPILE FAIL${RESET}\n"
+            cat "$TEST_TMP/native_casa_err"
+            fail=$((fail+1))
+        else
+            set +e
+            output=$("$native_binary" 2>&1 < /dev/null)
+            actual_status=$?
+            set -e
+            if [ "$actual_status" -ne 1 ]; then
+                printf "${RED}WRONG STATUS (expected 1, got %s)${RESET}\n" "$actual_status"
+                echo "$output"
+                fail=$((fail+1))
+            elif [ "$output" != "large argument passed
+error: return stack overflow" ]; then
+                printf "${RED}WRONG OUTPUT${RESET}\n"
+                echo "$output"
+                fail=$((fail+1))
+            else
+                printf "${GREEN}OK${RESET}\n"
+                pass=$((pass+1))
+            fi
+        fi
+    fi
 fi
 
 if [ "$TEST_CATEGORY" = all ] || [ "$TEST_CATEGORY" = runtime ]; then
