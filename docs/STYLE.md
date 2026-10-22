@@ -96,7 +96,7 @@ Names such as `std::List` assume `import "std"`. See
   `K` (map key), `V` (map value), `E` (error in Result).
 
   ```casa
-  fn id [T] T -> T { }
+  fn id [T] T -> T {}
   fn swap_t [T1 T2] T1 T2 -> T1 T2 { swap }
   fn get [K:std::Hashable, V] self:$std::Map[K V] key:$K -> std::Option[$V] { ... }
   ```

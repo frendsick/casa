@@ -322,13 +322,13 @@ line** only when all of these hold:
 - The body has at most one nonblank composition line, with no comment, no nested
   block, and no delimited form.
 
-Write an empty body as `{ }`. The formatter joins an eligible definition even
+Write an empty body as `{}`. The formatter joins an eligible definition even
 when the source splits its braces across lines:
 
 ```casa
 fn add a:i64 b:i64 -> i64 { a b + }
 
-fn noop { }
+fn noop {}
 ```
 
 Any definition that is not eligible uses a **multiline body**. This rule does
