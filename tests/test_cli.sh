@@ -219,6 +219,30 @@ if matches_filter default_output "$@"; then
     )
 fi
 
+if matches_filter run_absolute "$@"; then
+    matched=true
+    compiler_path=$(cd "$(dirname "$COMPILER")" && pwd)/$(basename "$COMPILER")
+    printf 'import "std"\n"ran" std::println\n3 std::process::exit\n' >"$CLI_TMP/run_absolute.casa"
+    for args in "$CLI_TMP/run_absolute.casa" "$CLI_TMP/run_absolute.casa -o $CLI_TMP/run_absolute_out"; do
+        set +e
+        # shellcheck disable=SC2086
+        "$COMPILER" -L lib -r $args >"$CLI_TMP/run.out" 2>&1
+        actual_status=$?
+        set -e
+        [ "$actual_status" -eq 3 ]
+        [ "$(cat "$CLI_TMP/run.out")" = ran ]
+    done
+    (
+        cd "$CLI_TMP"
+        set +e
+        "$compiler_path" -L "$ROOT_DIR/lib" -r run_absolute.casa -o run_relative >run.out 2>&1
+        actual_status=$?
+        set -e
+        [ "$actual_status" -eq 3 ]
+        [ "$(cat run.out)" = ran ]
+    )
+fi
+
 if matches_filter source_traceability "$@"; then
     matched=true
     python3 tests/test_source_traceability.py "$COMPILER"
