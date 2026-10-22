@@ -26,6 +26,12 @@ text consume
 # text consume    # Error: text was already moved.
 ```
 
+Structs and payload enums can cross a function boundary without a heap allocation
+for their outer body. The caller provides storage for returned bodies. A move
+transfers ownership of the fields and does not call Clone or the cleanup method.
+Recursive fields, owned closure captures, and raw-owner escapes can still need
+independent allocations.
+
 ## Borrow for a call
 
 Use `$T` for shared access and `mut$T` for exclusive mutable access. Calls

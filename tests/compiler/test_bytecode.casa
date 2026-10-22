@@ -40,7 +40,7 @@ fn test_structured_aggregate_control_flow {
     check lexer::SourceStore::new swap bytecode::compile_checked.unwrap = assembly
     "fn_choose:" assembly assert_contains
     "fn_run:" assembly assert_contains
-    "call heap_alloc" assembly assert_contains
+    "returned aggregate has no backing allocation" assembly helpers::generated_assembly.as_str "call heap_alloc" str::contains ! test::assert_true
 }
 
 fn test_storage_plans {
@@ -75,43 +75,48 @@ fn test_local_aggregate_placement {
     assert_local_aggregate
 }
 
-fn test_local_aggregate_escapes {
-    "uncertain aggregate storage remains on the heap" test::test_start
+fn test_aggregate_call_storage {
+    "aggregate storage across function boundaries" test::test_start
     for
         code in [
             "struct Value { pub x:i64 } fn make -> Value { 42 Value = value value } make drop",
             "struct Value { pub x:i64 } fn take value:Value { value.x print } 42 Value = value value take",
             "struct Value { pub x:i64 } fn read value:$Value -> i64 { value.x } 42 Value = value value read print",
-            "struct Value { pub x:i64 } struct Box { pub value:Value } 42 Value = value value Box drop",
             "struct Value { pub x:i64 } 42 Value = value value = moved moved.x print",
             "struct Value { pub x:i64 } 42 Value = value 43 Value = value value.x print",
-            "struct Value { pub x:i64 } 42 Value = value move { value.x } = callback callback exec print",
-            "struct Value { pub x:i64 } unsafe { 42 Value = value value ptr::into_raw ptr::from_raw[Value] drop }",
+            "struct Value { pub x:i64 } fn make flag:bool -> Value { if flag then 42 Value return fi 43 Value } true &make exec drop",
+            "enum Value { Some(i64) None } fn make -> Value { 42 Value::Some } fn take value:Value { value match Value::Some(x) => x print Value::None => {} end } make take",
+            "struct Value { pub x:i64 } fn make -> Value i64 Value { 1 Value 2 3 Value } make drop drop drop",
             "struct Value { pub x:i64 } unsafe { 42 Value = value value ptr::from_ref load64 print }",
         ].iter
     do
-        code check lexer::SourceStore::new swap bytecode::compile_checked.unwrap helpers::generated_assembly = generated
-        "escaping aggregate keeps backing allocation" generated.as_str "call heap_alloc" str::contains test::assert_true
+        code assert_local_aggregate
     done
 }
 
-fn test_local_aggregate_frame_bound {
-    "aggregate placement has a per-function frame bound" test::test_start
-    std::String::new = source
-    "struct Pair { pub x:i64 pub y:i64 } fn run { " source.append
-    0 = index: u64
-    while 257 index > do
-        f"1 2 Pair = value{index} " source.append_string
-        1 += index
-        if 256 index == then
-            source.clone = at_limit
-            "} run" at_limit.append
-            at_limit.as_str assert_local_aggregate
-        fi
+fn test_aggregate_storage_size_limit {
+    "affine aggregate storage has a per-body size limit" test::test_start
+    "extern struct Value { data:array[u64 512] } extern fn make -> Value\nunsafe { make drop }"
+    assert_local_aggregate
+    "extern struct Value { data:array[u64 513] } extern fn make -> Value\nunsafe { make drop }"
+    check lexer::SourceStore::new swap bytecode::compile_checked.unwrap helpers::generated_assembly = generated
+    "large affine result retains heap storage" generated.as_str "call heap_alloc" str::contains test::assert_true
+    "large affine result releases heap storage" generated.as_str "call heap_free" str::contains test::assert_true
+}
+
+fn test_aggregate_heap_destinations {
+    "independent aggregate destinations retain heap storage" test::test_start
+    for
+        code in [
+            "enum Chain { Link(Chain) End } Chain::End Chain::Link drop",
+            "struct Value { pub x:i64 } 42 Value = value move { value.x } = callback callback exec print",
+            "struct Value { pub x:i64 } unsafe { 42 Value = value value ptr::into_raw ptr::from_raw[Value] drop }",
+        ].iter
+    do
+        code check lexer::SourceStore::new swap bytecode::compile_checked.unwrap helpers::generated_assembly = generated
+        "independent destination allocates" generated.as_str "call heap_alloc" str::contains test::assert_true
+        "independent destination releases its allocation" generated.as_str "call heap_free" str::contains test::assert_true
     done
-    "} run" source.append
-    source.as_str check lexer::SourceStore::new swap bytecode::compile_checked.unwrap helpers::generated_assembly = generated
-    "aggregate beyond 4096 bytes keeps heap storage" generated.as_str "call heap_alloc" str::contains test::assert_true
 }
 
 fn test_string_literal_pool {
@@ -179,8 +184,9 @@ pub fn run_tests {
     test_structured_aggregate_control_flow
     test_storage_plans
     test_local_aggregate_placement
-    test_local_aggregate_escapes
-    test_local_aggregate_frame_bound
+    test_aggregate_storage_size_limit
+    test_aggregate_call_storage
+    test_aggregate_heap_destinations
     test_rejected_source_stops_before_selection
     test_slice_construction_does_not_allocate
     test_string_literal_pool

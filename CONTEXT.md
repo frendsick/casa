@@ -393,7 +393,8 @@ _Avoid_: Release lint, tag lint
 - Method availability follows receiver capability uniformly: `self` requires ownership, `$self` accepts owned/shared/exclusive access, and `mut$self` accepts owned/exclusive access.
 - `mut$T` is affine and not Copy. When `T: Clone`, `mut$T.clone` calls the **Borrowed value** implementation through a temporary shared reborrow and returns an owned `T`.
 - `ptr::from_ref` safely obtains `ptr` from `$T`. Owned and exclusive values may reborrow, and no separate `from_mut` exists because raw pointers have no mutability.
-- `unsafe` `ptr::into_raw` transfers a heap-indirect owner to its allocation address, and `ptr::from_raw[T]` reconstructs that owner when the caller proves the address is the complete live allocation and has no other owner.
+- Standalone structs and payload enums of at most 4096 bytes use automatic storage across calls, including affine owners. Larger affine bodies retain heap storage. Results use caller-owned destinations. Recursive edges, indirect owned fields, closure captures, and raw-owner escapes retain independent heap storage.
+- `unsafe` `ptr::into_raw` transfers a heap-indirect owner to an independently owned allocation, and `ptr::from_raw[T]` reconstructs that owner when the caller proves the address is the complete live allocation and has no other owner. Automatic aggregates move out of the allocation and release its backing without destroying their fields.
 - `unsafe` `ptr::read[T]` moves ownership out of initialized typed storage and leaves it uninitialized. `ptr::write[T]` moves ownership into uninitialized typed storage. Their caller maintains validity and initialization state.
 - `unsafe` raw storage uses `u64 alloc -> ptr` and `ptr free -> None`. `free` releases bytes only and never replaces typed destruction.
 - `0 alloc` returns `ptr::null`, `ptr::null free` is a no-op, and every positive allocation returns non-null or terminates.

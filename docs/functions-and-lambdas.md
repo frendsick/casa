@@ -226,8 +226,9 @@ the complete aggregate cannot use the remaining argument registers, or if it is
 classified as `MEMORY`, it moves to an aligned native stack argument. A
 memory-class return uses caller-owned hidden return storage and consumes the
 first integer argument register. Every extern struct return becomes an owned
-Casa value. A `Copy` result uses caller-owned automatic storage for both register
-and memory classes, without a temporary heap allocation.
+Casa value. Copy results and affine results of at most 4096 bytes use caller-owned
+automatic storage for both register and memory classes, without a temporary heap
+allocation. Larger affine results use heap storage.
 
 An extern call is always [unsafe](#unsafe-boundaries). The caller must meet the native function's
 contract. An extern function cannot be used as a function value. A safe Casa
