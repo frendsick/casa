@@ -68,6 +68,15 @@ fn fizzbuzz number:i64 {
 
 ---
 
+## Empty braces
+
+Write all empty curly-brace constructs as `{}`, with no space or newline between
+braces. This includes declarations, function bodies, lambdas, match arms, struct
+literals and patterns, and unsafe blocks. Keep this spelling when a function
+signature wraps. A block that contains a comment is not empty.
+
+---
+
 ## Blank lines
 
 - **1 blank line** before top-level definitions (`fn`, `struct`, `enum`,
@@ -331,8 +340,8 @@ fn add a:i64 b:i64 -> i64 { a b + }
 fn noop {}
 ```
 
-Any definition that is not eligible uses a **multiline body**. This rule does
-not apply to lambdas or match-arm blocks.
+Any non-empty definition that is not eligible uses a **multiline body**. This
+rule does not apply to lambdas or match-arm blocks.
 
 ### Wrapped form
 
