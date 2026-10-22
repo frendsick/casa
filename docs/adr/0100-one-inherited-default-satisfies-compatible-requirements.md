@@ -11,7 +11,7 @@ trait Anonymous {
     fn name $self -> str { "unknown" }
 }
 
-trait Entity: Named + Anonymous { }
+trait Entity: Named + Anonymous {}
 ```
 
 `Anonymous.name` is the single effective implementation of both inherited contracts. Explicitly inheriting both traits commits the child trait and the types that implement it to those contracts. The compiler cannot validate additional semantic laws.

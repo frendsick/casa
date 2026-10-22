@@ -3,9 +3,9 @@
 The supertrait graph must be a directed acyclic graph. The compiler rejects direct and indirect cycles:
 
 ```casa
-trait A: B { }
+trait A: B {}
 
-trait B: A { } # error: A -> B -> A
+trait B: A {} # error: A -> B -> A
 ```
 
 Recursive data and recursive derivation obligations remain valid because they describe finite runtime structure or mutually dependent trait implementation checks. A supertrait cycle instead adds no capability while making required-method closure, default precedence, and trait satisfaction circular.

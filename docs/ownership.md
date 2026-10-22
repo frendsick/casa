@@ -61,7 +61,7 @@ struct Person {
     age: i64
 }
 
-fn replace_both left:mut$Person right:mut$Person { }
+fn replace_both left:mut$Person right:mut$Person {}
 
 36 Person = person
 # person person replace_both  # Error: the exclusive arguments alias.

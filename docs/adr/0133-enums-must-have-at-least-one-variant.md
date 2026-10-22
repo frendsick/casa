@@ -3,7 +3,7 @@
 Every enum declaration contains at least one variant:
 
 ```casa
-enum Impossible { } # error
+enum Impossible {} # error
 ```
 
 An empty enum would be an uninhabited type equivalent to the previously rejected `Never` type. Casa does not introduce that control-flow and exhaustiveness behavior indirectly through enum syntax.

@@ -11,7 +11,7 @@ trait Textual {
     fn value $self -> str
 }
 
-trait Both: Numeric + Textual { } # error
+trait Both: Numeric + Textual {} # error
 ```
 
 Casa has no method overloading, so no trait implementation could provide both meanings of `value`. The compiler rejects the composition at `Both` rather than leaving every attempted implementation to fail later.

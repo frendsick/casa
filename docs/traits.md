@@ -127,9 +127,9 @@ The call is valid only when the concrete type implements `Describe`. Use `+`
 when one type parameter requires several traits:
 
 ```casa
-trait Stored { }
+trait Stored {}
 
-impl User: Stored { }
+impl User: Stored {}
 
 fn save_description [T:Describe + Stored] value:T { value.describe print }
 ```
@@ -413,7 +413,7 @@ Widening from `u8` to `u64` is valid. Narrowing from `u64` to `u8`, or forwardin
 a signed type to an unsigned type, is rejected at the generic definition.
 
 ```casa
-fn wide [const N:u64] { }
+fn wide [const N:u64] {}
 
 fn forward [const N:u8] { &wide[N] drop }
 
