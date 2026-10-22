@@ -199,6 +199,26 @@ if matches_filter installed_native "$@"; then
     )
 fi
 
+if matches_filter default_output "$@"; then
+    matched=true
+    compiler_path=$(cd "$(dirname "$COMPILER")" && pwd)/$(basename "$COMPILER")
+    mkdir -p "$CLI_TMP/default_output/dir.v2" "$CLI_TMP/default_output/.hidden/nested"
+    (
+        cd "$CLI_TMP/default_output"
+        for source in one.casa dir.v2/two.casa .hidden/nested/three.casa; do
+            printf 'import "std"\n"ok" std::println\n' >"$source"
+        done
+        for input in ./one.casa ../default_output/one.casa dir.v2/two.casa \
+            .hidden/nested/three.casa "$PWD/one.casa"; do
+            "$compiler_path" -L "$ROOT_DIR/lib" "$input"
+            # The binary replaces the extension and the source stays text.
+            [ "$("${input%.casa}")" = ok ]
+            grep -q '^import "std"$' "$input"
+        done
+        [ ! -e dir ]
+    )
+fi
+
 if matches_filter source_traceability "$@"; then
     matched=true
     python3 tests/test_source_traceability.py "$COMPILER"
