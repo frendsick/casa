@@ -117,6 +117,9 @@ struct TypedValue derives std::Clone {
     origin:              common::Location
     literals:            std::List[LiteralRef]
     place:               std::Option[Place]
+    # A compiler binding path that addresses a view without a place, such as
+    # a field of a call result. Ownership checking does not use it.
+    address_place:       std::Option[Place]
     capability:          ValueCapability
     binding:             std::Option[std::String]
     source:              std::Option[i64]
@@ -198,6 +201,16 @@ impl Place: std::Eq + std::Hashable {
         done
         hash
     }
+}
+
+fn same_optional_place place:$std::Option[Place] other:$std::Option[Place] -> bool {
+    if place std::Option::Some(current) is then
+        if other std::Option::Some(other_place) is then
+            current other_place.eq return
+        fi
+        false return
+    fi
+    other.is_none
 }
 
 enum OriginKind derives std::Eq std::Hashable std::Copy {
@@ -859,13 +872,7 @@ impl TypedValue {
     }
 
     pub fn same_place self:$TypedValue other:$TypedValue -> bool {
-        if self.place std::Option::Some(place) is then
-            if other.place std::Option::Some(other_place) is then
-                place other_place.eq return
-            fi
-            false return
-        fi
-        other.place.is_none
+        other.place self.place same_optional_place
     }
 
     pub fn clear_owner_source self:mut$TypedValue {
@@ -998,6 +1005,10 @@ impl TypedStack {
                 value.clear_owner_source
             elif candidate_value value.same_place ! then
                 std::Option[Place]::None = value.place
+            fi
+            # Branches bind receivers separately. A joined view keeps a shared path only.
+            if candidate_value.address_place value.address_place same_optional_place ! then
+                std::Option[Place]::None = value.address_place
             fi
             value.origins.clone = original_origins
             if original_origins.clone std::Option::Some(original_items) is then
@@ -3491,7 +3502,7 @@ impl TypeChecker {
         std::Option[std::List[Origin]]::None
         std::Option[std::List[Origin]]::None
         std::Option[i64]::None std::Option[std::String]::None
-        type_value type_capability std::Option[Place]::None
+        type_value type_capability std::Option[Place]::None std::Option[Place]::None
         std::List[LiteralRef]::new tc.current_location.clone type_value.clone std::Option[u64]::None TypedValue
         tc
             .stack
@@ -3563,7 +3574,7 @@ impl TypeChecker {
         fi
         std::List[std::String]::new
         std::Set[std::String]::new
-        false loan_spans cleanup_origins origins source binding capability place
+        false loan_spans cleanup_origins origins source binding capability std::Option[Place]::None place
         std::List[LiteralRef]::new tc.current_location.clone stack_type
         std::Option[u64]::None TypedValue
         tc
@@ -3587,7 +3598,7 @@ impl TypeChecker {
         std::Option[std::List[Origin]]::None
         std::Option[std::List[Origin]]::None
         std::Option[i64]::None std::Option[std::String]::None
-        ValueCapability::Owned std::Option[Place]::None literals
+        ValueCapability::Owned std::Option[Place]::None std::Option[Place]::None literals
         tc.current_location.clone type_value.clone std::Option[u64]::None TypedValue
         tc
             .stack
@@ -3896,7 +3907,7 @@ impl TypeChecker {
                 std::Option[std::List[Origin]]::None
                 std::Option[std::List[Origin]]::None
                 std::Option[i64]::None std::Option[std::String]::None
-                parameter_type type_capability std::Option[Place]::None
+                parameter_type type_capability std::Option[Place]::None std::Option[Place]::None
                 std::List[LiteralRef]::new common::empty_location parameter_type tc.parameters.length 1 - std::Option::Some TypedValue return
             fi
             tc.stack_underflow_message tc.report_stack_underflow
@@ -3906,7 +3917,7 @@ impl TypeChecker {
             std::Option[std::List[Origin]]::None
             std::Option[std::List[Origin]]::None
             std::Option[i64]::None std::Option[std::String]::None
-            ValueCapability::Owned std::Option[Place]::None
+            ValueCapability::Owned std::Option[Place]::None std::Option[Place]::None
             std::List[LiteralRef]::new common::empty_location common::make_missing_type.clone std::Option[u64]::None TypedValue return
         fi
         tc
@@ -3957,7 +3968,7 @@ impl TypeChecker {
                 std::Option[std::List[Origin]]::None
                 std::Option[std::List[Origin]]::None
                 std::Option[i64]::None std::Option[std::String]::None
-                ValueCapability::Owned std::Option[Place]::None
+                ValueCapability::Owned std::Option[Place]::None std::Option[Place]::None
                 std::List[LiteralRef]::new common::empty_location inferred std::Option[u64]::None TypedValue return
             fi
         fi
@@ -4276,7 +4287,7 @@ impl TypeChecker {
                 std::Option[std::List[Origin]]::None
                 std::Option[std::List[Origin]]::None
                 std::Option[i64]::None std::Option[std::String]::None
-                resolved type_capability std::Option[Place]::None
+                resolved type_capability std::Option[Place]::None std::Option[Place]::None
                 literals.clone tc.current_location.clone resolved std::Option[u64]::None TypedValue
                 tc
                     .stack
@@ -5034,6 +5045,69 @@ impl TypeChecker {
         fi
     }
 
+    # A getter view without a place, such as a field of a call result, has no
+    # binding that can address the field. Keep a borrowed receiver in a
+    # compiler binding so a scalar borrow of the view does not borrow a
+    # temporary copy. An owned temporary receiver ends with the call, so a
+    # copy of its field is equivalent.
+    fn bind_struct_getter_receiver
+        tc:mut$TypeChecker
+        function_name:$str
+        receiver_capability:$ValueCapability
+        effect:$common::StackEffect
+        op:mut$common::Op
+        emitted_ops:mut$std::List[common::Op]
+        function_opt:mut$std::Option[common::Function]
+    {
+        if
+            receiver_capability ValueCapability::Owned is
+            tc
+                .stack
+                .values
+                .is_empty ||
+            0 effect
+                .parameters
+                .length == ||
+        then
+            return
+        fi
+        0 effect.parameters.get = parameter
+        if parameter.typ function_name tc.find_struct_getter_field std::Option::Some(field) is else
+            return
+        fi
+        tc
+            .stack
+            .values
+            .length 1 - = index
+        index tc
+            .stack
+            .values
+            .get = value
+        if value.place.is_some then
+            return
+        fi
+        # Other views already hold the field address.
+        if
+            value.type_value common::Type::TypeVar(_) is !
+            tc.store value.type_value common::type_has_scalar_storage ! &&
+        then
+            return
+        fi
+        # A duplicable field projects a copy, as in `finish_struct_getter`.
+        if function_opt value.type_value tc.type_is_duplicable then
+            return
+        fi
+        f"$getter_receiver_{op.id}" = name
+        op.call_bindings parameter.typ.substitute_t = binding_type
+        function_opt emitted_ops op 0 binding_type name.as_str tc.bind_temporary
+        field.as_str name.as_str Place::new.project std::Option::Some = projected
+        index tc
+            .stack
+            .values
+            .get_mut = view
+        projected = view.address_place
+    }
+
     pub fn finish_struct_getter
         self:mut$TypeChecker
         field:$std::Option[std::String]
@@ -5176,17 +5250,25 @@ impl TypeChecker {
         fi
     }
 
-    # A field projected from a binding borrows the field storage. A projection
-    # without a binding place, such as one through a call result or a borrowed
-    # alias, still borrows a temporary copy that cannot outlive the frame.
-    # Revisit when generic views must be returned through those receivers.
+    # A field projected from a binding borrows the field storage. A view without
+    # a place borrows through the compiler binding that keeps its receiver.
+    # Other values borrow a temporary copy that cannot outlive the frame. This
+    # includes a view joined from branches with different receivers. Revisit
+    # when such a joined view must be returned or exclusively borrowed.
     fn resolve_scalar_borrow_source
         self:mut$TypeChecker
         value:$TypedValue
     -> common::ScalarInputKind {
-        if value.place std::Option::Some(place) is else
-            common::ScalarInputKind::BorrowValue return
+        if value.place std::Option::Some(place) is then
+            place self.resolve_place_borrow return
         fi
+        if value.address_place std::Option::Some(place) is then
+            place self.resolve_place_borrow return
+        fi
+        common::ScalarInputKind::BorrowValue
+    }
+
+    fn resolve_place_borrow self:mut$TypeChecker place:$Place -> common::ScalarInputKind {
         place.binding.clone place.binding.clone common::BindingReference = binding
         if place.binding.as_str self.scope.resolve_binding_reference std::Option::Some(resolved) is then
             resolved = binding
@@ -5372,24 +5454,8 @@ impl TypeChecker {
                     fi
                 fi
                 f"$borrowed_temporary_{op.id}_{parameter_index}" = name
-                false name.as_str tc.scope.assign
-                owner_type name.as_str tc.scope.set_type drop
-                if function_opt std::Option::Some(function) is then
-                    owner_type.clone name.clone common::Variable function.variables.push
-                else
-                    owner_type.clone name.clone common::Variable = variable
-                    variable name.clone tc
-                        .store
-                        .variables
-                        .set
-                fi
-                false name.as_str tc.ownership.set_owner_moved
-
                 leading_values parameter_index + = depth
-                depth name.clone common::TemporaryBinding = binding
-                op.location.clone binding common::OpValue::BindTemporary common::Op::new = bind_op
-                bind_op tc.assign_op_id
-                false function_opt owner_type name.as_str bind_op tc.record_owner_assignment
+                function_opt emitted_ops op depth owner_type name.as_str tc.bind_temporary
                 stack_index tc
                     .stack
                     .values
@@ -5398,10 +5464,37 @@ impl TypeChecker {
                 name.as_str Place::new std::Option::Some = stored_value.place
                 name std::Option::Some = stored_value.binding
                 std::Option[i64]::None = stored_value.source
-
-                bind_op emitted_ops.push
             fi
         done
+    }
+
+    # Store the stack value at `depth` in a compiler binding before `op` runs.
+    fn bind_temporary
+        self:mut$TypeChecker
+        name:$str
+        typ:$common::Type
+        depth:u64
+        op:$common::Op
+        emitted_ops:mut$std::List[common::Op]
+        function_opt:mut$std::Option[common::Function]
+    {
+        false name self.scope.assign
+        typ name self.scope.set_type drop
+        typ.clone name.to_str common::Variable = variable
+        if function_opt std::Option::Some(function) is then
+            variable function.variables.push
+        else
+            variable name.to_str self
+                .store
+                .variables
+                .set
+        fi
+        false name self.ownership.set_owner_moved
+        depth name.to_str common::TemporaryBinding = binding
+        op.location.clone binding common::OpValue::BindTemporary common::Op::new = bind_op
+        bind_op self.assign_op_id
+        false function_opt typ name bind_op self.record_owner_assignment
+        bind_op emitted_ops.push
     }
 
     pub fn check_temporary_binding
@@ -9782,6 +9875,8 @@ impl TypeChecker {
                 return_summary tc.apply_call_return_summary
                 return_summary.callables tc.stack.set_return_callables
                 call_receiver_capability fn_name.as_str tc.mark_struct_getter_borrow
+                function_opt emitted_ops op effect call_receiver_capability fn_name.as_str
+                tc.bind_struct_getter_receiver
                 if op.type_hint std::Option::Some(explicit_type) is then
                     false = valid_explicit_type
                     if 1 effect.return_types.length == then
@@ -10859,28 +10954,10 @@ impl TypeChecker {
             return
         fi
         f"$if_is_subject_{op.id}" = name
-        false name.as_str self.scope.assign
-        subject.type_value name.as_str self.scope.set_type drop
-        if function_opt std::Option::Some(function) is then
-            subject.type_value.clone name.clone common::Variable function.variables.push
-        else
-            subject.type_value.clone name.clone common::Variable = variable
-            variable name.clone self
-                .store
-                .variables
-                .set
-        fi
-        false name.as_str self.ownership.set_owner_moved
-
-        0 name.clone common::TemporaryBinding = binding
-        op.location.clone binding common::OpValue::BindTemporary common::Op::new = bind_op
-        bind_op self.assign_op_id
-        false function_opt subject.type_value name.as_str bind_op self.record_owner_assignment
+        function_opt emitted_ops op 0 subject.type_value name.as_str self.bind_temporary
         name.as_str Place::new std::Option::Some = subject.place
         name std::Option::Some = subject.binding
         std::Option[i64]::None = subject.source
-
-        bind_op emitted_ops.push
     }
 
     pub fn check_is
@@ -11871,6 +11948,8 @@ impl TypeChecker {
                             method_return_summary tc.apply_call_return_summary
                             method_return_callables tc.stack.set_return_callables
                             receiver_capability fn_name.as_str tc.mark_struct_getter_borrow
+                            function_opt emitted_ops op effect receiver_capability fn_name.as_str
+                            tc.bind_struct_getter_receiver
                             fn_name common::OpValue::FnCall op common::Op::set_value
                             if is_non_returning then
                                 tc.end_path
@@ -13327,9 +13406,7 @@ impl TypeChecker {
                 std::Option[body_builder::Alternative]::None = checked_alternative
                 if alternative std::Option::Some(branch) is then
                     branch match
-                        source_body::SourceAlternative {
-                            origin: origin body: body
-                        } => {
+                        source_body::SourceAlternative { origin: origin body: body } => {
                             # The early-exit branch, which holds the rest of the body, ends here.
                             origin.span.offset = else_offset
                             origin.clone = boundary
@@ -13528,9 +13605,7 @@ impl TypeChecker {
         node match
             source_body::SourceNode::Rejected(rejection) => {
                 rejection match
-                    source_body::SourceRejection {
-                        origin: origin message: message
-                    } => {
+                    source_body::SourceRejection { origin: origin message: message } => {
                         origin message common::ErrorKind::UnmatchedBlock self.diagnostics.record_error_string
                         origin.clone common::OpValue::Rejected common::Op::from_source = operation
                         function emitted pending std::Option[SourceWork]::None operation self.check_work_operation drop
@@ -13543,9 +13618,7 @@ impl TypeChecker {
             source_body::SourceNode::Conditional(conditional) => function emitted pending conditional self.check_source_conditional
             source_body::SourceNode::Loop(loop) => {
                 loop match
-                    source_body::SourceLoop {
-                        origin: origin condition_origin: condition_origin condition: condition body: body end_origin: end_origin
-                    } => {
+                    source_body::SourceLoop { origin: origin condition_origin: condition_origin condition: condition body: body end_origin: end_origin } => {
                         function common::OpValue::WhileStart origin self.check_source_boundary = entry
                         body_builder::Builder::new = checked_condition
                         function checked_condition pending condition self.check_source_sequence
@@ -13561,9 +13634,7 @@ impl TypeChecker {
             source_body::SourceNode::FormatExpr(region) => function emitted pending region self.check_format_expr
             source_body::SourceNode::Unsafe(region) => {
                 region match
-                    source_body::SourceRegion {
-                        origin: origin body: body end_origin: end_origin
-                    } => {
+                    source_body::SourceRegion { origin: origin body: body end_origin: end_origin } => {
                         function common::OpValue::UnsafeStart origin self.check_source_boundary = entry
                         body_builder::Builder::new = checked_body
                         function checked_body pending body self.check_source_sequence
@@ -13574,9 +13645,7 @@ impl TypeChecker {
             }
             source_body::SourceNode::Array(compound) => {
                 compound match
-                    source_body::SourceCompound {
-                        origin: origin body: body
-                    } => {
+                    source_body::SourceCompound { origin: origin body: body } => {
                         origin std::List[common::Op]::new common::OpValue::PushArray common::Op::from_source = operation
                         body_builder::Builder::new = work
                         function work pending body SourceWork::Array std::Option::Some operation self.check_work_operation.unwrap = items
@@ -13586,9 +13655,7 @@ impl TypeChecker {
             }
             source_body::SourceNode::Group(compound) => {
                 compound match
-                    source_body::SourceCompound {
-                        origin: origin body: body
-                    } => {
+                    source_body::SourceCompound { origin: origin body: body } => {
                         origin std::List[common::Op]::new common::OpValue::ExprGroup common::Op::from_source = operation
                         body_builder::Builder::new = work
                         function work pending body SourceWork::Group std::Option::Some operation self.check_work_operation.unwrap = items
