@@ -521,7 +521,8 @@ done
 
 - Put `match` arms on indented lines and align `end` with the matched value.
 - Keep a single operation or expression on the arm line.
-- Expand a block arm with its braces and body on separate lines.
+- Write an empty block arm as `_ => {}`, with no space between the braces.
+- Expand a non-empty block arm with its braces and body on separate lines.
 
 ```casa
 color match
@@ -536,6 +537,7 @@ shape match
         "\n" print
     }
     Shape::Point => "point\n" print
+    _ => {}
 end
 ```
 
