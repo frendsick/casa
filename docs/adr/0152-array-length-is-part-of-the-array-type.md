@@ -18,7 +18,7 @@ parameter cannot carry one. A use site writes the constant directly, as in
 code:
 
 ```casa
-fn length [T const N:u64] self:$array[T N] -> u64 { N }
+fn length[T const N:u64] self:$array[T N] -> u64 { N }
 ```
 
 An index is rejected during typechecking only when both the index and array
@@ -33,7 +33,7 @@ A constant parameter remains symbolic while its generic body is checked under
 ADR-0069. The same index is therefore accepted here because `N` is not concrete:
 
 ```casa
-fn fourth [const N:u64] values:$array[i64 N] -> i64 { 3 values.nth.clone }
+fn fourth[const N:u64] values:$array[i64 N] -> i64 { 3 values.nth.clone }
 
 [1, 2, 3] fourth drop # Specializes N to 3 and terminates at runtime.
 ```
@@ -77,7 +77,7 @@ Each array literal evaluation produces an independent owner under
   sized, `Slice[T]` is borrowed and has a runtime length, and `List[T]` stays
   growable. `List::slice` and `List::as_slice` return `Slice[T]`.
 - A function that accepts arrays of any length takes a constant length
-  parameter, such as `fn total [T const N:u64] values:$array[T N] -> T`. Under
+  parameter, such as `fn total[T const N:u64] values:$array[T N] -> T`. Under
   ADR-0069 each distinct `N` monomorphizes separately.
 - Converting an owned array into a list still transfers its allocation, but the
   list must record the length that the array no longer stores.

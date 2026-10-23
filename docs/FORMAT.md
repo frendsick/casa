@@ -312,13 +312,13 @@ fn add a:i64 b:i64 -> i64 { a b + }
 extern fn strlen text:$cstr -> u64
 ```
 
-Put one space before a function's type-parameter list. Type bounds use a
+Write a function's type-parameter list directly after its name. Type bounds use a
 compact colon:
 
 ```casa
-fn identity [T] value:T -> T { value }
+fn identity[T] value:T -> T { value }
 
-fn duplicate [T:Clone] value:$T -> T { value.clone }
+fn duplicate[T:Clone] value:$T -> T { value.clone }
 ```
 
 ### Inline definitions

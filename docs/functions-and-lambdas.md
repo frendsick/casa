@@ -89,7 +89,7 @@ it.
 A generic function reference must name its concrete arguments:
 
 ```casa
-fn identity [T] value:T -> T { value }
+fn identity[T] value:T -> T { value }
 
 &identity[i64] = integer_identity
 ```

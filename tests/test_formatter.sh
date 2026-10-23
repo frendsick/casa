@@ -333,7 +333,7 @@ check_formatter_case() {
 
 check_formatter_case syntax_only 0 \
     $'import "missing_formatter_module_410"\nconst alias missing_constant\nfn use[T:MissingTrait] value:T { value missing_call }\n' \
-    $'import "missing_formatter_module_410"\n\nconst alias missing_constant\n\nfn use [T:MissingTrait] value:T { value missing_call }\n'
+    $'import "missing_formatter_module_410"\n\nconst alias missing_constant\n\nfn use[T:MissingTrait] value:T { value missing_call }\n'
 for selection in 'import "missing" { Name }' 'import "missing" {}' $'import "missing" as dependency {\n Name\n}'; do
     check_formatter_case retired_import_selection 1 \
         "$selection" "$selection" 'Selective imports are no longer supported'
