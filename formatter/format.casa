@@ -55,10 +55,13 @@ pub struct Formatter {
     pub continuations: std::List[u64]
     # Offsets of `else` markers that open the body of `if condition else body fi`.
     pub early_exits:   std::List[u64]
+    # Match arms whose pattern or guard spans several source lines.
+    pub wrapped_arms:  std::List[syntax::SyntaxSpan]
 }
 
 impl Formatter {
     pub fn new source:$str spans:$std::List[syntax::SyntaxSpan] -> Formatter {
+        std::List[syntax::SyntaxSpan]::new
         std::List[u64]::new
         std::List[u64]::new
         std::List[u64]::new
@@ -744,23 +747,16 @@ impl Formatter {
         start:u64
         stop:u64
     -> u64 {
-        self.depth 4 * u64::try_from.unwrap = length
-        false = has_previous
-        0 = previous: u64
+        # Spacing rules inspect the line's own first tokens, so measure the
+        # range as the line the emitter would write.
+        std::List[common::Token]::new = line
         for index in stop start std::Range::new do
             index tokens.get = token
             if common::TokenKind::Newline token.kind != token is_eof_token ! && then
-                if has_previous then
-                    if index previous tokens tokens_need_space then
-                        1 += length
-                    fi
-                fi
-                self.source token token_text.length += length
-                index = previous
-                true = has_previous
+                token.clone line.push
             fi
         done
-        length
+        line self.measure_line_length
     }
 
     # Join a short one-line control header. Preserve each source line and use a
@@ -937,16 +933,52 @@ impl Formatter {
         header_start
     }
 
+    # Arms of the match forms nested in the arm at `arm_index`, in source order.
+    pub fn nested_match_arms self:$Formatter arm_index:u64 -> std::List[syntax::SyntaxSpan] {
+        arm_index self.spans.get_ref = arm
+        std::List[syntax::SyntaxSpan]::new = nested
+        arm_index 1 + = index
+        while index self.spans.length < do
+            index self.spans.get_ref = span
+            if span.start arm.close > then
+                break
+            fi
+            if syntax::SyntaxSpanKind::MatchArm span.kind == then
+                span.clone nested.push
+            fi
+            1 += index
+        done
+        nested
+    }
+
+    # A wrapped pattern joins later in `join_arm_pattern`, which knows the depth.
     pub fn build_match_arm_rules
         self:mut$Formatter
         tokens:$std::List[common::Token]
+        arm_index:u64
         arm_start:u64
         arm_close:u64
     {
+        arm_index self.nested_match_arms = nested
+        0 = nested_index: u64
+        false = wrapped
         false = saw_arrow
         false = after_newline
         for index in arm_close 1 + arm_start std::Range::new do
             index tokens.get = token
+            token token_offset = offset
+            # Nested arms build their own rules.
+            while nested_index nested.length < do
+                if nested_index nested.get_ref.close offset >= then
+                    break
+                fi
+                1 += nested_index
+            done
+            if nested_index nested.length < then
+                if nested_index nested.get_ref.start offset <= then
+                    continue
+                fi
+            fi
             if common::TokenKind::Newline token.kind == then
                 true = after_newline
             else
@@ -965,7 +997,13 @@ impl Formatter {
                     arm_close tokens.get self.add_break
                     return
                 elif after_newline then
-                    token self.add_join
+                    if saw_arrow then
+                        token self.add_join
+                    elif wrapped ! then
+                        arm_index self.spans.get = arm
+                        arm.clone self.wrapped_arms.push
+                        true = wrapped
+                    fi
                 fi
                 false = after_newline
             fi
@@ -1073,7 +1111,60 @@ impl Formatter {
             arm_start_opt.unwrap = arm_start
             arm_close_opt.unwrap = arm_close
             arm_start tokens.get self.add_break
-            arm_close arm_start tokens self.build_match_arm_rules
+            arm_close arm_start span_index 1 - tokens self.build_match_arm_rules
+        done
+    }
+
+    pub fn wrapped_arm_at self:$Formatter offset:u64 -> std::Option[syntax::SyntaxSpan] {
+        for arm in self.wrapped_arms.iter do
+            if offset arm.start == then
+                arm.clone std::Option::Some return
+            fi
+        done
+        std::Option[syntax::SyntaxSpan]::None
+    }
+
+    # Join a wrapped arm pattern when the arm's first output line fits within
+    # 100 characters at the current depth. A comment keeps the source lines.
+    pub fn join_arm_pattern
+        self:mut$Formatter
+        tokens:$std::List[common::Token]
+        arm:$syntax::SyntaxSpan
+        start_index:u64
+    {
+        arm.close tokens self.token_index_at = close_opt
+        if close_opt.is_none then
+            return
+        fi
+        close_opt.unwrap = close_index
+        start_index = line_close
+        false = has_comment
+        start_index 1 + = index
+        while index close_index 1 + < do
+            index tokens.get = token
+            if common::TokenKind::Newline token.kind != then
+                if token token_offset self.break_before offset_list_has then
+                    break
+                fi
+                if common::TokenKind::Comment token.kind == then
+                    true = has_comment
+                fi
+                index = line_close
+            fi
+            1 += index
+        done
+        if has_comment line_close 1 + start_index tokens self.measure_token_range 100 > || then
+            return
+        fi
+        false = after_newline
+        for index in line_close 1 + start_index 1 + std::Range::new do
+            index tokens.get = token
+            if common::TokenKind::Newline token.kind == then
+                true = after_newline
+            else
+                after_newline token self.join_if_after_newline
+                false = after_newline
+            fi
         done
     }
 
@@ -2133,6 +2224,9 @@ impl Formatter {
             fi
 
             # We have a non-newline, non-Eof token. Collect the full line.
+            if token token_offset self.wrapped_arm_at std::Option::Some(arm) is then
+                pos arm tokens self.join_arm_pattern
+            fi
             while line_tokens.is_empty ! do
                 line_tokens.pop drop
             done

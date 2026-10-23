@@ -529,6 +529,8 @@ done
   patterns retain `field: pattern` spacing.
 
 - Put `match` arms on indented lines and align `end` with the matched value.
+- Join a pattern that spans several source lines when the joined arm line fits
+  within 100 characters. Otherwise keep the source lines of the pattern.
 - Keep a single operation or expression on the arm line.
 - Write an empty block arm as `_ => {}`, with no space between the braces.
 - Expand a non-empty block arm with its braces and body on separate lines.
