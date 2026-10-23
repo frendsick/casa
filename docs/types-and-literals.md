@@ -110,9 +110,12 @@ See [Text and I/O](strings-and-io.md) for string operations and conversions.
 
 ## String interpolation
 
-Prefix a string with `f` and put expressions inside braces:
+Prefix a string with `f` and put expressions inside braces. An f-string builds
+an owned `std::String`, so its file must import `std`:
 
 ```casa
+import "std"
+
 "Ada" = name
 3 = count
 f"{name} has {count} tasks\n" print

@@ -186,6 +186,7 @@ value std::List[T]::from_array
 ```casa
 # Fits within 100 characters: compact.
 [1, 2, 3] sum
+
 # Exceeds 100 characters: expand, trailing comma, aligned `]`, suffix on `]`.
 [
     11111111,
@@ -566,6 +567,7 @@ Prefer f-strings whenever embedding one or more values into a string literal:
 ```casa
 # Preferred
 f"Hello, {name}!" print
+
 # Avoid: str::concat for 3+ strings
 name " is " str::concat age i64::to_str str::concat print
 ```

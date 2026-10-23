@@ -859,8 +859,9 @@ leave the remaining values available to the caller.
 
 `Range` implements `Iterable[u64]`, so it supports the lazy and terminal
 operations below, including `filter`, `map`, `collect`, and `fold`. Direct
-advancement needs no heap allocation. Iterator call overhead remains
-tracked in [#829](https://github.com/frendsick/casa/issues/829).
+advancement needs no heap allocation. A `Range` iteration still costs more
+than an equivalent `while` iteration. See [the loop guidelines](STYLE.md#loops)
+for performance-sensitive loops.
 
 See [examples/fizzbuzz.casa](../examples/fizzbuzz.casa) for a counted loop.
 
