@@ -67,7 +67,7 @@ Without `[i64 i64]`, the compiler reports `Cannot infer constructor type` at
 `Result::Ok`. Supply the missing type arguments there.
 
 Payload enums use the same automatic storage rules as structs. See
-[Structs and Methods](structs-and-methods.md#c-layout-extern-structs).
+[Storage placement](structs-and-methods.md#storage-placement).
 
 ## Process an enum
 

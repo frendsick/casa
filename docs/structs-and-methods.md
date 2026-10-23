@@ -99,6 +99,11 @@ Extern structs keep normal Casa construction, fields, imports, visibility, and
 methods. Their allowed field types and native pointer use are documented under
 [Extern functions](./functions-and-lambdas.md#extern-functions).
 
+Physical compatibility with C does not make ordinary structs eligible for native
+calls or give them a stable ABI.
+
+## Storage placement
+
 Ordinary `struct` declarations keep a compiler-owned layout that can change
 between compiler versions. In a nongeneric ordinary struct, eligible nested
 ordinary and extern structs use inline field storage. Their field graph must
@@ -122,9 +127,7 @@ a body transfers its fields without calling Clone or the cleanup method. Custom
 destruction and field cleanup still run once for each live owner. Larger affine
 bodies use heap storage. Copy values use automatic storage at every size.
 Recursive fields, indirect owned fields, owned closure captures, and raw-owner
-escapes keep independent heap storage.
-Physical compatibility with C does not make ordinary structs eligible for native
-calls or give them a stable ABI. See [the struct example](../examples/struct.casa).
+escapes keep independent heap storage. See [the struct example](../examples/struct.casa).
 
 ## Receiver access and stored borrows
 
