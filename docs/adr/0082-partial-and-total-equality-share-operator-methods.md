@@ -4,8 +4,8 @@ Partial and total equality use the same `eq` and `ne` operator methods. The stan
 
 ```casa
 trait PartialEq {
-    fn eq $self other:$self -> bool
-    fn ne $self other:$self -> bool { other self.eq ! }
+    fn eq self:$self other:$self -> bool
+    fn ne self:$self other:$self -> bool { other self.eq ! }
 }
 
 trait Eq: PartialEq {}

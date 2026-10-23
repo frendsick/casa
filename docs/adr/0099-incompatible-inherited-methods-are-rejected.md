@@ -4,11 +4,11 @@ A trait may not inherit distinct methods with the same name and incompatible sta
 
 ```casa
 trait Numeric {
-    fn value $self -> i64
+    fn value self:$self -> i64
 }
 
 trait Textual {
-    fn value $self -> str
+    fn value self:$self -> str
 }
 
 trait Both: Numeric + Textual {} # error

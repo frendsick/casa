@@ -4,15 +4,15 @@ A receiver type may implement more than one distinct instantiation of the same g
 
 ```casa
 trait Convert[T] {
-    fn convert $self -> T
+    fn convert self:$self -> T
 }
 
 impl Token: Convert[i64] {
-    fn convert $self -> i64 { ... }
+    fn convert self:$Token -> i64 { ... }
 }
 
 impl Token: Convert[str] {
-    fn convert $self -> str { ... }
+    fn convert self:$Token -> str { ... }
 }
 ```
 

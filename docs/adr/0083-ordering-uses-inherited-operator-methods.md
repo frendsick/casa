@@ -6,17 +6,17 @@ PartialOrd owns the four boolean ordering methods used directly by operators and
 
 ```casa
 trait PartialOrd: PartialEq {
-    fn partial_cmp $self other:$self -> Option[Ordering]
-    fn lt $self other:$self -> bool { ... }
-    fn le $self other:$self -> bool { ... }
-    fn gt $self other:$self -> bool { ... }
-    fn ge $self other:$self -> bool { ... }
+    fn partial_cmp self:$self other:$self -> Option[Ordering]
+    fn lt self:$self other:$self -> bool { ... }
+    fn le self:$self other:$self -> bool { ... }
+    fn gt self:$self other:$self -> bool { ... }
+    fn ge self:$self other:$self -> bool { ... }
 }
 
 trait Ord: PartialOrd + Eq {
-    fn cmp $self other:$self -> Ordering
+    fn cmp self:$self other:$self -> Ordering
 
-    fn partial_cmp $self other:$self -> Option[Ordering] {
+    fn partial_cmp self:$self other:$self -> Option[Ordering] {
         other self.cmp Option::Some
     }
 }

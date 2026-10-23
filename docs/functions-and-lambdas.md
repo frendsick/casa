@@ -29,6 +29,8 @@ fn square i64 -> i64 { dup * }
 Omit `->` when a function pushes no result:
 
 ```casa
+import "std"
+
 fn greet name:str { f"Hello, {name}!\n" print }
 ```
 
@@ -185,6 +187,8 @@ extern fn strlen text:$cstr -> u64
 # SAFETY: `text` is a live NUL-terminated string for the duration of `strlen`.
 unsafe { text strlen } print
 ```
+
+Link the C library when you run it: `./casac sample.casa -L lib -l c -r`.
 
 An `extern struct` declaration gives an aggregate the C field layout for this
 ABI:

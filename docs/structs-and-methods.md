@@ -99,6 +99,11 @@ Extern structs keep normal Casa construction, fields, imports, visibility, and
 methods. Their allowed field types and native pointer use are documented under
 [Extern functions](./functions-and-lambdas.md#extern-functions).
 
+Physical compatibility with C does not make ordinary structs eligible for native
+calls or give them a stable ABI.
+
+## Storage placement
+
 Ordinary `struct` declarations keep a compiler-owned layout that can change
 between compiler versions. In a nongeneric ordinary struct, eligible nested
 ordinary and extern structs use inline field storage. Their field graph must
@@ -113,15 +118,16 @@ zero-length array occupies one byte. Borrowed fields remain one pointer.
 
 An inline field belongs to its containing storage. Borrowed access and patterns
 refer to that field directly. Moving an affine field out can allocate a
-standalone owner. Copy values use independent automatic storage, including for
-function results. A directly bound ordinary struct can also use function-local
-storage without implementing Copy when its uses prove that the storage cannot
-escape. This placement preserves custom destruction and field cleanup. Each
-function has a 4 KiB budget for these aggregate bodies. Loop iterations reuse
-their storage after cleanup. Uncertain uses, including ownership transfers,
-raw-pointer operations, captures, and ordinary borrowed calls, retain heap storage.
-Physical compatibility with C does not make ordinary structs eligible for native
-calls or give them a stable ABI. See [the struct example](../examples/struct.casa).
+standalone owner.
+
+Standalone structs and payload enums with bodies of at most 4096 bytes use
+automatic storage, including affine owners. A consuming call transfers the body
+into the callee's storage, and results use storage owned by the caller. Moving
+a body transfers its fields without calling Clone or the cleanup method. Custom
+destruction and field cleanup still run once for each live owner. Larger affine
+bodies use heap storage. Copy values use automatic storage at every size.
+Recursive fields, indirect owned fields, owned closure captures, and raw-owner
+escapes keep independent heap storage. See [the struct example](../examples/struct.casa).
 
 ## Receiver access and stored borrows
 

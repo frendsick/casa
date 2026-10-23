@@ -4,11 +4,11 @@ One inherited default method satisfies every compatible bodyless requirement wit
 
 ```casa
 trait Named {
-    fn name $self -> str
+    fn name self:$self -> str
 }
 
 trait Anonymous {
-    fn name $self -> str { "unknown" }
+    fn name self:$self -> str { "unknown" }
 }
 
 trait Entity: Named + Anonymous {}

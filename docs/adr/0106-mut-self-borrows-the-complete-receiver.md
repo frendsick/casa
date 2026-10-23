@@ -1,10 +1,10 @@
-# `mut$self` borrows the complete receiver
+# `self:mut$T` borrows the complete receiver
 
-A method whose receiver is `mut$self` exclusively borrows the complete receiver, even when its current body mutates only one field:
+A method whose receiver is `self:mut$T` exclusively borrows the complete receiver, even when its current body mutates only one field:
 
 ```casa
 pair.left = left_view
-pair.clear_right # error: clear_right takes mut$self
+pair.clear_right # error: clear_right takes self:mut$Pair
 left_view.length
 ```
 

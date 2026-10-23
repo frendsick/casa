@@ -17,7 +17,7 @@ status: amended by [ADR-0160](0160-os-byte-round-trips-use-bytes-and-cstr.md)
 - Every initialized element is a valid `u8`. Unlike `str`, `Bytes` imposes no UTF-8 or interior-NUL invariant.
 - Indexed reads copy `u8`. Any mutable indexed access must remain bounded and require an exclusive borrow.
 - Moving `Bytes` transfers its buffer handle. Deterministic destruction frees dynamic storage exactly once.
-- `Bytes.to_str $self -> Result[String Utf8Error]` validates and copies without consuming the source.
+- `Bytes.to_str self:$Bytes -> Result[String Utf8Error]` validates and copies without consuming the source.
 - A consuming `into_str` conversion remains deferred until measured copying justifies its failure-ownership and representation complexity.
 - Conversion to `$cstr` is not implicit: arbitrary bytes may lack a trailing NUL or contain interior NUL.
 - Allocation failure follows Casa's process-termination policy.

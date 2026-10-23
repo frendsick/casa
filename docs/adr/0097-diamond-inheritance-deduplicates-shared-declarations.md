@@ -4,7 +4,7 @@ When one trait declaration is inherited through multiple paths, it remains one d
 
 ```casa
 trait Base {
-    fn show $self -> str { ... }
+    fn show self:$self -> str { ... }
 }
 
 trait Left: Base {}

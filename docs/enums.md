@@ -66,10 +66,8 @@ fn read value:Option[Result[i64 i64]] { value drop }
 Without `[i64 i64]`, the compiler reports `Cannot infer constructor type` at
 `Result::Ok`. Supply the missing type arguments there.
 
-A directly bound payload enum can use function-local storage without implementing
-Copy when its uses prove that the storage cannot escape. Tag tests and local
-destruction qualify. Payload bindings and uncertain uses retain heap storage.
-Structs and enums share the [function-local storage budget](structs-and-methods.md).
+Payload enums use the same automatic storage rules as structs. See
+[Storage placement](structs-and-methods.md#storage-placement).
 
 ## Process an enum
 
@@ -95,8 +93,7 @@ bindings after a failed check leaves the scope.
 
 Enums can derive comparison traits. Variant order follows declaration order,
 and variants with the same tag compare their payloads from left to right.
-Printing an enum writes its zero-based variant number. Using the enum name as a
-value produces its number of variants:
+Using the enum name as a value produces its number of variants:
 
 ```casa
 import "std"
@@ -108,12 +105,12 @@ enum Color derives std::Ord {
 }
 
 Color::Red Color::Blue < print # true, because Red precedes Blue
-Color::Blue print # 2
 Color print # 3
 ```
 
 Use `derives Eq`, `derives Ord`, or `derives Hashable` to opt in. Plain enums
-have no implicit comparison or hashing implementation. See the
+have no implicit comparison or hashing implementation. An enum value can be
+printed only when its type implements `Display`. See the
 [derivation rules](traits.md#derive-standard-traits).
 
 Enums can derive `Copy` when every owned payload field is Copy and all stored

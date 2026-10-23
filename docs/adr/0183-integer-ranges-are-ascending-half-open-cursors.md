@@ -24,6 +24,8 @@ can pass their bounds and use yielded indices without numeric conversions.
 Signed ranges, other widths, inclusive stops, descending traversal, and
 arbitrary steps remain deferred until a concrete program needs them.
 
-This addition does not justify replacing hot counted loops. Iterator overhead
-is tracked separately in [#829](https://github.com/frendsick/casa/issues/829).
-The FizzBuzz example demonstrates the API without a compiler-wide migration.
+A `Range` iteration still costs more than an equivalent `while` iteration.
+Fixed-bound counted loops in the compiler, language server, formatter, and
+`argparse` use `Range`. Standard library primitives and loops that visit each
+byte of program input keep `while`, as recorded in the
+[style guide](../STYLE.md#loops).

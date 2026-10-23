@@ -9,7 +9,7 @@ operation or binding that uses them.
 |---|---|
 | `bool` | `true` or `false` |
 | `char` | One Unicode scalar value |
-| [$cstr](strings-and-io.md#c-strings-and-mutable-buffers) | A borrowed NUL-terminated foreign byte string |
+| [$cstr](strings-and-io.md#c-strings) | A borrowed NUL-terminated foreign byte string |
 | `f32`, `f64` | Floating-point numbers |
 | `i8`, `i16`, `i32`, `i64` | Signed integers |
 | [str](strings-and-io.md#text-views) | An immutable UTF-8 text view |
@@ -110,9 +110,12 @@ See [Text and I/O](strings-and-io.md) for string operations and conversions.
 
 ## String interpolation
 
-Prefix a string with `f` and put expressions inside braces:
+Prefix a string with `f` and put expressions inside braces. An f-string builds
+an owned `std::String`, so its file must import `std`:
 
 ```casa
+import "std"
+
 "Ada" = name
 3 = count
 f"{name} has {count} tasks\n" print

@@ -14,7 +14,7 @@ An owned parameter still receives its value by move, so mutating that local owne
 
 ## Consequences
 
-- Methods requiring `mut$self` may auto-borrow an available owned receiver according to the callee-directed borrowing rules.
+- Methods with a `self:mut$T` receiver may auto-borrow an available owned receiver according to the callee-directed borrowing rules.
 - An owned field may be mutated through its available owner. Active whole-value or overlapping field borrows prevent the mutation.
 - Closure mutation of a captured binding requires the inferred exclusive capture already defined by the ownership model.
 - A moved binding is unavailable until control flow proves it has been reinitialized. General mutability does not permit use after move.

@@ -1,15 +1,25 @@
 # Field assignment replaces arrow setter syntax
 
-The `->` setter syntax (`value instance->field`) is removed in favour of extending the existing assignment operators (`=`, `+=`, `-=`) to accept variable-rooted dot-chain lvalues (`= a.field`, `= a.b.c`, `1 += self.depth`). The motivation is twofold: a single assignment operator works uniformly for both local variables and struct fields, and compound assignment (`+=`, `-=`) extends naturally to fields without introducing a separate operator family.
+Casa has no `->` setter syntax (`value instance->field`). The assignment
+operators `=`, `+=`, and `-=` accept variable-rooted dot-chain targets such as
+`= a.field`, `= a.b.c`, and `1 += self.depth`. One assignment form works for
+both local variables and struct fields, and compound assignment extends to
+fields without a separate operator family.
 
-**Considered Options**
+## Considered options
 
-- Keep `->` alongside `=`-on-paths as an alias: rejected because two syntactically equivalent ways to set a field permanently split the codebase style and double the language surface area.
-- Add compound-assignment-only operators (`+->`, `->+=`) without touching `=`: rejected because it introduces yet another operator family instead of generalising the one that already exists.
+- Keeping `->` as an alias for `=` on paths gives two equivalent ways to set a
+  field. It splits code style permanently and doubles the language surface.
+- Adding compound-assignment-only operators such as `+->` or `->+=` without
+  changing `=` adds another operator family instead of generalizing the
+  existing one.
 
-**Consequences**
+## Consequences
 
-- `=`, `+=`, `-=` accept a variable-rooted dot-chain lvalue as their target: `identifier(.field)*`. The root must be a named variable. Arbitrary expression receivers are not lvalues.
-- `+=` and `-=` on field paths remain `int`-only, consistent with their behaviour on local variables.
-- `->` is removed from the delimiter handler entirely. Its use in type annotations (`fn[int -> str]`) is unaffected because that token is parsed in a separate code path.
-- All existing call sites using `->` must be migrated to `= receiver.field`.
+- `=`, `+=`, and `-=` accept a variable-rooted dot-chain target:
+  `identifier(.field)*`. The root must be a named variable. Arbitrary expression
+  receivers are not assignment targets.
+- `+=` and `-=` on field paths accept only integers, as they do on local
+  variables.
+- `->` appears only in signatures and function types such as `fn[i64 -> str]`.
+  Assignment parsing does not use it.

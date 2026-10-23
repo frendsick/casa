@@ -6,7 +6,7 @@ Equality, ordering, hashing, and display applied to `$T` or a shared reborrow of
 fn same left:$Point right:$Point -> bool { left right == }
 ```
 
-The comparison above invokes `Point`'s equality operator methods exactly as comparison of two owned `Point` values does through automatic borrowing. This follows the ordinary `$self` receiver-capability rule in ADR-0120. Equality, ordering, hashing, and display receive no separate borrow-specific method handling.
+The comparison above invokes `Point`'s equality operator methods exactly as comparison of two owned `Point` values does through automatic borrowing. This follows the ordinary `self:$T` receiver-capability rule in ADR-0120. Equality, ordering, hashing, and display receive no separate borrow-specific method handling.
 
 ## Consequences
 

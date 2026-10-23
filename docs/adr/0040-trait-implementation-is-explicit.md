@@ -4,8 +4,8 @@ A type implements a user-defined trait only through an explicit trait list on an
 
 ```casa
 impl Item: Eq + Display {
-    fn eq $self other:$self -> bool { ... }
-    fn to_str $self -> String { ... }
+    fn eq self:$Item other:$Item -> bool { ... }
+    fn to_str self:$Item -> String { ... }
 }
 ```
 

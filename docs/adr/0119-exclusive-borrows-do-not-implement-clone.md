@@ -19,6 +19,6 @@ The call weakens `exclusive` to a temporary shared reborrow. The exclusive borro
 ## Consequences
 
 - Standard `Copy: Clone` does not apply to `mut$T` because exclusive borrows are not Copy.
-- Method lookup may reach any applicable `$self` method on `T`, including Clone, under the ordinary receiver-capability rule.
+- Method lookup may reach any applicable `self:$T` method on `T`, including Clone, under the ordinary receiver-capability rule.
 - Aggregates containing an exclusive borrow cannot derive Clone.
 - Moving an exclusive borrow transfers the one capability and leaves the source unavailable.

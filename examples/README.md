@@ -11,34 +11,37 @@ The examples are ordered from introductory programs to low-level system code.
 | Order | Program | Purpose |
 |---:|---|---|
 | 1 | [hello_world.casa](hello_world.casa) | The smallest complete Casa program |
-| 2 | [fibonacci.casa](fibonacci.casa) | Functions, recursion, and early return |
-| 3 | [fizzbuzz.casa](fizzbuzz.casa) | An integer range, a counted loop, and conditional branches |
-| 4 | [euler01.casa](euler01.casa) | A typed constant expression and an arithmetic algorithm |
-| 5 | [struct.casa](struct.casa) | A struct literal, method, field update, and destructuring |
-| 6 | [destruction.casa](destruction.casa) | Deterministic cleanup in reverse acquisition order |
-| 7 | [enum.casa](enum.casa) | Payload variants, recursive ownership, exhaustive matching, guards, and early exits |
-| 8 | [generics.casa](generics.casa) | Trait-bound calls and borrowed payloads stored through generic functions |
-| 9 | [for_loop.casa](for_loop.casa) | A custom iterator used by a `for` loop |
-| 10 | [iterator_combinators.casa](iterator_combinators.casa) | A lazy filter and map pipeline with terminal operations |
-| 11 | [hash_map.casa](hash_map.casa) | Counting values with `Map` |
-| 12 | [sorting.casa](sorting.casa) | List sorting with default and custom order |
-| 13 | [propagate_result.casa](propagate_result.casa) | Structural `?` propagation for `Result` and a custom enum |
-| 14 | [argparse.casa](argparse.casa) | A command-line interface with options and help |
-| 15 | [parser.casa](parser.casa) | A complete parser built from `Cursor` operations |
-| 16 | [json.casa](json.casa) | JSON conversion traits for a struct and an enum |
-| 17 | [os_interaction.casa](os_interaction.casa) | Files, directories, paths, environment, and processes |
-| 18 | [log.casa](log.casa) | Logging with explicit root-owned level state |
-| 19 | [timer.casa](timer.casa) | A root-owned monotonic timer |
-| 20 | [freestanding_primitives.casa](freestanding_primitives.casa) | Primitive operations without the standard library |
-| 21 | [sized_memory.casa](sized_memory.casa) | [unsafe](../docs/functions-and-lambdas.md#unsafe-boundaries) allocation and sized memory access |
-| 22 | [unicode.casa](unicode.casa) | Direct Unicode, Unicode escapes, and code-point conversion |
-| 23 | [owned_string.casa](owned_string.casa) | Owned string growth, borrowing, and cloning |
-| 24 | [shared_value.casa](shared_value.casa) | One immutable value shared by several owners |
-| 25 | [bytes.casa](bytes.casa) | Compact binary storage, iteration, and validated text conversion |
-| 26 | [game_of_life.casa](game_of_life.casa) | Resizable raylib graphics and toroidal Conway simulation |
-| 27 | [root_owned_state.casa](root_owned_state.casa) | Root-owned runtime state, explicit parameters, and cleanup |
-| 28 | [foreign_function.casa](foreign_function.casa) | C ABI scalars, an aggregate return, and native library linking |
-| 29 | [hexadecimal.casa](hexadecimal.casa) | Hexadecimal integer literals, contextual widths, and an alignment mask |
+| 2 | [typeof.casa](typeof.casa) | Compile-time type names with `typeof` |
+| 3 | [fibonacci.casa](fibonacci.casa) | Functions, recursion, and early return |
+| 4 | [fizzbuzz.casa](fizzbuzz.casa) | An integer range, a counted loop, and conditional branches |
+| 5 | [euler01.casa](euler01.casa) | A typed constant expression and an arithmetic algorithm |
+| 6 | [struct.casa](struct.casa) | A struct literal, method, field update, and destructuring |
+| 7 | [destruction.casa](destruction.casa) | Deterministic cleanup in reverse acquisition order |
+| 8 | [copy_clone.casa](copy_clone.casa) | Implicit Copy, explicit Clone, and derived traits |
+| 9 | [enum.casa](enum.casa) | Payload variants, recursive ownership, exhaustive matching, guards, and early exits |
+| 10 | [generics.casa](generics.casa) | Trait-bound calls and borrowed payloads stored through generic functions |
+| 11 | [for_loop.casa](for_loop.casa) | A custom iterator used by a `for` loop |
+| 12 | [iterator_combinators.casa](iterator_combinators.casa) | A lazy filter and map pipeline with terminal operations |
+| 13 | [list_iteration.casa](list_iteration.casa) | Shared, mutable, and consuming list iteration |
+| 14 | [hash_map.casa](hash_map.casa) | Counting values with `Map` |
+| 15 | [sorting.casa](sorting.casa) | List sorting with default and custom order |
+| 16 | [propagate_result.casa](propagate_result.casa) | Structural `?` propagation for `Result` and a custom enum |
+| 17 | [argparse.casa](argparse.casa) | A command-line interface with options and help |
+| 18 | [parser.casa](parser.casa) | A complete parser built from `Cursor` operations |
+| 19 | [json.casa](json.casa) | JSON conversion traits for a struct and an enum |
+| 20 | [os_interaction.casa](os_interaction.casa) | Files, directories, paths, environment, and processes |
+| 21 | [log.casa](log.casa) | Logging with explicit root-owned level state |
+| 22 | [timer.casa](timer.casa) | A root-owned monotonic timer |
+| 23 | [freestanding_primitives.casa](freestanding_primitives.casa) | Primitive operations without the standard library |
+| 24 | [sized_memory.casa](sized_memory.casa) | [unsafe](../docs/functions-and-lambdas.md#unsafe-boundaries) allocation and sized memory access |
+| 25 | [unicode.casa](unicode.casa) | Direct Unicode, Unicode escapes, and code-point conversion |
+| 26 | [owned_string.casa](owned_string.casa) | Owned string growth, borrowing, and cloning |
+| 27 | [shared_value.casa](shared_value.casa) | One immutable value shared by several owners |
+| 28 | [bytes.casa](bytes.casa) | Compact binary storage, iteration, and validated text conversion |
+| 29 | [game_of_life.casa](game_of_life.casa) | Resizable raylib graphics and toroidal Conway simulation |
+| 30 | [root_owned_state.casa](root_owned_state.casa) | Root-owned runtime state, explicit parameters, and cleanup |
+| 31 | [foreign_function.casa](foreign_function.casa) | C ABI scalars, an aggregate return, and native library linking |
+| 32 | [hexadecimal.casa](hexadecimal.casa) | Hexadecimal integer literals, contextual widths, and an alignment mask |
 
 The [borrow lookup example](borrow_lookup.casa) reuses map and JSON lookup keys
 while the returned values remain borrowed from their collections.

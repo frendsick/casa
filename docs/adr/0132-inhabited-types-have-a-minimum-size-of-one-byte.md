@@ -16,5 +16,5 @@ Casa does not implement zero-sized runtime values. The one-byte representation c
 - Generic allocation uses `capacity size_of[T] *` uniformly for every inhabited `T`.
 - Consecutive empty-struct elements have distinct addresses.
 - `ptr::read[T]`, `ptr::write[T]`, iteration, and destruction need no null-storage exception for a present value.
-- Ordinary empty structs are non-Copy under ADR-0158 because their runtime representation is owned indirection. Empty extern structs remain Copy-eligible.
+- An empty struct can derive Copy under ADR-0158. Extern structs must contain at least one field under ADR-0067.
 - The small storage cost for collections of empty markers is accepted instead of adding zero-sized-type branches throughout compiler and library code.
