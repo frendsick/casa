@@ -166,8 +166,6 @@ return no result until it analyzes again.
   root can prevent rename even when some references remain queryable.
 - An open document whose imports report diagnostics gets no import reuse. Each
   edit then analyzes all of its imports again.
-- An import that resolves to a file without text, such as a missing path-style
-  import, makes each local query analyze the document again.
 - Workspace requests reanalyze roots on each request. Large workspaces can be slow.
   Exclude generated files and intentionally invalid fixtures with `excludePaths`.
 
