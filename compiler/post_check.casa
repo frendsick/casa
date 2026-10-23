@@ -58,7 +58,13 @@ fn check_trait_impls
             fi
         done
         if valid ! then
-            trait_impl.location f"Trait implementation `{trait_impl.receiver.format}: {trait_type.format}` does not satisfy the trait requirements" common::ErrorKind::TraitSignatureMismatch diagnostics.record_error_string
+            trait_impl
+                .location
+                .file
+                .as_str = file
+            file trait_impl.receiver store.format_type_for_source = receiver_name
+            file trait_type store.format_type_for_source = trait_name
+            trait_impl.location f"Trait implementation `{receiver_name}: {trait_name}` does not satisfy the trait requirements" common::ErrorKind::TraitSignatureMismatch diagnostics.record_error_string
         fi
     done
 }
@@ -81,6 +87,22 @@ pub fn generic_binding_key bindings:$std::Map[std::String common::Type] -> std::
             .get
             .unwrap
             .format = value
+        f"{name.length}:{name}={value.length}:{value};" key.append_string
+    done
+    key
+}
+
+# `generic_binding_key` with source spellings, for diagnostics.
+fn format_generic_binding_key
+    bindings:$std::Map[std::String common::Type]
+    store:$common::SymbolStore
+    file:$str
+-> std::String {
+    bindings.keys = names
+    &does_binding_name_precede names.sort_by
+    std::String::new = key
+    for name in names.iter do
+        file name bindings.get.unwrap store.format_type_for_source = value
         f"{name.length}:{name}={value.length}:{value};" key.append_string
     done
     key
@@ -117,7 +139,8 @@ fn resolve_specialized_trait_callable
         = semantics_opt
     fi
     if semantics_opt.is_none then
-        origin f"No implementation of trait method `{call.method_name}` exists for `{call.receiver.format}`"
+        origin.file.as_str call.receiver store.format_type_for_source = receiver_name
+        origin f"No implementation of trait method `{call.method_name}` exists for `{receiver_name}`"
         common::ErrorKind::MissingTraitMethod diagnostics.record_error_string
         std::Option[semantic_body::Callable]::None return
     fi
@@ -223,13 +246,15 @@ impl SemanticSpecializer {
             }
         end
         if bindings.is_empty then
-            origin f"Cannot monomorphize `{name}` without concrete type arguments"
+            origin.file.as_str name self.store.format_name_for_source = source_name
+            origin f"Cannot monomorphize `{source_name}` without concrete type arguments"
             common::ErrorKind::TypeMismatch self.diagnostics.record_error_string
             name.to_str return
         fi
         for pair in bindings.iter do
             if pair.second.has_unresolved_type_var then
-                origin f"Cannot monomorphize `{name}` with unresolved type arguments"
+                origin.file.as_str name self.store.format_name_for_source = source_name
+                origin f"Cannot monomorphize `{source_name}` with unresolved type arguments"
                 common::ErrorKind::TypeMismatch self.diagnostics.record_error_string
                 name.to_str return
             fi
@@ -642,21 +667,27 @@ fn report_recipe_cycle
     closing:u64
     change:$str
     diagnostics:mut$error::Diagnostics
+    store:$common::SymbolStore
 {
-    std::List[std::String]::new = names
-    for offset in path.length 0 std::Range::new do
-        closing 1 + offset + path.length % path
-            .get
-            .source
-            .clone names.push
-    done
     closing path.get = step
     step
+        .origin
+        .file
+        .as_str = file
+    std::List[std::String]::new = names
+    for offset in path.length 0 std::Range::new do
+        file closing 1 + offset + path.length % path
+            .get
+            .source
+            .as_str store.format_name_for_source names.push
+    done
+    file step
         .call
         .name
-        .clone names.push
+        .as_str store.format_name_for_source = call_name
+    call_name.clone names.push
     " -> " names.join_strings = cycle
-    step.origin f"Polymorphic recursion changes the type arguments of `{step.call.name}`: {change} (cycle: {cycle})"
+    step.origin f"Polymorphic recursion changes the type arguments of `{call_name}`: {change} (cycle: {cycle})"
     common::ErrorKind::TypeMismatch diagnostics.record_error_string
 }
 
@@ -666,6 +697,7 @@ fn report_recipe_cycle_path
     path:$std::List[RecipeCycleStep]
     checks:$semantics::SemanticChecks
     diagnostics:mut$error::Diagnostics
+    store:$common::SymbolStore
 -> bool {
     0 path
         .get
@@ -677,19 +709,27 @@ fn report_recipe_cycle_path
     for step in path.iter do
         bindings step.call compose_recipe_bindings = composed
         if symbols composed are_recipe_bindings_injective ! then
-            step.call.substitutions generic_binding_key = key
+            step
+                .origin
+                .file
+                .as_str store step.call.substitutions format_generic_binding_key = key
             f"recursive binding `{key}` does not forward distinct symbolic parameters" = change
-            diagnostics change.as_str index path report_recipe_cycle
+            store diagnostics change.as_str index path report_recipe_cycle
             true return
         fi
         composed = bindings
         1 += index
     done
     if symbols bindings do_recipe_bindings_match ! then
-        symbols generic_binding_key = previous
-        bindings generic_binding_key = key
+        path.length 1 - path
+            .get
+            .origin
+            .file
+            .as_str = file
+        file store symbols format_generic_binding_key = previous
+        file store bindings format_generic_binding_key = key
         f"`{previous}` becomes `{key}`" = change
-        diagnostics change.as_str path.length 1 - path report_recipe_cycle
+        store diagnostics change.as_str path.length 1 - path report_recipe_cycle
         true return
     fi
     false
@@ -731,6 +771,7 @@ impl RecipeCycleValidator {
         graph:$RecipeCycleGraph
         checks:$semantics::SemanticChecks
         diagnostics:mut$error::Diagnostics
+        store:$common::SymbolStore
     {
         false = self.valid
         std::Set[std::String]::new = visited
@@ -741,14 +782,14 @@ impl RecipeCycleValidator {
         source self.path_to = incoming
         origin.clone call.clone source.to_str RecipeCycleStep incoming.push
         returning.clone incoming.append
-        if diagnostics checks incoming report_recipe_cycle_path then
+        if store diagnostics checks incoming report_recipe_cycle_path then
             return
         fi
         # The incoming walk preserves the root. The stored path must then differ
         # around the same return path, since both maps are injective renamings.
         call.name.as_str self.path_to = previous
         returning previous.append
-        if diagnostics checks previous report_recipe_cycle_path ! then
+        if store diagnostics checks previous report_recipe_cycle_path ! then
             "Conflicting recipe bindings must change a cycle" panic
         fi
     }
@@ -760,6 +801,7 @@ impl RecipeCycleValidator {
         graph:$RecipeCycleGraph
         checks:$semantics::SemanticChecks
         diagnostics:mut$error::Diagnostics
+        store:$common::SymbolStore
     {
         bindings.clone name.to_str self.bindings.set
         name checks.find_body.unwrap = body
@@ -780,16 +822,16 @@ impl RecipeCycleValidator {
             bindings call compose_recipe_bindings = composed
             if call.name self.bindings.get std::Option::Some(previous) is then
                 if previous composed do_recipe_bindings_match ! then
-                    diagnostics checks graph origin call name self.report_conflict
+                    store diagnostics checks graph origin call name self.report_conflict
                 fi
                 return
             fi
             if self.symbols composed are_recipe_bindings_injective ! then
-                diagnostics checks graph origin call name self.report_conflict
+                store diagnostics checks graph origin call name self.report_conflict
                 return
             fi
             origin.clone call.clone name.to_str RecipeCycleStep call.name.clone self.parents.set
-            diagnostics checks graph composed call.name.as_str self.validate
+            store diagnostics checks graph composed call.name.as_str self.validate
         } = visitor
         visitor body.visit_calls
     }
@@ -846,7 +888,7 @@ pub fn validate_checked_declarations
             component: root.first copy u64::try_from.unwrap
             valid: true
         } = validator
-        diagnostics checks graph bindings name.as_str validator.validate
+        store diagnostics checks graph bindings name.as_str validator.validate
     done
 }
 

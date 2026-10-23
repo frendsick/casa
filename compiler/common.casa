@@ -3112,6 +3112,81 @@ struct ModuleSourceName derives std::Clone {
     alias:  std::String
 }
 
+impl FileSourceNames {
+    # Store keys spell type arguments inline, as in `__casa_0__Box[__casa_1__Item]::get`.
+    # Each qualified path takes this file's spelling. A path without one keeps its key:
+    # a type reached through a module this file does not import has no spelling here.
+    # Revisit if diagnostics should name such types by their declaring module.
+    # An `@unbound` path was written as an internal key, so it stays as written.
+    fn format_key self:$FileSourceNames key:$str -> std::String {
+        std::String::new = builder
+        0 = start: u64
+        0 = index: u64
+        while index key.length <= do
+            if index key.length < then
+                index key.at.unwrap = character
+                character.is_alpha character.is_digit || '_' character == || = in_path
+                if ':' character == then
+                    if index 1 + key.at std::Option::Some(next) is then
+                        ':' next == = in_path
+                    fi
+                    if 0 index < then
+                        ':' index 1 - key.at.unwrap == in_path || = in_path
+                    fi
+                fi
+                if in_path then
+                    1 += index
+                    continue
+                fi
+            fi
+            if start index < then
+                key start index start - str::substring = path
+                false = unbound
+                if index key.length < then
+                    if '@' index key.at.unwrap == then
+                        key index key.length index - str::substring.as_str "@unbound" str::starts_with = unbound
+                    fi
+                fi
+                if unbound then
+                    path builder.append_string
+                    8 += index
+                    index = start
+                    continue
+                fi
+                path.as_str self.format_path builder.append_string
+            fi
+            if index key.length < then
+                key index 1 str::substring builder.append_string
+            fi
+            index 1 + = index
+            index = start
+        done
+        builder
+    }
+
+    fn format_path self:$FileSourceNames path:$str -> std::String {
+        if path self.names.get_str std::Option::Some(source) is then
+            source.clone return
+        fi
+        path "::" str::find = separator
+        if 0 separator < then
+            separator u64::try_from.unwrap = head_length
+            path 0 head_length str::substring = head
+            if head.as_str self.names.get_str std::Option::Some(source) is then
+                path head_length path.length head_length - str::substring = rest
+                f"{source}{rest}" return
+            fi
+        fi
+        for module in self.modules.iter do
+            if path module.prefix.as_str str::starts_with then
+                path module.prefix.length path.length module.prefix.length - str::substring = suffix
+                f"{module.alias}::{suffix}" return
+            fi
+        done
+        path.to_str
+    }
+}
+
 fn append_trait_impl_index
     index:mut$std::Map[std::String std::List[std::String]]
     index_key:$str
@@ -3169,6 +3244,7 @@ impl TraitImplCandidates: std::Iterable[$TraitImpl] {
 impl SymbolStore {
     # Keep the existing store type for shared layout queries. Move required
     # records into fresh maps so unused entries and their bucket storage die here.
+    # Source names stay for target diagnostics.
     # A separate backend store becomes useful if its declaration shapes diverge.
     pub fn into_backend_store
         self:SymbolStore
@@ -3176,9 +3252,10 @@ impl SymbolStore {
         aggregates:$std::Set[std::String]
     -> SymbolStore {
         self match
-            SymbolStore { functions: functions generated_recipes: recipes variables: variables structs: structs enums: enums } => {
+            SymbolStore { functions: functions generated_recipes: recipes variables: variables structs: structs enums: enums source_names: source_names } => {
                 SymbolStore::empty = store
                 variables = store.variables
+                source_names = store.source_names
                 for name in reachable.iter do
                     if name.as_str functions.remove_str std::Option::Some(function) is then
                         function name.clone store.functions.set
@@ -3318,18 +3395,29 @@ impl SymbolStore {
             name 8 name.length 8 - str::substring = method_name
             file method_name.as_str self.format_name_for_source return
         fi
-        if file self.source_names.get_str std::Option::Some(recorded) is then
-            if name recorded.names.get_str std::Option::Some(source) is then
-                source.clone return
-            fi
-            for module in recorded.modules.iter do
-                if name module.prefix.as_str str::starts_with then
-                    name module.prefix.length name.length module.prefix.length - str::substring = suffix
-                    f"{module.alias}::{suffix}" return
-                fi
-            done
-        fi
-        name.to_str
+        file self.source_names.get_str match
+            std::Option::Some(recorded) => name recorded.format_key
+            std::Option::None => name.to_str
+        end
+    }
+
+    # Source spelling of `stack_effect_to_str`.
+    pub fn format_stack_effect_for_source
+        self:$SymbolStore
+        effect:$StackEffect
+        file:$str
+    -> std::String {
+        std::List[std::String]::new = parameters
+        for parameter in effect.parameters.iter do
+            file parameter.typ self.format_type_for_source parameters.push
+        done
+        std::List[std::String]::new = return_types
+        for return_type in effect.return_types.iter do
+            file return_type self.format_type_for_source return_types.push
+        done
+        if parameters.is_empty then "None".to_str else " " parameters.join_strings fi = parameter_text
+        if return_types.is_empty then "None".to_str else " " return_types.join_strings fi = return_text
+        f"{parameter_text} -> {return_text}"
     }
 
     pub fn format_type_for_source self:$SymbolStore typ:$Type file:$str -> std::String {

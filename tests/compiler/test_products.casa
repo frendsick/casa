@@ -1,4 +1,5 @@
 import "std" as std
+import "../../compiler/lexer.casa" as lexer
 import "../../compiler/products.casa" as products
 import "../../compiler/build.casa" as build
 import "../../compiler/document.casa" as document
@@ -147,6 +148,68 @@ fn test_internal_module_names_are_not_source_bindings {
             products::AssemblyResult::Produced(unexpected_report unexpected_source) => "internal identity access must fail" false test::assert_true
         end
     done
+}
+pub const ALIASED_SHAPES_SOURCE "pub struct Point { pub x: i64 }\npub struct Hidden { secret: i64 }\npub enum Color { Red Green }\npub unsafe fn danger -> i64 { 1 }\npub struct Holder[T] { pub value: T }\nimpl Holder[Point] { fn secret self:$Holder[Point] -> i64 { 1 } }"
+
+# Diagnostics name aliased-import types as the root file spells them.
+fn assert_source_type_names root:$str expected:$str {
+    f"import \"std\" as std\nimport \"shapes.casa\" as shapes\n{root}".to_str
+    "/tmp/casa_products/main.casa".to_str products::SourceUnit
+    "" lexer::absolute_normalize_path swap products::CompilationInput::new = input
+    "lib".to_str input.library_paths.push
+    ALIASED_SHAPES_SOURCE.to_str "/tmp/casa_products/shapes.casa".to_str input.source_overrides.set
+    input products::analyze.unwrap.get_report = report
+    false = found
+    for index in report.count_diagnostics 0 std::Range::new do
+        index report.get_presentation.format_message = message
+        if message.as_str "__casa_" str::contains then
+            f"internal name in diagnostic for `{root}`: {message}" false test::assert_true
+        fi
+        found message.as_str expected str::contains || = found
+    done
+    f"diagnostic for `{root}` contains `{expected}`" found test::assert_true
+}
+
+fn test_diagnostics_use_source_type_names {
+    "diagnostics_use_source_type_names" test::test_start
+    "Method `$shapes::Point::y` does not exist" "fn show point:$shapes::Point -> i64 { point.y }" assert_source_type_names
+    "Method `shapes::Hidden::secret` is private" "fn show hidden:$shapes::Hidden -> i64 { hidden.secret }" assert_source_type_names
+    "Method `std::Map[i64 shapes::Point]::insert` does not exist" "std::Map[i64 shapes::Point]::new = m\n1 m.insert" assert_source_type_names
+    "requires an integer context, got `shapes::Point`" "fn show point:shapes::Point { point drop }\n1 show" assert_source_type_names
+    "Expected: shapes::Point" "fn show point:shapes::Point { point drop }\n\"x\" show" assert_source_type_names
+    "Expected `i64`, got `shapes::Point`" "fn show a:shapes::Point -> bool { a 1 == }" assert_source_type_names
+    "Cannot compare `i64` with `shapes::Point`" "fn show point:shapes::Point { point.x 1 shapes::Point == drop }" assert_source_type_names
+    "Type `shapes::Point` cannot be compared with `==`: does not satisfy trait `PartialEq`" "fn show a:shapes::Point b:shapes::Point -> bool { a b == }" assert_source_type_names
+    "Type `shapes::Point` cannot be printed" "fn show point:shapes::Point { point print }" assert_source_type_names
+    "Type `$shapes::Point` cannot be used in f-string" "fn show point:$shapes::Point -> std::String { f\"{point}\" }" assert_source_type_names
+    "Type `shapes::Point` does not satisfy trait `std::Display`" "fn need[T: std::Display] value:T { value drop }\n1 shapes::Point need" assert_source_type_names
+    "expected `shapes::Point -> i64`, got `shapes::Point -> shapes::Point`" "fn show point:shapes::Point -> i64 { point }" assert_source_type_names
+    "Root body must leave an empty stack, got `None -> shapes::Point`" "1 shapes::Point" assert_source_type_names
+    "`is` requires an enum type, got `shapes::Point`" "fn show point:shapes::Point { if point std::Option::Some(x) is then fi }" assert_source_type_names
+    "Non-exhaustive match on `shapes::Color`" "fn show color:shapes::Color { color match shapes::Color::Red => {} end }" assert_source_type_names
+    "Cannot match `shapes::Color::Red` on `shapes::Point`" "fn show point:shapes::Point { point match shapes::Color::Red => {} _ => {} end }" assert_source_type_names
+    "Did you mean `shapes::Color::Red`?" "fn show color:shapes::Color { color match Red => {} _ => {} end }" assert_source_type_names
+    "Variant `Blue` is not defined in enum `shapes::Color`" "shapes::Color::Blue drop" assert_source_type_names
+    "Unsafe function `shapes::danger` cannot be referenced" "&shapes::danger drop" assert_source_type_names
+    "Struct `shapes::Point` has no field `y`" "shapes::Point { y: 1 } drop" assert_source_type_names
+    "Method `shapes::Holder[shapes::Point]::secret` is private" "fn show holder:$shapes::Holder[shapes::Point] -> i64 { holder.secret }" assert_source_type_names
+    "Trait implementation `shapes::Point: std::Display` must be declared in the module" "impl shapes::Point: std::Display { fn to_str self:$shapes::Point -> std::String { \"p\".to_str } }" assert_source_type_names
+    "import \"dependency.casa\" as dependency\n&__casa_0__answer drop" make_input = input
+    "pub fn answer -> i64 { 41 }".to_str "dependency.casa".to_str input.source_overrides.set
+    input products::analyze.unwrap.get_report = report
+    "internal key keeps its written spelling" "Function `__casa_0__answer` is not defined"
+    0 report
+        .get_presentation
+        .format_message
+        .as_str test::assert_str_eq
+    "import \"cycle.casa\" as cycle" make_input = cycle_input
+    "pub trait A: B { }\npub trait B: A { }".to_str "cycle.casa".to_str cycle_input.source_overrides.set
+    cycle_input products::analyze.unwrap.get_report = cycle_report
+    "declaring file spells the trait cycle" "Trait inheritance cycle: B -> A -> B"
+    0 cycle_report
+        .get_presentation
+        .format_message
+        .as_str test::assert_str_eq
 }
 
 fn test_import_rejection_report {
@@ -847,6 +910,7 @@ fn test_target_extern_rejection {
                 "one target diagnostic" 1 report.count_diagnostics test::assert_eq
                 0 report.get_presentation = diagnostic
                 "target restriction" diagnostic.message.as_str "Linux x86-64 ABI layout" str::contains test::assert_true
+                "declaration spelling" diagnostic.message.as_str "Extern return type `Huge`" str::contains test::assert_true
                 0 report
                     .get_diagnostics
                     .entries
@@ -1249,6 +1313,7 @@ pub fn run_tests {
     test_rejected_source
     test_complete_prefix_facts_do_not_enable_assembly
     test_internal_module_names_are_not_source_bindings
+    test_diagnostics_use_source_type_names
     test_import_rejection_report
     test_syntax_product
     test_invalid_utf8_report
