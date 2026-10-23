@@ -107,6 +107,19 @@ summary applies to `&function = callback` followed by `callback exec`, including
 a function value moved to another binding. If a branch can select different
 functions, the result retains all their possible sources.
 
+Reading a Copy field produces a copy, also when a type parameter's `Copy` bound
+makes the field Copy. A borrow of that copy has no source input, so it cannot
+be returned. Without the bound, the borrow refers to the field:
+
+```casa
+struct Holder[T] {
+    value: T
+}
+
+fn view[T] holder:$Holder[T] -> $T { holder.value }
+# fn copied[T: std::Copy] holder:$Holder[T] -> $T { holder.value }    # Error: the borrow has no live input origin.
+```
+
 An explicit type such as `= callback:fn[$Person $Person -> $Person]` uses a
 general contract. It keeps both compatible inputs loaned even when the selected
 function returns only the first. Function parameters and outputs with explicit
