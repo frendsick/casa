@@ -174,8 +174,10 @@ implementations when `T` implements those traits. Two handles to equal
 separate values compare equal. `Clone` does not require `T: Clone`.
 
 Reference counts are not atomic because Casa programs run on one thread.
-`Shared[T]` does not retain the borrow origins of a `T` that contains borrows.
-Store owned values in it.
+A shared value can contain borrows. Each handle retains their source owners,
+including after `clone` and after the original handle is destroyed. A source
+owner must remain available while a handle can use or destroy the borrowed
+payload. See [the shared-value example](../examples/shared_value.casa).
 
 ## Cleanup and captured values
 
