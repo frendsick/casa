@@ -61,7 +61,8 @@ analyzing it would produce the same snapshot. The input must pass validation
 and have the same root identity, root text, and library paths. Each import must
 resolve to the same file, or still to no file. Each resolved file must have the
 same text, read again from its override or from disk. A resolved file without
-text, such as a missing path-style import, makes the snapshot not current.
+text, such as a missing path-style import, must still have no override and no
+readable file.
 
 `AssemblySource` exposes a shared borrow of its text and identifies its target,
 `Target::LinuxX86_64`. The caller writes and builds assembly and launches binaries.
