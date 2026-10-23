@@ -105,7 +105,7 @@ are skipped (they only run in the full suite).
 A filtered CLI, compiler, example, or formatter run that selects no tests prints the
 supplied filters in an explicit notice and exits successfully.
 
-`test_bootstrap.sh` has no filters — it always runs both self-compilation and
+`test_bootstrap.sh` has no filters. It always runs both self-compilation and
 fixed-point tests.
 
 ## Test categories

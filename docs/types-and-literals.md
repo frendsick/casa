@@ -9,7 +9,7 @@ operation or binding that uses them.
 |---|---|
 | `bool` | `true` or `false` |
 | `char` | One Unicode scalar value |
-| [$cstr](strings-and-io.md#c-strings-and-mutable-buffers) | A borrowed NUL-terminated foreign byte string |
+| [$cstr](strings-and-io.md#c-strings) | A borrowed NUL-terminated foreign byte string |
 | `f32`, `f64` | Floating-point numbers |
 | `i8`, `i16`, `i32`, `i64` | Signed integers |
 | [str](strings-and-io.md#text-views) | An immutable UTF-8 text view |

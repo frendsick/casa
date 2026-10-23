@@ -110,12 +110,12 @@ it **MUST** live in that type's `impl` block rather than as a free function
 with a type-name prefix:
 
 ```casa
-# MUST NOT — type-name prefix on a free function
+# MUST NOT: type-name prefix on a free function
 fn lexer_skip_whitespace lexer:Lexer {
     ...
 }
 
-# MUST — impl method
+# MUST: impl method
 impl Lexer {
     fn skip_whitespace self:mut$Lexer {
         ...
@@ -187,7 +187,7 @@ without a type-name prefix is acceptable.
   data.
 
   ```casa
-  # MUST — primary data first, flag last
+  # MUST: primary data first, flag last
   fn find_matching_label
       ops:std::List[Op]
       op_index:u64
@@ -196,7 +196,7 @@ without a type-name prefix is acceptable.
       backward:bool
   -> i64 { ... }
 
-  # MUST NOT — flag in first position
+  # MUST NOT: flag in first position
   fn find_matching_label
       backward:bool
       ops:std::List[Op]
@@ -321,7 +321,7 @@ and other naturally decimal quantities in decimal.
       token process
   done
 
-  # SHOULD NOT — manual indexing where `for` works
+  # SHOULD NOT: manual indexing where `for` works
   0 = index: u64
   while index tokens.length < do
       index tokens.get process

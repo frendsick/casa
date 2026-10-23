@@ -422,22 +422,7 @@ See [examples/bytes.casa](../examples/bytes.casa) for a runnable example.
 
 ## Maps
 
-Map storage fields are private. Construct a map with `new`, inspect its count
-with `length`, and use the checked lookup and mutation methods below. Callers
-cannot construct a map from bucket pointers or assign its size or capacity.
-
-Low-level `entry_key` and `entry_value` require `unsafe`. They interpret the
-supplied address as `$K` or `$V` without checking it. The address must point to an
-initialized value that remains live and immutable for the returned borrow,
-which is bounded by the shared Map borrow. `entry_value` expects the value
-address, not the start of an entry. Prefer `get`, `get_mut`, or `iter`.
-
 `Map[K V]` associates unique keys with values. `K` must implement [Hashable](traits.md#hashable-contract).
-A new map allocates its buckets and first entry block on the first insertion.
-Entries share blocks, and later insertions reuse removed slots. Removing an
-entry destroys its key and returns or destroys its value, as specified below.
-Entry storage remains allocated until map destruction, so a long-lived map can
-retain storage from its largest live entry count.
 
 ```casa
 import "std"
@@ -449,6 +434,16 @@ std::Map[str i64]::new = scores
     std::Option::None => "missing" print
 end
 ```
+
+Map storage fields are private. Construct a map with `new`, inspect its count
+with `length`, and use the checked lookup and mutation methods below. Callers
+cannot construct a map from bucket pointers or assign its size or capacity.
+
+A new map allocates its buckets and first entry block on the first insertion.
+Entries share blocks, and later insertions reuse removed slots. Removing an
+entry destroys its key and returns or destroys its value, as specified below.
+Entry storage remains allocated until map destruction, so a long-lived map can
+retain storage from its largest live entry count.
 
 | Method | Signature | Description |
 |---|---|---|
@@ -604,6 +599,12 @@ resizing, and between processes, builds, releases, and targets. `keys` and
 Standard hashes are unkeyed. `Map` does not defend against adversarial
 collisions. Bound or validate untrusted key sets, or use a specialized
 collection.
+
+Low-level `entry_key` and `entry_value` require `unsafe`. They interpret the
+supplied address as `$K` or `$V` without checking it. The address must point to an
+initialized value that remains live and immutable for the returned borrow,
+which is bounded by the shared Map borrow. `entry_value` expects the value
+address, not the start of an entry. Prefer `get`, `get_mut`, or `iter`.
 
 `Map[String V]` also accepts borrowed text keys without allocating a temporary
 owner:

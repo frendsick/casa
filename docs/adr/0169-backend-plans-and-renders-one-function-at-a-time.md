@@ -81,11 +81,11 @@ backend registry, or an optimization framework.
 [ADR-0181](0181-register-storage-is-planned-within-one-function.md) permits a
 bounded per-function register plan and canonical register suffixes at labels.
 
-Remove public `Program` and `InstValue` construction, the whole-program bytecode
-list, repeated instruction-family matching, the flat source control-flow
-validation prepass, and semantic queries during backend lowering. Backend label
-allocation and private invariant checks remain. Representation tests must not
-force retention of the removed interface.
+The backend has no public `Program` or `InstValue` construction, whole-program
+instruction list, repeated instruction-family matching, flat source
+control-flow validation prepass, or semantic queries during lowering. Backend
+label allocation and private invariant checks remain. Representation tests do
+not depend on those removed interfaces.
 
 ## Runtime source and distribution
 

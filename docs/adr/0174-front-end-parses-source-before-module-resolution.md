@@ -227,5 +227,5 @@ name-plus-brace form is compared in that same representation.
 
 Reparse formatter output through this operation and apply ADR-0172's token,
 comment, and structure equivalence guard. Missing imports, unresolved names,
-and semantic errors do not block syntax-only formatting. Delete the parser's
-`syntax_only` mode rather than reproducing it as flags across the new parser.
+and semantic errors do not block syntax-only formatting. The parser has no
+`syntax_only` mode or equivalent flags.

@@ -655,7 +655,7 @@ See the [built-in trait catalog](traits.md#built-in-traits) for displayable
 types and [Types and Literals](types-and-literals.md#string-interpolation) for
 f-strings.
 
-## C strings and mutable buffers
+## C strings
 
 `$cstr` is a borrowed NUL-terminated byte view for system interfaces. It does
 not own or free its storage. [Bytes::as_cstr](collections.md#bytesas_cstr)
