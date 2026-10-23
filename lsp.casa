@@ -342,26 +342,53 @@ fn skip_line_feed source:$str offset:u64 previous:u32 -> u64 {
     fi
 }
 
-fn position_from_offset source:$str target:u64 -> i64 i64 {
-    0 = line: i64
-    0 = column: i64
-    0 = offset: u64
-    while offset target < do
-        if source offset lexer::decode_utf8_scalar std::Option::Some(scalar) is then
-            scalar lexer::DecodedUtf8Scalar::codepoint = codepoint
-            if '\n'.codepoint codepoint == '\r'.codepoint codepoint == || then
-                1 += line
-                0 = column: i64
-            else
-                if UTF16_SINGLE_UNIT_MAX scalar lexer::DecodedUtf8Scalar::codepoint < then 2 else 1 fi += column
-            fi
-            scalar.byte_length += offset
-            codepoint offset source skip_line_feed = offset
-        else
-            break
+# Line and UTF-16 column of a byte offset. advance_to resumes from the previous
+# target, so converting ascending offsets scans the source once.
+struct PositionScan {
+    offset: u64
+    line:   i64
+    column: i64
+}
+
+impl PositionScan {
+    fn new -> PositionScan { 0 0 0 PositionScan }
+
+    # A target before the scanned offset restarts from the start of the source.
+    # A target inside a CRLF pair stops after the pair, like a target past it.
+    fn advance_to self:mut$PositionScan source:$str target:u64 {
+        if target self.offset < then
+            0 = self.offset
+            0 = self.line
+            0 = self.column
         fi
-    done
-    line column
+        while self.offset target < do
+            if source self.offset lexer::decode_utf8_scalar std::Option::Some(scalar) is then
+                scalar lexer::DecodedUtf8Scalar::codepoint = codepoint
+                if '\n'.codepoint codepoint == '\r'.codepoint codepoint == || then
+                    self.line 1 + = self.line
+                    0 = self.column
+                else
+                    self.column
+                    if UTF16_SINGLE_UNIT_MAX scalar lexer::DecodedUtf8Scalar::codepoint < then
+                        2
+                    else
+                        1
+                    fi
+                    + = self.column
+                fi
+                self.offset scalar.byte_length + = self.offset
+                codepoint self.offset source skip_line_feed = self.offset
+            else
+                break
+            fi
+        done
+    }
+}
+
+fn position_from_offset source:$str target:u64 -> i64 i64 {
+    PositionScan::new = scan
+    target source scan.advance_to
+    scan.line scan.column
 }
 
 # JSON builders for LSP types
@@ -1336,14 +1363,22 @@ pub fn map_document_token_type kind:document::DocumentTokenKind -> i64 {
 
 pub fn compute_semantic_tokens state:$products::AnalysisSnapshot -> std::List[SemanticToken] {
     std::List[SemanticToken]::new = tokens
+    # The index lists the root file's tokens in source order, so one scan serves them all.
+    PositionScan::new = scan
     for document_token in state.get_semantic_tokens.iter do
         document_token.location = location: $document::DocumentLocation
-        location state.get_sources convert_document_location_to_lsp.range.clone = range
+        0 = line: i64
+        0 = column: i64
+        if location.file.as_str state.get_sources.get std::Option::Some(source) is then
+            location.offset source.as_str scan.advance_to
+            scan.line = line
+            scan.column = column
+        fi
         0
         document_token.kind copy map_document_token_type
         location.length
-        range.start_col
-        range.start_line
+        column
+        line
         SemanticToken tokens.push
     done
     tokens
