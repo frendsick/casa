@@ -17,7 +17,7 @@ The examples are ordered from introductory programs to low-level system code.
 | 5 | [struct.casa](struct.casa) | A struct literal, method, field update, and destructuring |
 | 6 | [destruction.casa](destruction.casa) | Deterministic cleanup in reverse acquisition order |
 | 7 | [enum.casa](enum.casa) | Payload variants, recursive ownership, exhaustive matching, guards, and early exits |
-| 8 | [generics.casa](generics.casa) | A trait-bound generic function with two implementations |
+| 8 | [generics.casa](generics.casa) | Trait-bound calls and borrowed payloads stored through generic functions |
 | 9 | [for_loop.casa](for_loop.casa) | A custom iterator used by a `for` loop |
 | 10 | [iterator_combinators.casa](iterator_combinators.casa) | A lazy filter and map pipeline with terminal operations |
 | 11 | [hash_map.casa](hash_map.casa) | Counting values with `Map` |
