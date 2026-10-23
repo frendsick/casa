@@ -39,19 +39,19 @@ import "std"
 
 | Method | Signature | Description |
 |---|---|---|
-| [as_slice](#arrayt-nas_slice) | `fn as_slice [T const N:u64] self:$array[T N] -> Slice[T]` | Borrowed view of the complete array |
+| [as_slice](#arrayt-nas_slice) | `fn as_slice[T const N:u64] self:$array[T N] -> Slice[T]` | Borrowed view of the complete array |
 | [clone](#arrayt-nclone) | `fn clone self:$array[T N] -> array[T N]` | Independent array when `T: Clone` |
-| [contains](#arraystr-ncontains) | `fn contains [const N:u64] self:$array[str N] needle:$str -> bool` | Whether a string array contains `needle` |
-| [is_empty](#arrayt-nis_empty) | `fn is_empty [T const N:u64] self:$array[T N] -> bool` | Whether `N` is zero |
-| [iter](#arrayt-niter) | `fn iter [T const N:u64] self:$array[T N] -> Iter[$T]` | Iterator over borrows of the elements |
-| [length](#arrayt-nlength) | `fn length [T const N:u64] self:$array[T N] -> u64` | Number of elements, which is `N` |
-| [nth](#arrayt-nnth) | `fn nth [T const N:u64] self:$array[T N] index:u64 -> $T` | Borrow of the element at a zero-based index |
-| [slice](#arrayt-nslice) | `fn slice [T const N:u64] self:$array[T N] start:u64 stop:u64 -> Slice[T]` | Borrowed half-open range `[start, stop)` |
+| [contains](#arraystr-ncontains) | `fn contains[const N:u64] self:$array[str N] needle:$str -> bool` | Whether a string array contains `needle` |
+| [is_empty](#arrayt-nis_empty) | `fn is_empty[T const N:u64] self:$array[T N] -> bool` | Whether `N` is zero |
+| [iter](#arrayt-niter) | `fn iter[T const N:u64] self:$array[T N] -> Iter[$T]` | Iterator over borrows of the elements |
+| [length](#arrayt-nlength) | `fn length[T const N:u64] self:$array[T N] -> u64` | Number of elements, which is `N` |
+| [nth](#arrayt-nnth) | `fn nth[T const N:u64] self:$array[T N] index:u64 -> $T` | Borrow of the element at a zero-based index |
+| [slice](#arrayt-nslice) | `fn slice[T const N:u64] self:$array[T N] start:u64 stop:u64 -> Slice[T]` | Borrowed half-open range `[start, stop)` |
 
 ### array[T N]::as_slice
 
 ```text
-fn as_slice [T const N:u64] self:$array[T N] -> Slice[T]
+fn as_slice[T const N:u64] self:$array[T N] -> Slice[T]
 ```
 
 Borrows the complete array as a [runtime-length view](#slices).
@@ -67,7 +67,7 @@ Returns an independent array when `T: Clone`.
 ### array[str N]::contains
 
 ```text
-fn contains [const N:u64] self:$array[str N] needle:$str -> bool
+fn contains[const N:u64] self:$array[str N] needle:$str -> bool
 ```
 
 Returns whether a string array contains `needle`.
@@ -75,7 +75,7 @@ Returns whether a string array contains `needle`.
 ### array[T N]::is_empty
 
 ```text
-fn is_empty [T const N:u64] self:$array[T N] -> bool
+fn is_empty[T const N:u64] self:$array[T N] -> bool
 ```
 
 Returns whether `N` is zero.
@@ -83,7 +83,7 @@ Returns whether `N` is zero.
 ### array[T N]::iter
 
 ```text
-fn iter [T const N:u64] self:$array[T N] -> Iter[$T]
+fn iter[T const N:u64] self:$array[T N] -> Iter[$T]
 ```
 
 Returns an iterator over borrows of the elements.
@@ -91,7 +91,7 @@ Returns an iterator over borrows of the elements.
 ### array[T N]::length
 
 ```text
-fn length [T const N:u64] self:$array[T N] -> u64
+fn length[T const N:u64] self:$array[T N] -> u64
 ```
 
 Returns the number of elements, which is `N`.
@@ -99,7 +99,7 @@ Returns the number of elements, which is `N`.
 ### array[T N]::nth
 
 ```text
-fn nth [T const N:u64] self:$array[T N] index:u64 -> $T
+fn nth[T const N:u64] self:$array[T N] index:u64 -> $T
 ```
 
 Returns a [shared borrow](ownership.md#borrow-for-a-call) of the element at a zero-based index. An out-of-range index
@@ -108,7 +108,7 @@ terminates the program. The source keeps ownership of the element.
 ### array[T N]::slice
 
 ```text
-fn slice [T const N:u64] self:$array[T N] start:u64 stop:u64 -> Slice[T]
+fn slice[T const N:u64] self:$array[T N] start:u64 stop:u64 -> Slice[T]
 ```
 
 Borrows `[start, stop)`. Requires `start <= stop <= N`. An invalid range terminates
@@ -125,7 +125,7 @@ A function that accepts arrays of any length takes a constant length parameter:
 ```casa
 import "std"
 
-fn total [const N:u64] values:$array[i64 N] -> i64 {
+fn total[const N:u64] values:$array[i64 N] -> i64 {
     0 = sum: i64
     for value in values.iter do
         value += sum
@@ -933,13 +933,13 @@ In trait signatures, the type `self` means the type that implements `Iterable[T]
 | [chain](#iterabletchain) | `fn chain self:self other:Iter[T] -> Iter[T]` | Yield from `self`, then `other` |
 | [enumerate](#iterabletenumerate) | `fn enumerate self:self -> Iter[Pair[i64 T]]` | Pair each value with its zero-based index |
 | [filter](#iterabletfilter) | `fn filter self:self f:fn[$T -> bool] -> Iter[T]` | Keep matching values |
-| [flat_map](#iterabletflat_map) | `fn flat_map [U] self:self f:fn[T -> Iter[U]] -> Iter[U]` | Transform and flatten one level |
-| [map](#iterabletmap) | `fn map [U] self:self f:fn[T -> U] -> Iter[U]` | Transform each value |
+| [flat_map](#iterabletflat_map) | `fn flat_map[U] self:self f:fn[T -> Iter[U]] -> Iter[U]` | Transform and flatten one level |
+| [map](#iterabletmap) | `fn map[U] self:self f:fn[T -> U] -> Iter[U]` | Transform each value |
 | [skip](#iterabletskip) | `fn skip self:self n:u64 -> Iter[T]` | Omit the first `n` values |
 | [skip_while](#iterabletskip_while) | `fn skip_while self:self f:fn[$T -> bool] -> Iter[T]` | Omit values while the predicate is true |
 | [take](#iterablettake) | `fn take self:self n:u64 -> Iter[T]` | Yield at most `n` values |
 | [take_while](#iterablettake_while) | `fn take_while self:self f:fn[$T -> bool] -> Iter[T]` | Yield while the predicate is true |
-| [zip](#iterabletzip) | `fn zip [U] self:self other:Iter[U] -> Iter[Pair[T U]]` | Pair values until either iterator ends |
+| [zip](#iterabletzip) | `fn zip[U] self:self other:Iter[U] -> Iter[Pair[T U]]` | Pair values until either iterator ends |
 
 ### Iterable[T]::chain
 
@@ -968,7 +968,7 @@ Keeps matching values.
 ### Iterable[T]::flat_map
 
 ```text
-fn flat_map [U] self:self f:fn[T -> Iter[U]] -> Iter[U]
+fn flat_map[U] self:self f:fn[T -> Iter[U]] -> Iter[U]
 ```
 
 Transforms and flattens one level.
@@ -976,7 +976,7 @@ Transforms and flattens one level.
 ### Iterable[T]::map
 
 ```text
-fn map [U] self:self f:fn[T -> U] -> Iter[U]
+fn map[U] self:self f:fn[T -> U] -> Iter[U]
 ```
 
 Transforms each value.
@@ -1016,7 +1016,7 @@ Yields while the predicate is true.
 ### Iterable[T]::zip
 
 ```text
-fn zip [U] self:self other:Iter[U] -> Iter[Pair[T U]]
+fn zip[U] self:self other:Iter[U] -> Iter[Pair[T U]]
 ```
 
 Pairs values until either iterator ends.
@@ -1035,7 +1035,7 @@ Operations such as `any` and `find` can stop before it is exhausted.
 | [collect](#iterabletcollect) | `fn collect self:mut$self -> List[T]` | All remaining values |
 | [count](#iterabletcount) | `fn count self:mut$self -> u64` | Number of remaining values |
 | [find](#iterabletfind) | `fn find self:mut$self f:fn[$T -> bool] -> Option[T]` | First matching value |
-| [fold](#iterabletfold) | `fn fold [U] self:mut$self acc:U f:fn[U T -> U] -> U` | Reduce from an initial value |
+| [fold](#iterabletfold) | `fn fold[U] self:mut$self acc:U f:fn[U T -> U] -> U` | Reduce from an initial value |
 | [max](#itertmax) | `fn max self:mut$Iter[T] -> Option[T]` | Maximum value when `T` implements `Ord` |
 | [max_by](#iterabletmax_by) | `fn max_by self:mut$self f:fn[$T $T -> bool] -> Option[T]` | Maximum selected by a callback |
 | [min](#itertmin) | `fn min self:mut$Iter[T] -> Option[T]` | Minimum value when `T` implements `Ord` |
@@ -1044,8 +1044,8 @@ Operations such as `any` and `find` can stop before it is exhausted.
 | [partition](#iterabletpartition) | `fn partition self:mut$self f:fn[$T -> bool] -> Pair[List[T] List[T]]` | Matching and non-matching lists |
 | [reduce](#iterabletreduce) | `fn reduce self:mut$self f:fn[T T -> T] -> Option[T]` | Reduce from the first value |
 | [sum](#iteri64sum) | `fn sum self:mut$Iter[i64] -> i64` | Add owned `i64` values |
-| [try_fold](#iterablettry_fold) | `fn try_fold [U E] self:mut$self acc:U f:fn[U T -> Result[U E]] -> Result[U E]` | Fallible reduction |
-| [try_for_each](#iterablettry_for_each) | `fn try_for_each [E] self:mut$self f:fn[T -> Result[Unit E]] -> Result[Unit E]` | Fallible action for each value |
+| [try_fold](#iterablettry_fold) | `fn try_fold[U E] self:mut$self acc:U f:fn[U T -> Result[U E]] -> Result[U E]` | Fallible reduction |
+| [try_for_each](#iterablettry_for_each) | `fn try_for_each[E] self:mut$self f:fn[T -> Result[Unit E]] -> Result[Unit E]` | Fallible action for each value |
 
 ### Iterable[T]::all
 
@@ -1090,7 +1090,7 @@ Returns the first matching value, if present.
 ### Iterable[T]::fold
 
 ```text
-fn fold [U] self:mut$self acc:U f:fn[U T -> U] -> U
+fn fold[U] self:mut$self acc:U f:fn[U T -> U] -> U
 ```
 
 Reduces from an initial value.
@@ -1162,7 +1162,7 @@ Adds owned `i64` values.
 ### Iterable[T]::try_fold
 
 ```text
-fn try_fold [U E] self:mut$self acc:U f:fn[U T -> Result[U E]] -> Result[U E]
+fn try_fold[U E] self:mut$self acc:U f:fn[U T -> Result[U E]] -> Result[U E]
 ```
 
 Calls `f` with the current accumulator and item until the iterator ends or `f`
@@ -1178,7 +1178,7 @@ borrows, with their source loans in force.
 ### Iterable[T]::try_for_each
 
 ```text
-fn try_for_each [E] self:mut$self f:fn[T -> Result[Unit E]] -> Result[Unit E]
+fn try_for_each[E] self:mut$self f:fn[T -> Result[Unit E]] -> Result[Unit E]
 ```
 
 Calls `f` for each item until the iterator ends or `f` returns `Error`. On

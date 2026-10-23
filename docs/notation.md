@@ -29,7 +29,7 @@ A method signature also describes the receiver. For example, this excerpt
 from `impl List` omits the body:
 
 ```text
-pub fn push [T] self:mut$List[T] item:T
+pub fn push[T] self:mut$List[T] item:T
 ```
 
 `push` consumes `self`, then `item`. Its call form is `item numbers.push`. No `->` means

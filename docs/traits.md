@@ -10,7 +10,7 @@ traits use qualified names after `import "std"`.
 Declare type parameters in brackets after a function name:
 
 ```casa
-fn identity [T] value:T -> T { value }
+fn identity[T] value:T -> T { value }
 
 42 identity print
 "hello" identity print
@@ -40,7 +40,7 @@ closures.
 Use more than one type parameter when the types are independent:
 
 ```casa
-fn keep_first [A, B] first:A second:B -> A {
+fn keep_first[A, B] first:A second:B -> A {
     second drop
     first
 }
@@ -118,7 +118,7 @@ same name does not implement the trait.
 Add a trait after a type parameter to restrict accepted types:
 
 ```casa
-fn print_description [T:Describe] value:T { value.describe print }
+fn print_description[T:Describe] value:T { value.describe print }
 
 User { name: "Ada" } print_description
 ```
@@ -131,7 +131,7 @@ trait Stored {}
 
 impl User: Stored {}
 
-fn save_description [T:Describe + Stored] value:T { value.describe print }
+fn save_description[T:Describe + Stored] value:T { value.describe print }
 ```
 
 ## Built-in traits
@@ -381,7 +381,7 @@ equivalent:
 ```casa
 import "std"
 
-fn description [T:Describe] value:T -> std::String { value T::describe }
+fn description[T:Describe] value:T -> std::String { value T::describe }
 ```
 
 Qualify a method when more than one trait provides the same name:
@@ -413,9 +413,9 @@ Widening from `u8` to `u64` is valid. Narrowing from `u64` to `u8`, or forwardin
 a signed type to an unsigned type, is rejected at the generic definition.
 
 ```casa
-fn wide [const N:u64] {}
+fn wide[const N:u64] {}
 
-fn forward [const N:u8] { &wide[N] drop }
+fn forward[const N:u8] { &wide[N] drop }
 
 &forward[255] exec
 ```

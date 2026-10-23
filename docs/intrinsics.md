@@ -169,7 +169,7 @@ has no live input origin`.
 
 ```casa
 # SAFETY: the caller keeps `index` below `N`.
-unsafe fn nth [T const N:u64] array:$array[T N] index:u64 -> $T {
+unsafe fn nth[T const N:u64] array:$array[T N] index:u64 -> $T {
     # SAFETY: the input borrow keeps the array live, and the caller checks the index.
     unsafe { array ptr::from_ref index size_of[T] * + ptr::as_ref[T] }
 }

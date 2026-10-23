@@ -72,21 +72,21 @@ end
 
 | Method | Signature | Description |
 |---|---|---|
-| [and_then](#optiontand_then) | `fn and_then [T U] self:Option[T] f:fn[T -> Option[U]] -> Option[U]` | Chain an optional operation |
-| [filter](#optiontfilter) | `fn filter [T] self:Option[T] f:fn[$T -> bool] -> Option[T]` | Keep a present value only if it matches |
-| [is_none](#optiontis_none) | `fn is_none [T] self:$Option[T] -> bool` | Whether no value is present |
-| [is_ok](#optiontis_ok) | `fn is_ok [T] self:$Option[T] -> bool` | Alias used by `?` |
-| [is_some](#optiontis_some) | `fn is_some [T] self:$Option[T] -> bool` | Whether a value is present |
-| [map](#optiontmap) | `fn map [T U] self:Option[T] f:fn[T -> U] -> Option[U]` | Transform a present value |
-| [or_else](#optiontor_else) | `fn or_else [T] self:Option[T] f:fn[-> Option[T]] -> Option[T]` | Compute a fallback for `None` |
-| [propagate](#optiontpropagate) | `fn propagate [T U] self:Option[T] -> Option[U]` | Convert `None` for an enclosing `?` return |
-| [unwrap](#optiontunwrap) | `fn unwrap [T] self:Option[T] -> T` | Present value, or terminate on `None` |
-| [unwrap_or](#optiontunwrap_or) | `fn unwrap_or [T] self:Option[T] default:T -> T` | Present value or `default` |
+| [and_then](#optiontand_then) | `fn and_then[T U] self:Option[T] f:fn[T -> Option[U]] -> Option[U]` | Chain an optional operation |
+| [filter](#optiontfilter) | `fn filter[T] self:Option[T] f:fn[$T -> bool] -> Option[T]` | Keep a present value only if it matches |
+| [is_none](#optiontis_none) | `fn is_none[T] self:$Option[T] -> bool` | Whether no value is present |
+| [is_ok](#optiontis_ok) | `fn is_ok[T] self:$Option[T] -> bool` | Alias used by `?` |
+| [is_some](#optiontis_some) | `fn is_some[T] self:$Option[T] -> bool` | Whether a value is present |
+| [map](#optiontmap) | `fn map[T U] self:Option[T] f:fn[T -> U] -> Option[U]` | Transform a present value |
+| [or_else](#optiontor_else) | `fn or_else[T] self:Option[T] f:fn[-> Option[T]] -> Option[T]` | Compute a fallback for `None` |
+| [propagate](#optiontpropagate) | `fn propagate[T U] self:Option[T] -> Option[U]` | Convert `None` for an enclosing `?` return |
+| [unwrap](#optiontunwrap) | `fn unwrap[T] self:Option[T] -> T` | Present value, or terminate on `None` |
+| [unwrap_or](#optiontunwrap_or) | `fn unwrap_or[T] self:Option[T] default:T -> T` | Present value or `default` |
 
 ### Option[T]::and_then
 
 ```text
-fn and_then [T U] self:Option[T] f:fn[T -> Option[U]] -> Option[U]
+fn and_then[T U] self:Option[T] f:fn[T -> Option[U]] -> Option[U]
 ```
 
 `and_then` calls `f` only for `Some`, transferring its payload to the callback.
@@ -95,7 +95,7 @@ fn and_then [T U] self:Option[T] f:fn[T -> Option[U]] -> Option[U]
 ### Option[T]::filter
 
 ```text
-fn filter [T] self:Option[T] f:fn[$T -> bool] -> Option[T]
+fn filter[T] self:Option[T] f:fn[$T -> bool] -> Option[T]
 ```
 
 `filter` calls `f` with a shared payload borrow only for `Some`. A false result
@@ -104,7 +104,7 @@ destroys the rejected payload and returns `None`.
 ### Option[T]::is_none
 
 ```text
-fn is_none [T] self:$Option[T] -> bool
+fn is_none[T] self:$Option[T] -> bool
 ```
 
 `is_none` returns whether no value is present.
@@ -112,7 +112,7 @@ fn is_none [T] self:$Option[T] -> bool
 ### Option[T]::is_ok
 
 ```text
-fn is_ok [T] self:$Option[T] -> bool
+fn is_ok[T] self:$Option[T] -> bool
 ```
 
 `is_ok` returns whether a value is present. The `?` operator uses this alias of
@@ -121,7 +121,7 @@ fn is_ok [T] self:$Option[T] -> bool
 ### Option[T]::is_some
 
 ```text
-fn is_some [T] self:$Option[T] -> bool
+fn is_some[T] self:$Option[T] -> bool
 ```
 
 `is_some` returns whether a value is present.
@@ -129,7 +129,7 @@ fn is_some [T] self:$Option[T] -> bool
 ### Option[T]::map
 
 ```text
-fn map [T U] self:Option[T] f:fn[T -> U] -> Option[U]
+fn map[T U] self:Option[T] f:fn[T -> U] -> Option[U]
 ```
 
 `map` calls `f` only for `Some`, transferring its payload and wrapping the
@@ -138,7 +138,7 @@ result in `Some`. `None` passes through without calling `f`.
 ### Option[T]::or_else
 
 ```text
-fn or_else [T] self:Option[T] f:fn[-> Option[T]] -> Option[T]
+fn or_else[T] self:Option[T] f:fn[-> Option[T]] -> Option[T]
 ```
 
 `or_else` calls `f` only for `None`. A `Some` value passes through unchanged.
@@ -146,7 +146,7 @@ fn or_else [T] self:Option[T] f:fn[-> Option[T]] -> Option[T]
 ### Option[T]::propagate
 
 ```text
-fn propagate [T U] self:Option[T] -> Option[U]
+fn propagate[T U] self:Option[T] -> Option[U]
 ```
 
 `propagate` returns `None` for the enclosing `?` return type. This method
@@ -156,7 +156,7 @@ propagation.
 ### Option[T]::unwrap
 
 ```text
-fn unwrap [T] self:Option[T] -> T
+fn unwrap[T] self:Option[T] -> T
 ```
 
 `unwrap` returns the present value. `None` terminates the program.
@@ -164,7 +164,7 @@ fn unwrap [T] self:Option[T] -> T
 ### Option[T]::unwrap_or
 
 ```text
-fn unwrap_or [T] self:Option[T] default:T -> T
+fn unwrap_or[T] self:Option[T] default:T -> T
 ```
 
 `unwrap_or` returns the present value, or `default` when the option is `None`.
@@ -212,21 +212,21 @@ end
 
 | Method | Signature | Description |
 |---|---|---|
-| [and_then](#resultt-eand_then) | `fn and_then [T U E] self:Result[T E] f:fn[T -> Result[U E]] -> Result[U E]` | Chain a fallible operation |
-| [is_error](#resultt-eis_error) | `fn is_error [T E] self:$Result[T E] -> bool` | Whether the result is an error |
-| [is_ok](#resultt-eis_ok) | `fn is_ok [T E] self:$Result[T E] -> bool` | Whether the result is successful |
-| [map](#resultt-emap) | `fn map [T U E] self:Result[T E] f:fn[T -> U] -> Result[U E]` | Transform a success value |
-| [map_error](#resultt-emap_error) | `fn map_error [T E F] self:Result[T E] f:fn[E -> F] -> Result[T F]` | Transform an error value |
-| [or_else](#resultt-eor_else) | `fn or_else [T E F] self:Result[T E] f:fn[E -> Result[T F]] -> Result[T F]` | Recover from an error |
-| [propagate](#resultt-epropagate) | `fn propagate [T U E] self:Result[T E] -> Result[U E]` | Preserve `Error` for an enclosing `?` return |
-| [unwrap](#resultt-eunwrap) | `fn unwrap [T E] self:Result[T E] -> T` | Success value, or terminate on `Error` |
-| [unwrap_error](#resultt-eunwrap_error) | `fn unwrap_error [T E] self:Result[T E] -> E` | Error value, or terminate on `Ok` |
-| [unwrap_or](#resultt-eunwrap_or) | `fn unwrap_or [T E] self:Result[T E] default:T -> T` | Success value or `default` |
+| [and_then](#resultt-eand_then) | `fn and_then[T U E] self:Result[T E] f:fn[T -> Result[U E]] -> Result[U E]` | Chain a fallible operation |
+| [is_error](#resultt-eis_error) | `fn is_error[T E] self:$Result[T E] -> bool` | Whether the result is an error |
+| [is_ok](#resultt-eis_ok) | `fn is_ok[T E] self:$Result[T E] -> bool` | Whether the result is successful |
+| [map](#resultt-emap) | `fn map[T U E] self:Result[T E] f:fn[T -> U] -> Result[U E]` | Transform a success value |
+| [map_error](#resultt-emap_error) | `fn map_error[T E F] self:Result[T E] f:fn[E -> F] -> Result[T F]` | Transform an error value |
+| [or_else](#resultt-eor_else) | `fn or_else[T E F] self:Result[T E] f:fn[E -> Result[T F]] -> Result[T F]` | Recover from an error |
+| [propagate](#resultt-epropagate) | `fn propagate[T U E] self:Result[T E] -> Result[U E]` | Preserve `Error` for an enclosing `?` return |
+| [unwrap](#resultt-eunwrap) | `fn unwrap[T E] self:Result[T E] -> T` | Success value, or terminate on `Error` |
+| [unwrap_error](#resultt-eunwrap_error) | `fn unwrap_error[T E] self:Result[T E] -> E` | Error value, or terminate on `Ok` |
+| [unwrap_or](#resultt-eunwrap_or) | `fn unwrap_or[T E] self:Result[T E] default:T -> T` | Success value or `default` |
 
 ### Result[T E]::and_then
 
 ```text
-fn and_then [T U E] self:Result[T E] f:fn[T -> Result[U E]] -> Result[U E]
+fn and_then[T U E] self:Result[T E] f:fn[T -> Result[U E]] -> Result[U E]
 ```
 
 `and_then` calls `f` only for `Ok`, transferring the success payload. `Error`
@@ -235,7 +235,7 @@ passes through without calling `f`.
 ### Result[T E]::is_error
 
 ```text
-fn is_error [T E] self:$Result[T E] -> bool
+fn is_error[T E] self:$Result[T E] -> bool
 ```
 
 `is_error` returns whether the result is an error.
@@ -243,7 +243,7 @@ fn is_error [T E] self:$Result[T E] -> bool
 ### Result[T E]::is_ok
 
 ```text
-fn is_ok [T E] self:$Result[T E] -> bool
+fn is_ok[T E] self:$Result[T E] -> bool
 ```
 
 `is_ok` returns whether the result is successful.
@@ -251,7 +251,7 @@ fn is_ok [T E] self:$Result[T E] -> bool
 ### Result[T E]::map
 
 ```text
-fn map [T U E] self:Result[T E] f:fn[T -> U] -> Result[U E]
+fn map[T U E] self:Result[T E] f:fn[T -> U] -> Result[U E]
 ```
 
 `map` calls `f` only for `Ok`, transferring the success payload and wrapping the
@@ -260,7 +260,7 @@ result in `Ok`. `Error` passes through unchanged.
 ### Result[T E]::map_error
 
 ```text
-fn map_error [T E F] self:Result[T E] f:fn[E -> F] -> Result[T F]
+fn map_error[T E F] self:Result[T E] f:fn[E -> F] -> Result[T F]
 ```
 
 `map_error` calls `f` only for `Error`, transferring the error payload and
@@ -269,7 +269,7 @@ wrapping the result in `Error`. `Ok` passes through unchanged.
 ### Result[T E]::or_else
 
 ```text
-fn or_else [T E F] self:Result[T E] f:fn[E -> Result[T F]] -> Result[T F]
+fn or_else[T E F] self:Result[T E] f:fn[E -> Result[T F]] -> Result[T F]
 ```
 
 `or_else` calls `f` only for `Error`, transferring the error payload. `Ok`
@@ -278,7 +278,7 @@ passes through unchanged.
 ### Result[T E]::propagate
 
 ```text
-fn propagate [T U E] self:Result[T E] -> Result[U E]
+fn propagate[T U E] self:Result[T E] -> Result[U E]
 ```
 
 `propagate` preserves the error for the enclosing `?` return type. Calling this
@@ -287,7 +287,7 @@ method on `Ok` terminates the program, so use `?` for conditional propagation.
 ### Result[T E]::unwrap
 
 ```text
-fn unwrap [T E] self:Result[T E] -> T
+fn unwrap[T E] self:Result[T E] -> T
 ```
 
 `unwrap` returns the success value. An `Error` result terminates the program.
@@ -295,7 +295,7 @@ fn unwrap [T E] self:Result[T E] -> T
 ### Result[T E]::unwrap_error
 
 ```text
-fn unwrap_error [T E] self:Result[T E] -> E
+fn unwrap_error[T E] self:Result[T E] -> E
 ```
 
 `unwrap_error` returns the error value. An `Ok` result terminates the program.
@@ -303,7 +303,7 @@ fn unwrap_error [T E] self:Result[T E] -> E
 ### Result[T E]::unwrap_or
 
 ```text
-fn unwrap_or [T E] self:Result[T E] default:T -> T
+fn unwrap_or[T E] self:Result[T E] default:T -> T
 ```
 
 `unwrap_or` returns the success value, or `default` when the result is an error.
