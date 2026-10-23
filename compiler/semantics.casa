@@ -5525,10 +5525,10 @@ impl TypeChecker {
     }
 
     # A field projected from a binding borrows the field storage. A view without
-    # a place borrows through the compiler binding that keeps its receiver.
-    # Other values borrow a temporary copy that cannot outlive the frame. This
-    # includes a view joined from branches with different receivers. Revisit
-    # when such a joined view must be returned or exclusively borrowed.
+    # a place borrows through the compiler binding that keeps its receiver or,
+    # after a branch join, its field address. Other values borrow a temporary
+    # copy that cannot outlive the frame. This includes a view joined at a loop
+    # exit. Revisit when such a view must be returned or exclusively borrowed.
     fn resolve_scalar_borrow_source
         self:mut$TypeChecker
         value:$TypedValue
@@ -5548,6 +5548,12 @@ impl TypeChecker {
             resolved = binding
         fi
         if place.fields.is_empty then
+            # A borrow binding holds the address of a joined view.
+            if place.binding.as_str self.scope.lookup std::Option::Some(binding_type) is then
+                if binding_type.is_borrow then
+                    std::List[common::ProjectedMember]::new binding common::ScalarInputKind::BorrowField return
+                fi
+            fi
             binding common::ScalarInputKind::BorrowBinding return
         fi
         if place self.resolve_projected_members std::Option::Some(members) is then
@@ -5769,6 +5775,80 @@ impl TypeChecker {
         bind_op self.assign_op_id
         false function_opt typ name bind_op self.record_owner_assignment
         bind_op emitted_ops.push
+    }
+
+    # Branches can project one view from different receivers. Each branch
+    # stores its field address in a compiler binding shared by the branches,
+    # so a borrow of the joined view addresses the field instead of a copy.
+    fn bind_branch_views
+        self:mut$TypeChecker
+        join_id:i64
+        body:mut$body_builder::Builder
+        function_opt:mut$std::Option[common::Function]
+    {
+        if self.path_continues ! then
+            return
+        fi
+        self
+            .stack
+            .values
+            .length = count
+        for index in count 0 std::Range::new do
+            index self
+                .stack
+                .values
+                .get = view
+            if view.capability ValueCapability::Owned is view.type_value.is_borrow || then
+                continue
+            fi
+            if
+                view.type_value.has_unresolved_type_var !
+                self.store view.type_value common::type_has_scalar_storage ! &&
+            then
+                continue
+            fi
+            view.clone = value
+            if
+                value self.resolve_scalar_borrow_source common::ScalarInputKind::BorrowField(root members) is
+            else
+                continue
+            fi
+            f"$branch_view_{join_id}_{index}" = name
+            if
+                name.as_str self
+                    .scope
+                    .function_bindings
+                    .has_str !
+            then
+                common::SHARED_BORROW_TYPE value.type_value.clone common::apply_borrow_type = binding_type
+                std::Option[u64]::None name.clone binding_type.clone block_scope::ScopedBinding name.clone self
+                    .scope
+                    .function_bindings
+                    .set
+                binding_type name.clone common::Variable = variable
+                if function_opt std::Option::Some(function) is then
+                    variable function.variables.push
+                else
+                    variable name.clone self
+                        .store
+                        .variables
+                        .set
+                fi
+            fi
+            self.current_location.clone common::OpValue::OwnerCleanup common::Op::new = store
+            store self.assign_op_id
+            name.clone name.clone common::BindingReference members root common::ScalarInputKind::StoreField
+            value.type_value.clone count index - 1 - common::ScalarInput store
+                .ensure_ownership
+                .scalar_inputs
+                .push
+            store body.push_operation
+            index self
+                .stack
+                .values
+                .get_mut = joined
+            name.as_str Place::new std::Option::Some = joined.address_place
+        done
     }
 
     pub fn check_temporary_binding
@@ -14428,12 +14508,15 @@ impl TypeChecker {
         operation
     }
 
+    # Without `else`, the stack after the first condition reaches `fi` unchanged.
+    # Its views store their addresses there for that path.
     fn check_source_branch
         self:mut$TypeChecker
         branch:source_body::SourceBranch
         pending:mut$std::List[common::Op]
         function:mut$std::Option[common::Function]
         first:bool
+        implicit_else:bool
     -> body_builder::Branch {
         branch match
             source_body::SourceBranch { origin: origin condition_origin: test condition: condition consequent: consequent } => {
@@ -14441,6 +14524,9 @@ impl TypeChecker {
                 function boundary origin self.check_source_boundary = entry
                 body_builder::Builder::new = checked_condition
                 function checked_condition pending condition self.check_source_sequence
+                if first implicit_else && then
+                    function checked_condition entry.id self.bind_branch_views
+                fi
                 function common::OpValue::IfCondition test self.check_source_boundary = checked_test
                 body_builder::Builder::new = checked_consequent
                 function checked_consequent pending consequent self.check_source_sequence
@@ -14469,9 +14555,15 @@ impl TypeChecker {
                 0 = else_offset: u64
                 std::List[body_builder::Branch]::new = checked_branches
                 true = first
+                0 = join_id: i64
                 branches.reverse
                 while branches.is_empty ! do
-                    first function pending branches.pop self.check_source_branch checked_branches.push
+                    alternative.is_none first function pending branches.pop self.check_source_branch = branch
+                    if first then
+                        branch.entry.id = join_id
+                    fi
+                    function branch.consequent join_id self.bind_branch_views
+                    branch checked_branches.push
                     false = first
                 done
                 # An early exit's rest is checked first but ends after `fi` in source.
@@ -14497,6 +14589,7 @@ impl TypeChecker {
                                 # Report only the missing exit, not the resulting branch mismatch.
                                 self.end_path
                             fi
+                            function checked_body join_id self.bind_branch_views
                             checked_body entry body_builder::Alternative std::Option::Some = checked_alternative
                         }
                     end
@@ -14588,7 +14681,9 @@ impl TypeChecker {
                 std::List[body_builder::Arm]::new = checked_arms
                 arms.reverse
                 while arms.is_empty ! do
-                    function pending arms.pop self.check_source_arm checked_arms.push
+                    function pending arms.pop self.check_source_arm = arm
+                    function arm.body entry.id self.bind_branch_views
+                    arm checked_arms.push
                 done
                 function common::OpValue::MatchEnd end_origin self.check_source_boundary = exit
                 exit checked_arms entry body_builder::Part::Match emitted.push
