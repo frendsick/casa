@@ -21,5 +21,5 @@ The transfer is conditional. A failed check keeps the complete subject. At `fi`,
 - An owned `is` subject with a non-`Copy` payload is consumed only on a successful path. The owner is unavailable after `fi` if any continuing successful path reaches the join.
 - Shared and exclusive `is` subjects remain available. Their non-`Copy` payload bindings are branch-scoped borrows with the subject's capability.
 - A guard over an owned subject inspects prospective bindings through temporary borrows. It may not consume them. Moves and destruction commit only after the guard succeeds. A failed guard leaves the complete subject available to later arms.
-- Pattern lowering may no longer duplicate or load owned payload words blindly. Shared operation semantics records the borrow, copy, move, and destruction behavior before bytecode lowering.
+- Pattern lowering may no longer duplicate or load owned payload words blindly. Shared operation semantics records the borrow, copy, move, and destruction behavior before code generation.
 - Casa initially forbids moving individual fields out of an owner outside complete consuming destructuring.

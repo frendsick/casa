@@ -4,12 +4,12 @@ A subtrait may provide a default body for a bodyless method required by a supert
 
 ```casa
 trait PartialOrd: PartialEq {
-    fn partial_cmp $self other:$self -> Option[Ordering]
+    fn partial_cmp self:$self other:$self -> Option[Ordering]
 }
 
 trait Ord: PartialOrd + Eq {
-    fn cmp $self other:$self -> Ordering
-    fn partial_cmp $self other:$self -> Option[Ordering] { other self.cmp Option::Some }
+    fn cmp self:$self other:$self -> Ordering
+    fn partial_cmp self:$self other:$self -> Option[Ordering] { other self.cmp Option::Some }
 }
 ```
 

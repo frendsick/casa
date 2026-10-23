@@ -15,7 +15,7 @@ This is a memory-access guarantee, not a claim that every shared method is free 
 ## Consequences
 
 - Projecting through `$T` yields shared access to owned fields, recursively.
-- A method taking `$self` cannot mutate the receiver's ordinary fields.
+- A method with a `self:$T` receiver cannot mutate the receiver's ordinary fields.
 - The compiler may rely on borrowed storage remaining unchanged through safe aliases while a shared loan is live.
 - Casa initially has no `Cell`, atomic, lock, or other safe interior-mutability primitive.
 - If a concrete need appears, one explicit privileged container may define controlled interior mutation without weakening `$T` generally.

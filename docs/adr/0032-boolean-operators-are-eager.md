@@ -14,5 +14,5 @@ Code requiring conditional evaluation uses `if`/`else`, making the skipped branc
 ## Consequences
 
 - Documentation and diagnostics must not describe `&&` or `||` as short-circuiting. Examples involving guards use `if` when evaluating the second condition may fail, mutate state, allocate significantly, or otherwise need to be skipped.
-- The operators remain constant-time boolean operations in bytecode and add no compile-time analysis.
+- The operators remain constant-time boolean operations in generated code and add no compile-time analysis.
 - Refactoring an infix-language condition into Casa must preserve conditional evaluation explicitly rather than translating operator spelling mechanically.

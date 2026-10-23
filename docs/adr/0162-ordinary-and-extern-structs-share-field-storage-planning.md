@@ -1,5 +1,4 @@
 # Ordinary and extern structs share field storage planning
-status: amended for #839
 related issues: #610, #839
 
 Ordinary and extern structs use one target-specific field storage plan. The plan

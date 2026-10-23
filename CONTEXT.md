@@ -377,7 +377,7 @@ _Avoid_: Release lint, tag lint
 - Ambiguous trait implementation method pointers fully qualify receiver and trait, such as `&Token::Convert[i64]::convert`. Unambiguous pointers retain `&Token::method`.
 - Inside a trait default, an unqualified call to one of that trait's methods resolves within the same instantiated trait implementation. Another trait requires explicit qualification.
 - Borrow checking distinguishes statically disjoint named struct fields, while dynamic indexes and other unproven projections conservatively overlap.
-- A `mut$self` receiver exclusively borrows the complete object according to its public stack effect. Method bodies do not produce narrower inferred field effects.
+- A `self:mut$T` receiver exclusively borrows the complete object according to its public stack effect. Method bodies do not produce narrower inferred field effects.
 - A safe function may return multiple exclusive borrows when its body proves them disjoint. Callers may rely on that non-aliasing contract.
 - Borrows returned through an opaque function keep each complete source input loaned until all derived outputs expire. Body-derived field paths are not part of public function types.
 - An available `mut$T` implicitly reborrows as `$T` in any shared typed context, suspending exclusive use until the shared reborrow expires. The reverse conversion is forbidden.
@@ -390,7 +390,7 @@ _Avoid_: Release lint, tag lint
 - `$T` and `mut$T` are always non-null live references. Absence uses ordinary enums such as stdlib `Option`, without compiler special-casing.
 - Equality, ordering, hashing, and display on a borrow use the **Borrowed value**'s traits rather than observing its address. Raw `ptr` equality remains address equality.
 - Shared `$T` can be duplicated with `dup` and `over`, but it does not satisfy `Copy` or `Clone`. When `T: Clone`, `$T.clone` calls the **Borrowed value** implementation and returns an owned `T`.
-- Method availability follows receiver capability uniformly: `self` requires ownership, `$self` accepts owned/shared/exclusive access, and `mut$self` accepts owned/exclusive access.
+- Method availability follows receiver capability uniformly: `self:T` requires ownership, `self:$T` accepts owned/shared/exclusive access, and `self:mut$T` accepts owned/exclusive access.
 - `mut$T` is affine and not Copy. When `T: Clone`, `mut$T.clone` calls the **Borrowed value** implementation through a temporary shared reborrow and returns an owned `T`.
 - `ptr::from_ref` safely obtains `ptr` from `$T`. Owned and exclusive values may reborrow, and no separate `from_mut` exists because raw pointers have no mutability.
 - Standalone structs and payload enums of at most 4096 bytes use automatic storage across calls, including affine owners. Larger affine bodies retain heap storage. Results use caller-owned destinations. Recursive edges, indirect owned fields, closure captures, and raw-owner escapes retain independent heap storage.
@@ -424,7 +424,7 @@ _Avoid_: Release lint, tag lint
 - Initial stdlib floats expose special values, classification, absolute value, and basic rounding only.
 - Float parsing is locale-independent and returns ordinary Option. Formatting emits shortest same-width round-trippable decimal text, preserves negative zero, and canonicalizes special-value spellings without preserving NaN payloads.
 - Custom destruction is the reserved inherent `drop` method, not a trait implementation. It is compiler-invoked, cannot be called directly, and makes the type non-`Copy`.
-- Borrow types use prefix sigils: `T` is owned, `$T` is shared, and `mut$T` is exclusive. Receivers use `self`, `$self`, and `mut$self` respectively.
+- Borrow types use prefix sigils: `T` is owned, `$T` is shared, and `mut$T` is exclusive. Receivers use `self:T`, `self:$T`, and `self:mut$T` respectively.
 - Each returned borrow uses the sources inferred for that output from the checked body. Named calls and inferred function values retain these summaries. Explicit `fn[...]` contracts and abstract trait requirements use all compatible inputs. Casa exposes no named lifetime syntax.
 - Only constrained type variables appear in the bounds prefix. Unbounded type variables that appear in stack types are not repeated there.
 - Unbounded type variables should not use a bracket prefix in **Stack effect** notation. Write `T -> T T`, not `[T] T -> T T`.

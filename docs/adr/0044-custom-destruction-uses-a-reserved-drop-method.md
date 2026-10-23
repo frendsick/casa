@@ -1,6 +1,6 @@
 # Custom destruction uses a reserved drop method
 
-A type defines custom cleanup with the reserved inherent method `fn drop mut$self`. This is a compiler-called cleanup method rather than a trait implementation. Casa does not define a public `Drop` trait, a derivation, or a generic destructor bound.
+A type defines custom cleanup with the reserved inherent method `fn drop self:mut$T`. This is a compiler-called cleanup method rather than a trait implementation. Casa does not define a public `Drop` trait, a derivation, or a generic destructor bound.
 
 The compiler accepts only the exact mutable-borrow receiver and no-output stack effect. Source code cannot call the method directly. The `drop` intrinsic consumes an owner and the compiler calls the cleanup method automatically during the same destruction lowering used at scope exits and early returns.
 

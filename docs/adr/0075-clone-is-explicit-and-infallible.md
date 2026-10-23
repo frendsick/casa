@@ -4,7 +4,7 @@
 
 ```casa
 trait Clone {
-    fn clone $self -> self
+    fn clone self:$self -> self
 }
 ```
 

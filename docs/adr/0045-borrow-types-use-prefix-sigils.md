@@ -10,12 +10,13 @@ items: $List[i64]
 items: mut$List[i64]
 ```
 
-Method receivers infer `Self` and use the same prefixes:
+A method receiver is a parameter named `self` and uses the same prefixes. In a
+trait declaration, the type `self` names the implementing type:
 
 ```casa
-self # consuming owner
-$self # shared borrow
-mut$self # exclusive mutable borrow
+self:T # consuming owner
+self:$T # shared borrow
+self:mut$T # exclusive mutable borrow
 ```
 
 ## Considered options

@@ -6,8 +6,8 @@ Implementing a trait satisfies every transitive supertrait after all effective i
 trait Eq: PartialEq { ... }
 
 impl Point: Eq {
-    fn eq $self other:$Point -> bool { ... }
-    fn ne $self other:$Point -> bool { ... }
+    fn eq self:$Point other:$Point -> bool { ... }
+    fn ne self:$Point other:$Point -> bool { ... }
 }
 ```
 
