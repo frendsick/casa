@@ -3066,6 +3066,21 @@ pub fn string_list_index items:$std::List[std::String] value:$str -> i64 {
     -1
 }
 
+# File stem of a module path: `lib/inner.casa` becomes `inner`.
+fn module_stem path:$str -> std::String {
+    0 = start: u64
+    for index in path.length 0 std::Range::new do
+        if '/' index path.at.unwrap == then
+            index 1 + = start
+        fi
+    done
+    path.length = stop
+    if path ".casa" str::ends_with then
+        5 -= stop
+    fi
+    path start stop start - str::substring
+}
+
 pub fn string_list_contains items:$std::List[std::String] value:$str -> bool {
     0 value items string_list_index <=
 }
@@ -3097,6 +3112,7 @@ pub struct SymbolStore derives std::Clone {
     pub module_private_symbols: std::Set[std::String]
     source_names:               std::Map[std::String FileSourceNames]
     module_bindings:            std::Map[std::String std::Map[std::String SourceBinding]]
+    module_stems:               std::Map[std::String std::String]
 }
 
 pub struct SourceBinding derives std::Clone {
@@ -3117,11 +3133,14 @@ struct ModuleSourceName derives std::Clone {
 
 impl FileSourceNames {
     # Store keys spell type arguments inline, as in `__casa_0__Box[__casa_1__Item]::get`.
-    # Each qualified path takes this file's spelling. A path without one keeps its key:
-    # a type reached through a module this file does not import has no spelling here.
-    # Revisit if diagnostics should name such types by their declaring module.
+    # Each qualified path takes this file's spelling. A path without one names its
+    # declaring module by file stem, as in `inner::Thing`, through `stems`.
     # An `@unbound` path was written as an internal key, so it stays as written.
-    fn format_key self:$FileSourceNames key:$str -> std::String {
+    fn format_key
+        self:$FileSourceNames
+        key:$str
+        stems:$std::Map[std::String std::String]
+    -> std::String {
         std::String::new = builder
         0 = start: u64
         0 = index: u64
@@ -3156,7 +3175,7 @@ impl FileSourceNames {
                     index = start
                     continue
                 fi
-                path.as_str self.format_path builder.append_string
+                stems path.as_str self.format_path builder.append_string
             fi
             if index key.length < then
                 key index 1 str::substring builder.append_string
@@ -3167,7 +3186,11 @@ impl FileSourceNames {
         builder
     }
 
-    fn format_path self:$FileSourceNames path:$str -> std::String {
+    fn format_path
+        self:$FileSourceNames
+        path:$str
+        stems:$std::Map[std::String std::String]
+    -> std::String {
         if path self.names.get_str std::Option::Some(source) is then
             source.clone return
         fi
@@ -3184,6 +3207,12 @@ impl FileSourceNames {
             if path module.prefix.as_str str::starts_with then
                 path module.prefix.length path.length module.prefix.length - str::substring = suffix
                 f"{module.alias}::{suffix}" return
+            fi
+        done
+        for stem in stems.iter do
+            if path stem.first.as_str str::starts_with then
+                path stem.first.length path.length stem.first.length - str::substring = suffix
+                f"{stem.second}::{suffix}" return
             fi
         done
         path.to_str
@@ -3247,7 +3276,7 @@ impl TraitImplCandidates: std::Iterable[$TraitImpl] {
 impl SymbolStore {
     # Keep the existing store type for shared layout queries. Move required
     # records into fresh maps so unused entries and their bucket storage die here.
-    # Source names stay for target diagnostics.
+    # Source names and module stems stay for target diagnostics.
     # A separate backend store becomes useful if its declaration shapes diverge.
     pub fn into_backend_store
         self:SymbolStore
@@ -3255,10 +3284,11 @@ impl SymbolStore {
         aggregates:$std::Set[std::String]
     -> SymbolStore {
         self match
-            SymbolStore { functions: functions generated_recipes: recipes variables: variables structs: structs enums: enums source_names: source_names } => {
+            SymbolStore { functions: functions generated_recipes: recipes variables: variables structs: structs enums: enums source_names: source_names module_stems: module_stems } => {
                 SymbolStore::empty = store
                 variables = store.variables
                 source_names = store.source_names
+                module_stems = store.module_stems
                 for name in reachable.iter do
                     if name.as_str functions.remove_str std::Option::Some(function) is then
                         function name.clone store.functions.set
@@ -3391,6 +3421,13 @@ impl SymbolStore {
     pub fn copy_source_names_from self:mut$SymbolStore source:$SymbolStore {
         source.source_names.clone = self.source_names
         source.module_bindings.clone = self.module_bindings
+        source.module_stems.clone = self.module_stems
+    }
+
+    # Two modules with the same file stem share a spelling in diagnostics.
+    # Revisit if such modules appear together in one message.
+    pub fn record_module_stem self:mut$SymbolStore prefix:$str path:$str {
+        path module_stem prefix.to_str self.module_stems.set
     }
 
     pub fn format_name_for_source self:$SymbolStore name:$str file:$str -> std::String {
@@ -3399,7 +3436,7 @@ impl SymbolStore {
             file method_name.as_str self.format_name_for_source return
         fi
         file self.source_names.get_str match
-            std::Option::Some(recorded) => name recorded.format_key
+            std::Option::Some(recorded) => self.module_stems name recorded.format_key
             std::Option::None => name.to_str
         end
     }
@@ -3649,6 +3686,7 @@ pub fn symbol_store_new -> SymbolStore {
 
 impl SymbolStore {
     fn empty -> SymbolStore {
+        std::Map[std::String std::String]::new
         std::Map[std::String std::Map[std::String SourceBinding]]::new
         std::Map[std::String FileSourceNames]::new
         std::Set[std::String]::new
