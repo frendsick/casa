@@ -1349,6 +1349,8 @@ struct WhileContext {
     current_branch_location: common::Location
     scope_depth:             u64
     body_start:              u64
+    # Exit paths share view bindings named after the loop entry.
+    entry_id:                i64
 }
 
 struct MatchContext {
@@ -1446,7 +1448,7 @@ impl IfContext {
 
 impl WhileContext {
     pub fn new scope_depth:u64 -> WhileContext {
-        0 scope_depth
+        0 0 scope_depth
         common::empty_location
         false
         false
@@ -5526,9 +5528,8 @@ impl TypeChecker {
 
     # A field projected from a binding borrows the field storage. A view without
     # a place borrows through the compiler binding that keeps its receiver or,
-    # after a branch join, its field address. Other values borrow a temporary
-    # copy that cannot outlive the frame. This includes a view joined at a loop
-    # exit. Revisit when such a view must be returned or exclusively borrowed.
+    # after a branch or loop-exit join, its field address. Other values borrow a
+    # temporary copy that cannot outlive the frame.
     fn resolve_scalar_borrow_source
         self:mut$TypeChecker
         value:$TypedValue
@@ -5777,9 +5778,9 @@ impl TypeChecker {
         bind_op emitted_ops.push
     }
 
-    # Branches can project one view from different receivers. Each branch
-    # stores its field address in a compiler binding shared by the branches,
-    # so a borrow of the joined view addresses the field instead of a copy.
+    # Branches and loop exits can project one view from different receivers.
+    # Each path stores its field address in a compiler binding shared by the
+    # join, so a borrow of the joined view addresses the field, not a copy.
     fn bind_branch_views
         self:mut$TypeChecker
         join_id:i64
@@ -8850,6 +8851,17 @@ impl TypeChecker {
         std::Option[u64]::None
     }
 
+    fn current_while_entry_id tc:$TypeChecker -> std::Option[i64] {
+        tc.branched_stacks.length = frame_index
+        while 0 frame_index != do
+            1 -= frame_index
+            if frame_index tc.branched_stacks.get BranchFrame::BranchWhile(while_ctx) is then
+                while_ctx.entry_id std::Option::Some return
+            fi
+        done
+        std::Option[i64]::None
+    }
+
     # A header is checked before its body, so settle its literal types once.
     fn resolve_loop_header self:mut$TypeChecker {
         0 = index: u64
@@ -8941,6 +8953,7 @@ impl TypeChecker {
                 .scope
                 .frames
                 .length 1 + WhileContext::new = while_ctx
+            op.id = while_ctx.entry_id
             tc.current_ownership_flow = while_ctx.flow_before
             for
                 binding in while_ctx
@@ -14785,7 +14798,13 @@ impl TypeChecker {
                 end
             }
             source_body::SourceNode::Leaf(leaf) => {
-                function emitted pending std::Option[SourceWork]::None leaf.into_operation self.check_work_operation drop
+                leaf.into_operation = operation
+                if operation.value common::OpValue::WhileBreak is then
+                    if self.current_while_entry_id std::Option::Some(entry_id) is then
+                        function emitted entry_id self.bind_branch_views
+                    fi
+                fi
+                function emitted pending std::Option[SourceWork]::None operation self.check_work_operation drop
             }
             source_body::SourceNode::Conditional(conditional) => function emitted pending conditional self.check_source_conditional
             source_body::SourceNode::Loop(loop) => {
@@ -14796,6 +14815,8 @@ impl TypeChecker {
                         function common::OpValue::WhileStart origin self.check_source_boundary = entry
                         body_builder::Builder::new = checked_condition
                         function checked_condition pending condition self.check_source_sequence
+                        # The stack after the condition leaves the loop when it is false.
+                        function checked_condition entry.id self.bind_branch_views
                         function common::OpValue::WhileCondition condition_origin self.check_source_boundary = test
                         body_builder::Builder::new = checked_body
                         function checked_body pending body self.check_source_sequence
