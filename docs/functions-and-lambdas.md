@@ -399,6 +399,13 @@ an owned capture. If one invocation moves or destroys that capture, every
 continuing path must restore it before returning. Destroying the closure
 destroys its owned captures once.
 
+A closure cannot save an invocation's borrowed argument in captured state.
+The invocation's parameter contract does not give that state a longer
+lifetime. Pass the destination as an explicit mutable argument when the call
+must store a borrow. A closure also cannot save a borrow of an owner created
+inside its body. Stores between existing borrowed captures retain their
+source owners after the call.
+
 A closure cannot return a reference through an exclusive capture that it
 retains for the next invocation. This applies to shared and exclusive results,
 including references inside `Option` or another aggregate. The repeatable

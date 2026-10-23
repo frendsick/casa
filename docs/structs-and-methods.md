@@ -154,6 +154,17 @@ cannot observe a borrow does not extend its loan. Moving the aggregate, includin
 through a generic function or into a moving closure, transfers its cleanup
 responsibility and preserves the loan.
 
+Generic calls preserve borrowed type arguments and their source owners. For
+example, passing a `$str` to `wrap[T] item:T -> Slot[T]` produces `Slot[$str]`.
+The wrapper keeps the string owner loaned while the stored view is used.
+
+Stores through an exclusive receiver or argument also retain the stored
+borrow's sources. This applies to a generic setter, `List.push`, and `Map.set`.
+A function cannot store a borrow of its local owner into a caller's container.
+Replacing an element does not prove that all previous loans have ended. The
+checker keeps the union of stored sources for the container's remaining uses
+and any cleanup that can observe them.
+
 ## Copy and Clone
 
 Derive [Copy](traits.md#copy-and-clone) when every owned field is Copy and all

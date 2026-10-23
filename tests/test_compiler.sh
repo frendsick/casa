@@ -46,7 +46,7 @@ test_category() {
             echo compiler_integration
             ;;
         test/test_closure_ownership|test/test_copy_aggregates|test/test_copy_clone|test/test_local_aggregates|test/test_returned_borrow_sources|\
-        test/test_for_owned_item|test/test_iterator_borrows|test/test_owned_contexts|test/test_scope)
+        test/test_for_owned_item|test/test_generic_borrow_origins|test/test_iterator_borrows|test/test_owned_contexts|test/test_scope)
             echo types_ownership
             ;;
         test/test_const_param|test/test_enum_variant_hint|\

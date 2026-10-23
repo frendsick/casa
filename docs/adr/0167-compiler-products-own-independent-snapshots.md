@@ -146,7 +146,7 @@ passed to the backend is concrete and that no deferred dispatch remains. The
 representation admits symbolic terms internally. The constructor, not a claim about the
 underlying enum, establishes concreteness.
 
-The checked-once generic recipe follows
+The symbolically checked generic recipe follows
 [ADR-0170](0170-generics-specialize-after-symbolic-checking.md). Specialization and
 trait dispatch finish before backend entry.
 

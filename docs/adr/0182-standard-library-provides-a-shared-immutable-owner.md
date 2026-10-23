@@ -42,7 +42,7 @@ a handle shares the value. `Shared[T]` exposes no handle identity comparison.
 ## Consequences
 
 - Reference counts are not atomic because Casa programs run on one thread.
-- `Shared[T]` stores its value in raw storage, like `List` and `Map`. It does not retain the borrow origins of a `T` that contains borrows, so such values are unsupported until origin tracking covers raw-storage owners.
+- `Shared[T]` stores its value in raw storage, like `List` and `Map`. Each handle retains the borrow origins of `T`, including after cloning, under [ADR-0175](0175-returned-borrow-sources-are-inferred-from-checked-bodies.md).
 - Conditional `Eq`, `Ord`, and `Hashable` implementations for `Shared[T]` reuse its separate `PartialEq` and `PartialOrd` implementations under [ADR-0098](0098-subtrait-implementation-satisfies-supertraits.md).
 - Moving a value out of its last handle and weak handles remain deferred until a concrete program needs them.
 - Multiply referenced immutable values may use `Shared[T]`. Cyclic or mutable graphs still use one owner plus IDs, indices, or checked non-owning references.

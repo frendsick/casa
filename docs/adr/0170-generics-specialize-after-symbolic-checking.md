@@ -2,10 +2,12 @@
 
 related issue: [Choose the generic checking and specialization contract](https://github.com/frendsick/casa/issues/661).
 
-Casa checks each generic
-body once against its declared bounds, then caches
-reachable concrete specializations. This retains early definition errors and
-direct trait calls without hidden runtime type descriptors or dictionaries.
+Casa checks each generic body symbolically against its declared bounds, then
+caches reachable concrete specializations. Recursive mutation summaries can
+require repeated symbolic checks as specified in
+[ADR-0175](0175-returned-borrow-sources-are-inferred-from-checked-bodies.md).
+Symbolic checking retains early definition errors and direct trait calls without
+hidden runtime type descriptors or dictionaries.
 Distinct bindings can increase compilation cost and emitted size.
 
 This record extends [ADR-0069](0069-generics-are-monomorphized-after-one-body-check.md)
