@@ -428,6 +428,7 @@ fn sort self:mut$List[T]
 ```
 
 `sort` sorts elements in place in ascending order when `T` implements `Ord`.
+It uses the [sort_by](#listtsort_by) contract.
 
 Call `numbers.sort`. See [the sorting example](../examples/sorting.casa).
 
@@ -442,7 +443,9 @@ fn sort_by self:mut$List[T] f:fn[$T $T -> bool]
 true when its first parameter precedes its second. A named `&T::lt` gives
 ascending order. For an unnamed stack lambda, `{ > }` gives ascending order
 and `{ < }` gives descending order because symbolic operators read source
-order while callback parameters use consumption order. Sorting is not stable.
+order while callback parameters use consumption order. Sorting is stable, so
+elements that compare equal keep their original order. Sorting allocates
+temporary storage for about half of the sorted elements.
 
 Call `compare numbers.sort_by`. See [the sorting example](../examples/sorting.casa).
 
