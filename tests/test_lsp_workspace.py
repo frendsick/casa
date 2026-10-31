@@ -219,6 +219,7 @@ def check_type_references(binary):
         root = Path(temporary)
         shapes = root / "shapes.casa"
         user = root / "user.casa"
+        (root / "other.casa").write_text("pub struct Point { pub y: i64 }\nPoint { y: 2 } drop\n")
         shapes.write_text("pub struct Point { pub x: i64 }\n"
                           "impl Point { pub fn get self:$Point -> i64 { self.x } }\n")
         user.write_text('import "shapes.casa" as shapes\n'
@@ -236,8 +237,39 @@ def check_type_references(binary):
                 ("user.casa", 2, 26, 31), ("user.casa", 2, 55, 60), ("user.casa", 3, 8, 13),
                 ("user.casa", 3, 37, 42),
             ], ranges
-            # Type rename stays refused until rename accepts struct and enum coverage.
-            assert "error" in server.query("rename", shapes, 0, 11, newName="Vector")
+            response = server.query("rename", shapes, 0, 11, newName="Vector")
+            assert "error" not in response, response
+            edits = [(change["textDocument"]["uri"].rsplit("/", 1)[1],
+                      edit["range"]["start"]["line"], edit["range"]["start"]["character"],
+                      edit["range"]["end"]["character"], edit["newText"])
+                     for change in response["result"]["documentChanges"] for edit in change["edits"]]
+            assert sorted(edits) == [(*item, "Vector") for item in ranges], edits
+            for name in ("i64", "shapes"):
+                assert "error" in server.query("rename", shapes, 0, 11, newName=name), name
+        finally:
+            server.close()
+
+
+def check_type_rename_collisions(binary):
+    with tempfile.TemporaryDirectory(prefix="casa-type-rename-") as temporary:
+        root = Path(temporary)
+        source = root / "types.casa"
+        source.write_text("struct Item { value:i64 }\n"
+                          "struct Other { value:i64 }\n"
+                          "enum Kind { First Second }\n"
+                          "fn shadow[Next] value:Next -> Next { value }\n"
+                          "fn take[Next] value:Item -> Item { value }\n"
+                          "Kind::First drop\n")
+        server = Server(binary, root)
+        try:
+            for name in ("Other", "Next", "i64"):
+                assert "error" in server.query("rename", source, 0, 7, newName=name), name
+            response = server.query("rename", source, 2, 5, newName="Choice")
+            assert "error" not in response, response
+            edits = response["result"]["documentChanges"][0]["edits"]
+            assert [(edit["range"]["start"]["line"], edit["newText"]) for edit in edits] == [
+                (2, "Choice"), (5, "Choice")
+            ], edits
         finally:
             server.close()
 
@@ -387,7 +419,7 @@ def main(binary):
             edits = response["result"]["documentChanges"][0]["edits"]
             assert len(edits) == 2 and all(edit["range"]["start"]["line"] == 0 for edit in edits), edits
             server.open(local, "struct Point { x:i64 } fn take value:Point { value drop }", 4)
-            assert "error" in server.query("rename", local, 0, 7, newName="Next")
+            assert "error" not in server.query("rename", local, 0, 7, newName="Next")
             for version, newline in enumerate(("\r", "\r\n"), 5):
                 server.open(local, newline.join(("42 = count", "count print", "count drop")), version)
                 assert len(server.query("references", local, 1, 0)["result"]) == 3
@@ -470,6 +502,7 @@ def main(binary):
     check_query_reuse(binary)
     check_imported_diagnostics(binary)
     check_type_references(binary)
+    check_type_rename_collisions(binary)
     check_member_trivia_rename(binary)
     check_formatting(binary)
     print("LSP transport and workspace tests passed")

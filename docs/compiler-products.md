@@ -347,7 +347,7 @@ as `Boxed[Item]::new`, lowering retains the member token location on the operati
 The type reference retains the receiver location separately. Projection uses
 these recorded ranges for references and highlighting, including when comments
 or newlines separate the arguments and member.
-Type references still report incomplete coverage, and rename must reject them.
+Type references use the same coverage and rename validation as other top-level symbols.
 
 `workspace.casa` aggregates owned answers across fresh snapshots, retains exact
 source revisions, and validates proposed rename bindings through reanalysis.
