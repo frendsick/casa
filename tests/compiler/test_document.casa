@@ -581,6 +581,108 @@ fn test_lexical_recovery_and_type_reference_coverage {
     false 7 DOCUMENT_TEST_FILE snapshot.get_index.find_references document::ReferenceAnswer::Incomplete is test::assert_true
 }
 
+# References from `offset` in `file`, with or without complete coverage.
+fn collect_reference_ranges
+    index:$document::EditorIndex
+    file:$str
+    offset:u64
+-> std::List[document::DocumentLocation] {
+    true offset file index.find_references match
+        document::ReferenceAnswer::Complete(result) => result.into_ranges
+        document::ReferenceAnswer::Incomplete(result _) => result.into_ranges
+        document::ReferenceAnswer::Unavailable(_) => std::List[document::DocumentLocation]::new
+    end
+}
+pub const SHAPES_FILE "/tmp/editor_type_shapes.casa"
+pub const SHAPES_SOURCE "pub struct Point { pub x: i64 pub y: i64 }\nimpl Point { pub fn norm self:$Point -> i64 { self.x self.y + } }\npub enum Shape { Circle(i64) Square(Point) }"
+
+# Analyze `source` with `SHAPES_SOURCE` importable from `SHAPES_FILE`.
+fn make_shapes_document source:$str -> products::AnalysisSnapshot {
+    source.to_str DOCUMENT_TEST_FILE.to_str products::SourceUnit
+    "" lexer::absolute_normalize_path swap products::CompilationInput::new = input
+    SHAPES_SOURCE.to_str SHAPES_FILE.to_str input.source_overrides.set
+    input products::analyze.unwrap
+}
+
+# Each range in `file` spells `name` in `source`.
+fn assert_ranges_spell
+    ranges:$std::List[document::DocumentLocation]
+    file:$str
+    source:$str
+    name:$str
+{
+    0 = matched: u64
+    for range in ranges.iter do
+        if range.file file == then
+            f"range at {range.offset} spells `{name}`" name source range.offset range.length str::substring test::assert_str_eq
+            1 += matched
+        fi
+    done
+    f"ranges spelling `{name}` exist" 0 matched < test::assert_true
+}
+
+fn test_qualified_body_names_use_type_segment {
+    "qualified_body_names_use_type_segment" test::test_start
+    "import \"/tmp/editor_type_shapes.casa\" as shapes\n1 2 shapes::Point = p\np shapes::Point::norm drop\n1 shapes::Shape::Circle drop" = source
+    source make_shapes_document = snapshot
+    "valid qualified body source" snapshot.is_incomplete ! test::assert_true
+    snapshot.get_index = index
+    "Point" source DOCUMENT_TEST_FILE 11 SHAPES_FILE index collect_reference_ranges assert_ranges_spell
+    "Shape" source DOCUMENT_TEST_FILE SHAPES_SOURCE "Shape {" str::find u64::try_from.unwrap SHAPES_FILE index collect_reference_ranges assert_ranges_spell
+    "norm" source DOCUMENT_TEST_FILE SHAPES_SOURCE "norm" str::find u64::try_from.unwrap SHAPES_FILE index collect_reference_ranges assert_ranges_spell
+}
+pub const TRAILING_MEMBER_SOURCE "struct Boxed[T] { inner: T }\nimpl[T] Boxed[T] { fn new inner:T -> Boxed[T] { inner Boxed } }\nenum Maybe[T] { Nothing Just(T) }\n1 Boxed[i64]::new drop\nMaybe[i64]::Nothing drop"
+
+# Complete references to the `name` declared at `declaration` list it and its one
+# use at `usage`, and the use defines back to the declaration.
+fn assert_member_use index:$document::EditorIndex name:$str declaration:u64 usage:u64 {
+    true declaration DOCUMENT_TEST_FILE index.find_references match
+        document::ReferenceAnswer::Complete(result) => result.into_ranges
+        _ => {
+            f"`{name}` references complete" false test::assert_true return
+        }
+    end = ranges
+    f"`{name}` declaration and use" 2 ranges.length test::assert_eq
+    f"`{name}` use offset" usage 1 ranges.get.offset test::assert_eq
+    f"`{name}` use length" name.length 1 ranges.get.length test::assert_eq
+    usage DOCUMENT_TEST_FILE index.find_definition match
+        document::PointAnswer::Known(location) => f"`{name}` use definition" declaration location.offset test::assert_eq
+        _ => f"`{name}` use definition available" false test::assert_true
+    end
+    f"`{name}` use hover" usage DOCUMENT_TEST_FILE index.find_hover document::PointAnswer::Known is test::assert_true
+}
+
+fn test_members_after_type_arguments {
+    "members_after_type_arguments" test::test_start
+    TRAILING_MEMBER_SOURCE make_analyzed_document = snapshot
+    "valid member source" snapshot.is_incomplete ! test::assert_true
+    snapshot.get_index = index
+    TRAILING_MEMBER_SOURCE "new drop" str::find u64::try_from.unwrap = new_use
+    new_use TRAILING_MEMBER_SOURCE "new inner" str::find u64::try_from.unwrap "new" index assert_member_use
+    TRAILING_MEMBER_SOURCE "Nothing drop" str::find u64::try_from.unwrap
+    TRAILING_MEMBER_SOURCE "Nothing Just" str::find u64::try_from.unwrap "Nothing" index assert_member_use
+    TRAILING_MEMBER_SOURCE "Boxed[i64]::new" str::find u64::try_from.unwrap = boxed_use
+    DOCUMENT_TEST_FILE index.find_semantic_tokens match
+        document::ListAnswer::Complete(items) => items
+        document::ListAnswer::Incomplete(items _) => items
+        _ => {
+            "member semantic tokens available" false test::assert_true return
+        }
+    end = tokens
+    false = type_token
+    false = member_token
+    for token in tokens.iter do
+        if token.location.offset boxed_use == token.kind document::DocumentTokenKind::Type == && then
+            true = type_token
+        fi
+        if token.location.offset new_use == token.kind document::DocumentTokenKind::Function == && then
+            true = member_token
+        fi
+    done
+    "type token before type arguments" type_token test::assert_true
+    "member token after type arguments" member_token test::assert_true
+}
+
 fn test_commented_function_declaration {
     "commented_function_declaration" test::test_start
     for source in ["fn # note\nhello { }", "fn\r\nhello { }"].iter do
@@ -1192,6 +1294,8 @@ pub fn run_tests {
     test_commented_function_declaration
     test_qualified_completion_replacement
     test_lexical_recovery_and_type_reference_coverage
+    test_qualified_body_names_use_type_segment
+    test_members_after_type_arguments
     test_source_generic_hover
     test_aliased_type_hover_uses_source_names
     test_scoped_completion_and_replacement

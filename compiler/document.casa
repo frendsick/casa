@@ -538,6 +538,8 @@ impl ProjectionSymbol {
     }
 }
 
+# A qualified name splits at its last `::`. The type part excludes module prefixes.
+# A member written after explicit type arguments lies outside the location.
 fn get_symbol_location source:$str op:$ProjectionOperation part:$SymbolPart -> common::Location {
     if part SymbolPart::Whole is then
         op.location.clone return
@@ -546,20 +548,24 @@ fn get_symbol_location source:$str op:$ProjectionOperation part:$SymbolPart -> c
         .location
         .span
         .offset = start
-    op
+    source start op
         .location
         .span
-        .length = length
-    source start length str::substring.as_str "::" str::find = separator
-    separator u64::try_from.unwrap = separator_index
+        .length str::substring = spelling
+    if source op find_trailing_member std::Option::Some(member) is then
+        false spelling.as_str common::find_path_name_span = name_length = name_offset
+        part copy match
+            SymbolPart::TypeName => name_length start name_offset + op.location.with_span
+            SymbolPart::MemberName => member.clone
+            _ => 0 start op.location.with_span
+        end return
+    fi
+    true spelling.as_str common::find_path_name_span = type_length = type_offset
+    false spelling.as_str common::find_path_name_span = member_length = member_offset
     part copy match
-        SymbolPart::TypeName => separator_index start op.location.with_span
-        SymbolPart::Separator => 2 start separator_index + op.location.with_span
-        SymbolPart::MemberName => {
-            length separator_index - 2 -
-            start separator_index + 2 +
-            op.location.with_span
-        }
+        SymbolPart::TypeName => type_length start type_offset + op.location.with_span
+        SymbolPart::Separator => 2 start member_offset + 2 - op.location.with_span
+        SymbolPart::MemberName => member_length start member_offset + op.location.with_span
         SymbolPart::Whole => op.location.clone
     end
 }
@@ -665,12 +671,13 @@ pub fn infer_literal_type text:$str -> std::Option[common::Type] {
     std::Option[common::Type]::None
 }
 
+# A qualified struct name has no member. Its module prefix is not a type.
 fn is_qualified_operation source:$str op:$ProjectionOperation -> bool {
     if
         0 op
             .location
             .span
-            .length ==
+            .length == op.value semantic_body::OccurrenceValue::StructNew is ||
     then
         false return
     fi
@@ -681,6 +688,69 @@ fn is_qualified_operation source:$str op:$ProjectionOperation -> bool {
         .location
         .span
         .length str::substring.as_str "::" str::contains
+}
+
+# Explicit type arguments can end an associated name's location before its
+# member, as `Boxed` in `Boxed[Item]::new`. Returns the member's span after `::`,
+# an empty span when no name follows, or `None` without that suffix.
+fn find_trailing_member op:$ProjectionOperation source:$str -> std::Option[common::Location] {
+    if
+        op.value semantic_body::OccurrenceValue::FnCall is !
+        op.value semantic_body::OccurrenceValue::FnPush is ! &&
+        op.value semantic_body::OccurrenceValue::PushEnumVariant is ! &&
+    then
+        std::Option[common::Location]::None return
+    fi
+    op.location = location: $common::Location
+    location.span.offset location.span.length + = start
+    start = cursor
+    0 = depth: u64
+    while cursor source.length < do
+        cursor source.at.unwrap = character
+        if '[' character == then
+            1 += depth
+        elif 0 depth == then
+            break
+        elif ']' character == then
+            1 -= depth
+        fi
+        1 += cursor
+        if 0 depth == then
+            break
+        fi
+    done
+    if start cursor == then
+        std::Option[common::Location]::None return
+    fi
+    cursor source skip_blanks = cursor
+    if cursor 2 + source.length > then
+        std::Option[common::Location]::None return
+    fi
+    if source cursor 2 str::substring "::" != then
+        std::Option[common::Location]::None return
+    fi
+    cursor 2 + source skip_blanks = member_start
+    member_start = member_end
+    while member_end source.length < do
+        member_end source.at.unwrap = character
+        if character.is_space character common::is_delimiter_char || then
+            break
+        fi
+        1 += member_end
+    done
+    member_end member_start - member_start location.with_span std::Option::Some
+}
+
+fn skip_blanks source:$str offset:u64 -> u64 {
+    offset = cursor
+    while cursor source.length < do
+        cursor source.at.unwrap = character
+        if ' ' character != '\t' character != && then
+            break
+        fi
+        1 += cursor
+    done
+    cursor
 }
 
 fn classify_qualified_member op_value:$semantic_body::OccurrenceValue -> DocumentTokenKind {
@@ -892,7 +962,7 @@ impl IndexBuilder {
                     op.value semantic_body::OccurrenceValue::FnCall is
                     op.value semantic_body::OccurrenceValue::FnPush is ||
                     op.value semantic_body::OccurrenceValue::PushEnumVariant is ||
-                    op self.source.as_str is_qualified_operation &&
+                    op self.source.as_str is_qualified_operation self.source.as_str op find_trailing_member.is_some || &&
                 then
                     SymbolPart::TypeName op self.source.as_str get_symbol_location self.locate
                     DocumentTokenKind::Type DocumentToken tokens.push
@@ -1894,16 +1964,9 @@ impl IndexBuilder {
                     location identity.declaration.matches = declaration
                 fi
             fi
-            location.span.length = reference_length
-            location.span.offset = reference_offset
-            if '&' reference_offset source.at.unwrap == then
-                1 += reference_offset
-                1 -= reference_length
-            fi
-            source.as_str reference_offset reference_length str::substring.as_str "[" str::find = type_arguments
-            if 0 type_arguments <= then
-                type_arguments u64::try_from.unwrap = reference_length
-            fi
+            false source.as_str location.span.offset location.span.length str::substring.as_str
+            common::find_path_name_span = reference_length = name_offset
+            location.span.offset name_offset + = reference_offset
             reference_length reference_offset declaration symbol definition element self.format_hover location self.locate
             Occurrence index.occurrences.push
         fi
@@ -1937,6 +2000,16 @@ impl IndexBuilder {
                     .file
                     .as_str self.sources.get std::Option::Some(source) is
             then
+                if source.as_str op find_trailing_member std::Option::Some(member) is then
+                    if 0 member.span.length == then
+                        # The member's uses cannot be listed without its range.
+                        QueryReason::MissingSemanticFact op.location self.locate CoverageRegion index.unavailable.push
+                        QueryReason::MissingSemanticFact std::Option::Some = index.coverage
+                    else
+                        index SymbolPart::MemberName op self.project_operation
+                    fi
+                    continue
+                fi
                 if op source.as_str is_qualified_operation then
                     index SymbolPart::TypeName op self.project_operation
                     index SymbolPart::MemberName op self.project_operation
