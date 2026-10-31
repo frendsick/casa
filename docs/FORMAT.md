@@ -14,7 +14,7 @@ Build a current compiler first, then build the formatter:
 
 ```sh
 ./casac casa.casa -o casac-next -L lib
-./casac-next formatter/format.casa -o casafmt -L lib
+./casac-next formatter/casafmt.casa -o casafmt -L lib
 ```
 
 Write to a temporary file so a formatter failure cannot replace the source:
