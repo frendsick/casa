@@ -851,7 +851,7 @@ pub fn test_recursive_callable_completion_preserves_checked_bodies {
     "recursive_callable_completion_preserves_checked_bodies" test::test_start
     error::Diagnostics::new = diagnostics
     diagnostics
-    "fn answer -> i64 { 42 } fn left stop:bool -> fn[-> i64] { if stop then &answer else true right fi } fn right stop:bool -> fn[-> i64] { stop left } true left drop true right exec drop"
+    "fn answer -> i64 { 42 } fn left stop:bool -> fn[-> i64] { if stop then &answer else true right exec drop &answer fi } fn right stop:bool -> fn[-> i64] { stop left } true left drop true right exec drop"
     helpers::parse_resolve_test_parts = bodies = store = operations
     diagnostics "recursive source parses" helpers::assert_no_errors
     bodies store semantics::SemanticSession::from_store = session
@@ -880,7 +880,7 @@ pub fn test_independent_recursive_callable_groups_settle {
         ].iter
     do
         error::Diagnostics::new = diagnostics
-        f"fn answer -> i64 \{ 42 \} fn inner stop:bool -> fn[-> i64] \{ if stop then &answer else true inner fi \} fn left stop:bool -> fn[-> i64] \{ if stop then &answer else true right fi \} fn right stop:bool -> fn[-> i64] \{ {body} \}" = source
+        f"fn answer -> i64 \{ 42 \} fn inner stop:bool -> fn[-> i64] \{ if stop then &answer else true inner exec drop &answer fi \} fn left stop:bool -> fn[-> i64] \{ if stop then &answer else true right exec drop &answer fi \} fn right stop:bool -> fn[-> i64] \{ {body} \}" = source
         diagnostics source.as_str helpers::parse_resolve_test_source = parsed
         diagnostics "independent recursive groups parse" helpers::assert_no_errors
         "left" parsed
@@ -895,16 +895,109 @@ pub fn test_independent_recursive_callable_groups_settle {
     done
 }
 
-pub fn test_pending_recursive_callable_execution_is_rejected {
-    "pending_recursive_callable_execution_is_rejected" test::test_start
+pub fn test_pending_recursive_callable_execution_is_checked {
+    "pending_recursive_callable_execution_is_checked" test::test_start
     error::Diagnostics::new = diagnostics
     diagnostics
     "fn answer -> i64 { 42 } fn left stop:bool -> fn[-> i64] { if stop then &answer else true right exec drop &answer fi } fn right stop:bool -> fn[-> i64] { stop left } true left exec drop"
     helpers::typecheck_test_source = checked
-    checked.get_diagnostics "pending execution has a source diagnostic"
-    "Cannot execute a recursive callable before its return targets are established"
-    helpers::assert_error_contains
-    "unresolved execution cannot produce a checked program" checked.into_checked_program.is_error test::assert_true
+    checked.get_diagnostics "pending execution settles before publication" helpers::assert_no_errors
+    "settled execution produces a checked program" checked.into_checked_program.is_ok test::assert_true
+    error::Diagnostics::new = direct_diagnostics
+    direct_diagnostics
+    "fn answer -> i64 { 42 } fn left stop:bool -> fn[-> i64] { if stop then &answer else true right exec drop &answer fi } fn right stop:bool -> fn[-> i64] { stop left }"
+    helpers::parse_resolve_test_source = parsed
+    "left" parsed
+        .store
+        .get_function
+        .unwrap = function
+    parsed.source_bodies parsed.store function semantics::analyze_declared_function_semantics = analysis
+    false = executed_target
+    for fact in analysis.ordered_facts.iter do
+        if fact semantics::SemanticDependency::Call(name) is then
+            if name.as_str "answer" == then
+                true = executed_target
+            fi
+        fi
+    done
+    "completed execution publishes its target dependency" executed_target test::assert_true
+}
+
+pub fn test_pending_recursive_execution_composes {
+    "pending_recursive_execution_composes" test::test_start
+    for
+        source in [
+            "fn answer -> i64 { 42 } fn choose stop:bool -> fn[-> i64] { if stop then &answer else true choose exec drop &answer fi } false choose exec drop",
+            "fn answer -> i64 { 42 } fn factory -> fn[-> i64] { &answer } fn left stop:bool -> fn[-> fn[-> i64]] { if stop then &factory else true right exec exec drop &factory fi } fn right stop:bool -> fn[-> fn[-> i64]] { stop left } false left exec exec drop",
+            "fn answer -> i64 { 42 } fn other -> i64 { 7 } fn left stop:bool callback:fn[-> i64] -> fn[-> i64] { if stop then callback else callback true right = chosen chosen exec drop chosen fi } fn right stop:bool input:fn[-> i64] -> fn[-> i64] { input stop left } &answer false left exec drop &other false right exec drop",
+            "fn answer -> i64 { 42 } fn other -> i64 { 7 } fn pair -> fn[-> i64] fn[-> i64] { &answer &other } fn left stop:bool -> fn[-> fn[-> i64] fn[-> i64]] { if stop then &pair else true right exec exec drop exec drop &pair fi } fn right stop:bool -> fn[-> fn[-> i64] fn[-> i64]] { stop left } false left exec exec drop exec drop",
+            "fn recurse -> fn[-> i64] { recurse exec drop recurse }",
+            "fn answer -> i64 { 42 } fn right stop:bool -> fn[-> i64] { stop left } fn left stop:bool -> fn[-> i64] { if stop then &answer else true right exec drop &answer fi } false right exec drop false left exec drop",
+            "struct Owner { value:i64 } struct Slot { value:$Owner } fn invoke callback:fn[->] { callback exec } fn run target:fn[fn[->]] { 1 Owner = initial initial Slot = slot 2 Owner = local local = view:$Owner { view.value drop slot.value.value drop } target exec local drop slot.value.value drop } &invoke run",
+        ].iter
+    do
+        error::Diagnostics::new = diagnostics
+        diagnostics source helpers::typecheck_test_source = checked
+        checked.get_diagnostics "recursive execution composes" helpers::assert_no_errors
+        "complete recursive execution commits" checked.into_checked_program.is_ok test::assert_true
+    done
+}
+
+pub fn test_pending_execution_returns_grow_to_fixed_point {
+    "pending_execution_returns_grow_to_fixed_point" test::test_start
+    error::Diagnostics::new = diagnostics
+    diagnostics
+    "fn answer -> i64 { 42 } fn other -> i64 { 7 } fn factory -> fn[-> i64] { &other } fn left stop:bool -> fn[-> i64] fn[-> fn[-> i64]] { if stop then &answer &factory else true right exec &factory fi } fn right stop:bool -> fn[-> fn[-> i64]] { true left swap drop }"
+    helpers::parse_resolve_test_source = parsed
+    "left" parsed
+        .store
+        .get_function
+        .unwrap = function
+    parsed.source_bodies parsed.store function semantics::analyze_declared_function_semantics = analysis
+    analysis.diagnostics "execution return targets settle" helpers::assert_no_errors
+    0 analysis.return_callables.get = targets
+    "direct return is retained" "answer" targets.has_str test::assert_true
+    "execution-derived return reaches the caller" "other" targets.has_str test::assert_true
+    "first return has exactly its own targets" 2 targets.length test::assert_eq
+    1 analysis.return_callables.get = factory_targets
+    "second return retains factory" "factory" factory_targets.has_str test::assert_true
+    "return positions stay separate" 1 factory_targets.length test::assert_eq
+}
+
+pub fn test_pending_recursive_execution_rechecks_ownership {
+    "pending_recursive_execution_rechecks_ownership" test::test_start
+    for
+        source in [
+            "struct Owner { value:i64 } fn view source:$Owner -> $Owner { source } fn left stop:bool -> fn[$Owner -> $Owner] { if stop then &view else invalid drop &view fi } fn invalid -> $Owner { 1 Owner = local local true left exec } true left drop",
+            "struct Owner { value:i64 } struct Slot { value:$Owner } fn put slot:mut$Slot item:$Owner { item = slot.value } fn inspect value:$Owner { value.value drop } fn left stop:bool -> fn[mut$Slot $Owner] { if stop then &put else 1 Owner = initial initial Slot = slot 2 Owner = local local slot true right exec local drop slot.value inspect &put fi } fn right stop:bool -> fn[mut$Slot $Owner] { stop left } true left drop",
+            "struct Owner { value:i64 } struct Slot { value:$Owner } fn ignore slot:mut$Slot item:$Owner { } fn left stop:bool -> fn[mut$Slot $Owner] { if stop then &ignore else 1 Owner = initial initial Slot = slot 2 Owner = local local slot true right exec local drop slot.value.value drop &ignore fi } fn right stop:bool -> fn[mut$Slot $Owner] { stop left } false left drop",
+            "struct Owner { value:i64 } struct Slot { value:$Owner } fn put slot:mut$Slot item:$Owner { item = slot.value } fn invoke callback:fn[->] { callback exec } fn left stop:bool -> fn[fn[->]] { if stop then &invoke else 1 Owner = initial initial Slot = slot 2 Owner = local local = view:$Owner { view slot put } true right exec local drop slot.value.value drop &invoke fi } fn right stop:bool -> fn[fn[->]] { stop left } true left drop",
+            "struct Owner { value:i64 } struct Slot { value:$Owner } impl Slot { fn drop self:mut$Slot { self.value.value drop } } fn put slot:mut$Slot item:$Owner { item = slot.value } fn invoke callback:fn[->] { callback exec } fn left stop:bool -> fn[fn[->]] { if stop then &invoke else 1 Owner = initial initial Slot = slot 2 Owner = local local = view:$Owner { view slot put } true right exec local drop &invoke fi } fn right stop:bool -> fn[fn[->]] { stop left } true left drop",
+            "struct Owner { value:i64 } struct Slot { value:$Owner } fn put slot:mut$Slot item:$Owner { item = slot.value } fn invoke callback:fn[->] { callback exec } fn left stop:bool target:fn[fn[->]] -> fn[fn[->]] { if stop then target else 1 Owner = initial initial Slot = slot 2 Owner = local local = view:$Owner target true right = selected { view slot put } selected exec local drop slot.value.value drop selected fi } fn right stop:bool target:fn[fn[->]] -> fn[fn[->]] { target stop left } &invoke false left drop",
+            "struct Owner { value:i64 } struct Slot { value:$Owner } fn put slot:mut$Slot item:$Owner { item = slot.value } struct Context { callback:fn[->] } fn invoke context:Context { context.callback exec } fn left stop:bool target:fn[Context] -> fn[Context] { if stop then target else 1 Owner = initial initial Slot = slot 2 Owner = local local = view:$Owner target true right = selected { view slot put } Context selected exec local drop slot.value.value drop selected fi } fn right stop:bool target:fn[Context] -> fn[Context] { target stop left } &invoke false left drop",
+            "struct Owner { value:i64 } struct Slot { value:$Owner } fn put slot:mut$Slot item:$Owner { item = slot.value } fn invoke callback:$fn[->] { callback exec } fn left stop:bool target:fn[$fn[->]] -> fn[$fn[->]] { if stop then target else 1 Owner = initial initial Slot = slot 2 Owner = local local = view:$Owner target true right = selected { view slot put } = callback callback = borrowed:$fn[->] borrowed selected exec borrowed drop callback drop local drop slot.value.value drop selected fi } fn right stop:bool target:fn[$fn[->]] -> fn[$fn[->]] { target stop left } &invoke false left drop",
+            "struct Owner { value:i64 } struct Slot { value:$Owner } fn put slot:mut$Slot item:$Owner { item = slot.value } struct Context { callback:$fn[->] } fn invoke context:Context { context.callback exec } fn left stop:bool target:fn[Context] -> fn[Context] { if stop then target else 1 Owner = initial initial Slot = slot 2 Owner = local local = view:$Owner target true right = selected { view slot put } = callback callback = borrowed:$fn[->] borrowed Context selected exec borrowed drop callback drop local drop slot.value.value drop selected fi } fn right stop:bool target:fn[Context] -> fn[Context] { target stop left } &invoke false left drop",
+        ].iter
+    do
+        error::Diagnostics::new = diagnostics
+        diagnostics source helpers::typecheck_test_source = checked
+        checked.get_diagnostics "settled targets expose ownership errors"
+        "local" helpers::assert_error_contains
+        checked.get_diagnostics "pending execution is not the rejection reason"
+        "Cannot execute a recursive callable" helpers::assert_error_not_contains
+        "ownership failure cannot commit" checked.into_checked_program.is_error test::assert_true
+    done
+}
+
+pub fn test_pending_execution_keeps_independent_errors {
+    "pending_execution_keeps_independent_errors" test::test_start
+    error::Diagnostics::new = diagnostics
+    diagnostics
+    "fn answer -> i64 { 42 } fn left stop:bool -> fn[-> i64] { if stop then &answer else true left exec drop true right drop &answer fi } fn right stop:bool -> fn[-> i64] { true left drop true 1 + drop &answer } true left exec drop"
+    helpers::typecheck_test_source = checked
+    checked.get_diagnostics "independent arithmetic error survives settlement"
+    "bool" helpers::assert_error_contains
+    "invalid component cannot commit" checked.into_checked_program.is_error test::assert_true
 }
 
 pub fn test_unnamed_effect_parameter_uses_function_variable_name {
@@ -1109,7 +1202,11 @@ pub fn run_tests {
     test_recursive_callable_summaries_union_returns
     test_recursive_callable_completion_preserves_checked_bodies
     test_independent_recursive_callable_groups_settle
-    test_pending_recursive_callable_execution_is_rejected
+    test_pending_recursive_callable_execution_is_checked
+    test_pending_recursive_execution_composes
+    test_pending_recursive_execution_rechecks_ownership
+    test_pending_execution_returns_grow_to_fixed_point
+    test_pending_execution_keeps_independent_errors
     test_unnamed_effect_parameter_uses_function_variable_name
     test_checked_scoped_binding_types
     test_semantics_snapshot_isolated_from_source_store
