@@ -73,6 +73,12 @@ the return-summary equations. The checker must validate ownership against
 established targets before accepting that body.
 An in-progress empty target set is distinct from a stable empty set.
 
+Return equations are released at outermost publication, after active function
+checks and recursive settlement finish. Nested components retain their equations
+until that boundary. Resolved target sets remain available to checked facts and
+later callers. Reference identities increase independently of collection sizes,
+so removing equations cannot reuse an existing identity.
+
 Each function keeps its diagnostics separate from nested function checks.
 Rechecking replaces provisional diagnostics and dependent editor facts. Independent
 source errors remain available, and a failed final ownership check cannot produce
