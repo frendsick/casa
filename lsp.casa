@@ -1,7 +1,8 @@
 # Casa Language Server
 #
 # LSP server implementation for the Casa language, providing diagnostics,
-# go-to-definition, hover, completion, references, rename, and semantic tokens.
+# go-to-definition, hover, completion, references, rename, semantic tokens,
+# and document formatting.
 # Communicates via JSON-RPC over stdin/stdout.
 import "lib/std.casa" as std
 import "lib/os.casa" as os
@@ -14,6 +15,7 @@ import "compiler/lexer.casa" as lexer
 import "compiler/products.casa" as products
 import "compiler/document.casa" as document
 import "workspace.casa" as workspace
+import "formatter/format.casa" as format
 
 # LSP structs
 pub struct LspRange {
@@ -1513,6 +1515,44 @@ pub fn handle_semantic_tokens message:$json::JsonValue request_id:$json::JsonVal
     json::JsonValue::JsonObject request_id send_response
 }
 
+# Formatting handler
+# One edit replaces the whole text with the `casafmt` result. There is no edit
+# when `casafmt` rejects the text or the text is already formatted.
+pub fn compute_formatting source:$str -> std::Option[TextEdit] {
+    source format::format_source match
+        std::Result::Ok(formatted) => formatted
+        _ => std::Option[TextEdit]::None return
+    end = formatted
+    if formatted.as_str source == then
+        std::Option[TextEdit]::None return
+    fi
+    source.length source position_from_offset = end_col = end_line
+    end_col end_line 0 0 LspRange = whole_document
+    formatted whole_document TextEdit std::Option::Some
+}
+
+pub fn handle_formatting message:$json::JsonValue request_id:$json::JsonValue state:$LspState {
+    message extract_uri match
+        std::Option::Some(uri) => uri
+        _ => MISSING_URI_MESSAGE INVALID_PARAMS request_id send_request_error return
+    end = uri
+
+    # The open text is authoritative, even when its analysis failed.
+    std::List[json::JsonValue]::new = edits
+    uri.as_str uri_to_path = path
+    if
+        path.as_str state
+            .workspace
+            .overrides
+            .get_str std::Option::Some(source) is
+    then
+        if source.as_str compute_formatting std::Option::Some(edit) is then
+            edit.to_json edits.push
+        fi
+    fi
+    edits json::JsonValue::JsonArray request_id send_response
+}
+
 # Server initialization and main loop
 pub fn extract_library_paths message:$json::JsonValue -> std::List[std::String] {
     std::List[std::String]::new = paths
@@ -1632,6 +1672,7 @@ pub fn handle_initialize message:$json::JsonValue request_id:$json::JsonValue st
     json::JsonValue::JsonObject json::json_set
     "referencesProvider".to_str true json::JsonValue::JsonBool json::json_set
     "renameProvider".to_str true json::JsonValue::JsonBool json::json_set
+    "documentFormattingProvider".to_str true json::JsonValue::JsonBool json::json_set
     "semanticTokensProvider".to_str json::json_object
     "legend".to_str json::json_object
     "tokenTypes".to_str token_types json::JsonValue::JsonArray json::json_set
@@ -1726,6 +1767,8 @@ fn dispatch_request
         state request_id message handle_rename
     elif "textDocument/semanticTokens/full" method == then
         state request_id message handle_semantic_tokens
+    elif "textDocument/formatting" method == then
+        state request_id message handle_formatting
     fi
 }
 

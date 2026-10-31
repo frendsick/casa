@@ -32,7 +32,7 @@ run_shard() {
         bootstrap) "$ROOT_DIR/tests/test_bootstrap.sh" ;;
         formatter)
             ${CASA_COMPILER:-"$ROOT_DIR/casac"} -L "$ROOT_DIR/lib" \
-                "$ROOT_DIR/formatter/format.casa" -o "$RUN_DIR/casafmt"
+                "$ROOT_DIR/formatter/casafmt.casa" -o "$RUN_DIR/casafmt"
             CASA_FORMATTER="$RUN_DIR/casafmt" \
                 "$ROOT_DIR/tests/test_formatter.sh"
             ;;
