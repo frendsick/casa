@@ -274,6 +274,33 @@ def check_type_rename_collisions(binary):
             server.close()
 
 
+def check_variant_pattern_rename(binary):
+    """Variant rename edits declarations, expressions, match arms, and `is` checks."""
+    with tempfile.TemporaryDirectory(prefix="casa-variant-patterns-") as temporary:
+        root = Path(temporary)
+        source = root / "kinds.casa"
+        text = ("enum Kind { Plain Wrapped(i64) }\n"
+                "fn describe k:Kind -> i64 { k match Kind::Plain => 0 Kind::Wrapped(n) => n end }\n"
+                "fn uses { Kind::Plain describe drop 3 Kind::Wrapped describe drop Kind::Plain Kind::Plain is drop }\n")
+        source.write_text(text)
+        server = Server(binary, root)
+        try:
+            response = server.query("rename", source, 0, text.index("Plain"), newName="Bare")
+            assert "error" not in response, response
+            edits = response["result"]["documentChanges"][0]["edits"]
+            lines = text.splitlines()
+            sites = sorted((edit["range"]["start"]["line"], edit["range"]["start"]["character"]) for edit in edits)
+            expected = [(number, index) for number, line in enumerate(lines)
+                        for index in range(len(line)) if line.startswith("Plain", index)]
+            assert sites == expected, sites
+            for edit in edits:
+                start, end = edit["range"]["start"], edit["range"]["end"]
+                assert lines[start["line"]][start["character"]:end["character"]] == "Plain", edit
+                assert edit["newText"] == "Bare", edit
+        finally:
+            server.close()
+
+
 def check_member_trivia_rename(binary):
     """Rename uses member tokens even when trivia separates associated names."""
     with tempfile.TemporaryDirectory(prefix="casa-member-trivia-") as temporary:
@@ -503,6 +530,7 @@ def main(binary):
     check_imported_diagnostics(binary)
     check_type_references(binary)
     check_type_rename_collisions(binary)
+    check_variant_pattern_rename(binary)
     check_member_trivia_rename(binary)
     check_formatting(binary)
     print("LSP transport and workspace tests passed")

@@ -85,7 +85,7 @@ request types find the same libraries.
 | Formatting | Whole-document `casafmt` result for the open text |
 | Hover | Types and stack effects for symbols, literals, operators, and intrinsics |
 | References | Verified uses across discovered workspace roots and imports |
-| Rename | Validated workspace edits for functions, bindings, structs, and enums |
+| Rename | Validated workspace edits for functions, bindings, structs, enums, and enum variants |
 | Semantic tokens | Full-document token classification |
 
 Diagnostics expose the same error and warning codes as the compiler CLI.
