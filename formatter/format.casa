@@ -1,39 +1,12 @@
-# Casa autoformatter
+# Casa autoformatter library
 #
-# Reads Casa source from stdin, writes formatted source to stdout.
-# On parse error, echoes the original source unchanged and exits with code 1.
-#
-# Build with the configured release compiler:
-#   ./casac -L lib formatter/format.casa -o casafmt
+# `format_source` is the formatting pipeline shared by `casafmt` and the
+# language server.
 import "../lib/std.casa" as std
-import "../lib/io.casa" as io
 import "../compiler/common.casa" as common
-import "../compiler/error.casa" as error
 import "../compiler/lexer.casa" as lexer
 import "../compiler/syntax.casa" as syntax
 import "../compiler/products.casa" as products
-
-pub fn read_all_stdin -> std::Bytes {
-    io::StdinReader::new = reader
-    std::Bytes::new = bytes
-    while true do
-        reader io::stdin_read_byte = byte
-        if 0 byte > then
-            break
-        fi
-        byte u8::try_from.unwrap bytes.push
-    done
-    bytes
-}
-
-pub fn report_syntax_diagnostics report:$products::Report {
-    for index in report.count_diagnostics 0 std::Range::new do
-        index report.get_presentation = presentation
-        if presentation.severity error::DiagnosticSeverity::Error == then
-            presentation report.get_sources.format_diagnostic std::eprintln_string
-        fi
-    done
-}
 
 pub fn make_indent depth:i64 -> std::String {
     std::String::new = builder
@@ -2560,19 +2533,20 @@ impl Formatter {
     }
 }
 
-pub fn main {
-    read_all_stdin = source_bytes
-    source_bytes.to_str match
-        std::Result::Error(utf8_error) => {
-            f"error: formatter input is not valid UTF-8 at byte {utf8_error.index}" std::eprintln_string
-            source_bytes io::stdout_write_bytes
-            1 std::process::exit
-        }
-        std::Result::Ok(value) => value
-    end
-    = source
+# Why `format_source` rejected its input. Callers keep the original source.
+pub enum FormatFailure {
+    # The input does not parse. The report holds its diagnostics and source.
+    InvalidInput(products::Report)
+    # The formatted text does not parse. The report holds its diagnostics and source.
+    InvalidOutput(products::Report)
+    # The formatted text has different syntax facts than the input.
+    MeaningChanged
+}
 
-    source.clone "<stdin>".to_str products::SourceUnit products::syntax.unwrap = input
+# Format `source` as `casafmt` does. The input and the output must both parse
+# and have matching syntax facts.
+pub fn format_source source:$str -> std::Result[std::String FormatFailure] {
+    source.to_str "<stdin>".to_str products::SourceUnit products::syntax.unwrap = input
     input.get_facts = input_facts_opt
     if input_facts_opt std::Option::Some(input_facts) is then
         std::List[u64]::new = type_brackets
@@ -2581,27 +2555,20 @@ pub fn main {
                 span.start type_brackets.push
             fi
         done
-        type_brackets input_facts.layout_spans source.as_str Formatter::new = formatter
+        type_brackets input_facts.layout_spans source Formatter::new = formatter
         input.get_tokens formatter.format_tokens = formatted
         formatted.clone "<stdin>".to_str products::SourceUnit products::syntax.unwrap = candidate
         candidate.get_facts = candidate_facts_opt
         if candidate_facts_opt std::Option::Some(candidate_facts) is then
             if candidate_facts input_facts syntax::syntax_facts_match ! then
-                "error: formatter changed source meaning" std::eprintln
-                source print
-                1 std::process::exit
+                FormatFailure::MeaningChanged std::Result::Error
+            else
+                formatted std::Result::Ok
             fi
-            formatted print
         else
-            "error: formatter produced invalid syntax" std::eprintln
-            candidate.get_report report_syntax_diagnostics
-            source print
-            1 std::process::exit
+            candidate.into_report FormatFailure::InvalidOutput std::Result::Error
         fi
     else
-        input.get_report report_syntax_diagnostics
-        source print
-        1 std::process::exit
+        input.into_report FormatFailure::InvalidInput std::Result::Error
     fi
 }
-main

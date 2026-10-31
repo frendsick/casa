@@ -14,7 +14,7 @@ class Server:
         self.process = subprocess.Popen([binary], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
         self.sequence = 0
         self.notifications = []
-        self.request("initialize", {
+        self.initialized = self.request("initialize", {
             "workspaceFolders": [{"uri": folder.as_uri(), "name": "test"}],
             "capabilities": {"workspace": {"workspaceEdit": {"documentChanges": versioned}}},
             "initializationOptions": {"excludePaths": list(exclusions)},
@@ -75,6 +75,7 @@ def check_malformed_messages(binary):
                 ("references", None),
                 ("rename", {"textDocument": uri, "position": {"line": 0, "character": 0}}),
                 ("semanticTokens/full", [uri]),
+                ("formatting", {}),
             ):
                 response = server.request("textDocument/" + method, params)
                 assert response.get("error", {}).get("code") == -32602, (method, response)
@@ -271,6 +272,43 @@ def check_member_trivia_rename(binary):
             server.close()
 
 
+def check_formatting(binary):
+    """Formatting returns one whole-document casafmt edit, or no edit when casafmt rejects the text."""
+    with tempfile.TemporaryDirectory(prefix="casa-formatting-") as temporary:
+        root = Path(temporary)
+        document = root / "document.casa"
+        server = Server(binary, root)
+
+        def edits(path, text=None):
+            if text is not None:
+                server.open(path, text)
+            response = server.request("textDocument/formatting", {
+                "textDocument": {"uri": path.as_uri()},
+                "options": {"tabSize": 4, "insertSpaces": True},
+            })
+            assert "error" not in response, response
+            return response["result"]
+
+        try:
+            assert server.initialized["result"]["capabilities"]["documentFormattingProvider"] is True
+            # The range ends at the old text's end, counted in UTF-16 code units.
+            source = 'fn run {\n1 drop\n    "\U0001F600" drop   }'
+            formatted = 'fn run {\n    1 drop\n    "\U0001F600" drop\n}\n'
+            assert edits(document, source) == [{
+                "range": {"start": {"line": 0, "character": 0}, "end": {"line": 2, "character": 17}},
+                "newText": formatted,
+            }]
+            # Formatted text and text that casafmt rejects give no edit.
+            assert edits(document, formatted) == []
+            assert edits(document, "fn {{ oops\n") == []
+            # A document that was never opened or is closed has no text to format.
+            assert edits(root / "unopened.casa") == []
+            server.send("textDocument/didClose", {"textDocument": {"uri": document.as_uri()}})
+            assert edits(document) == []
+        finally:
+            server.close()
+
+
 def main(binary):
     with tempfile.TemporaryDirectory(prefix="casa workspace ") as temporary:
         root = Path(temporary)
@@ -433,6 +471,7 @@ def main(binary):
     check_imported_diagnostics(binary)
     check_type_references(binary)
     check_member_trivia_rename(binary)
+    check_formatting(binary)
     print("LSP transport and workspace tests passed")
 
 

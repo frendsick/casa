@@ -118,7 +118,7 @@ if matches_filter "ci_shard_dispatch" "$@"; then
         "$dispatcher_dir/formatter"
     cp tests/test_all.sh "$dispatcher_dir/tests/test_all.sh"
     : > "$dispatcher_dir/casa.casa"
-    : > "$dispatcher_dir/formatter/format.casa"
+    : > "$dispatcher_dir/formatter/casafmt.casa"
     cat > "$dispatcher_dir/casac" <<'EOF'
 #!/usr/bin/env sh
 while [ "$1" != "-o" ]; do shift; done
