@@ -20,7 +20,7 @@ impl User: json::Serialize + json::Deserialize {
     }
 
     fn from_json value:$json::JsonValue -> std::Result[User json::Error] {
-        "name" value.require_field ? std::String::from_json ? User std::Result::Ok
+        "name" value &json::deserialize_field[std::String] exec ? User std::Result::Ok
     }
 }
 
@@ -134,14 +134,26 @@ Both typed entry points return `Result` with `json::Error`:
 
 | Variant | Meaning |
 |---|---|
+| `Field(String Error)` | An object member and its nested conversion error. |
+| `Index(u64 Error)` | A zero-based array index and its nested conversion error. |
 | `InvalidValue(str)` | The value has invalid content, such as an unknown enum tag or a multi-character string for `char`. |
 | `MissingField(String)` | A required object member is absent. The payload names the field. |
 | `OutOfRange(str)` | A number exceeds a checked numeric range. The payload names the type whose range check failed. |
 | `Parse(parser::ParseError)` | Invalid JSON text or trailing content. The payload contains a message and a byte offset. |
 | `TypeMismatch(str)` | The JSON value has the wrong kind. The payload names the expected kind. |
 
-Errors from nested conversions propagate unchanged. They do not include the
-complete field path or array index. Use `InvalidValue` for application validation.
+List and map deserialization wrap nested errors in `Index` and `Field`, respectively.
+Read these wrappers from outside inward to follow the path to the original cause.
+`Option` adds no path component. Root conversion errors and parse errors retain
+their existing variants.
+
+In custom `Deserialize` implementations, use
+`deserialize_field [T:Deserialize] value:$JsonValue key:$str -> Result[T Error]`
+to look up and convert a member. It wraps conversion errors in `Field`.
+A missing member returns `MissingField` at the current object, so outer wrappers
+identify the object that lacks it. `require_field` remains a lookup operation.
+Direct calls to `from_json` propagate only the context supplied by that implementation.
+Use `InvalidValue` for application validation.
 
 Strings preserve UTF-8 text and decode all JSON escapes, including UTF-16
 surrogate pairs. Invalid escapes, lone surrogates, and unescaped control
