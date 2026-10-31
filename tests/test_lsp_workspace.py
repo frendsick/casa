@@ -122,6 +122,96 @@ def check_query_reuse(binary):
             server.close()
 
 
+def check_imported_diagnostics(binary):
+    """Imported files publish their diagnostics until no open document imports them."""
+    with tempfile.TemporaryDirectory(prefix="casa-imported-diagnostics-") as temporary:
+        root = Path(temporary)
+        dependency = root / "dependency.casa"
+        first = root / "first.casa"
+        second = root / "second.casa"
+        broken = 'pub fn value -> i64 { "text" }\n'
+        fixed = "pub fn value -> i64 { 42 }\n"
+        importer = 'import "dependency.casa" as dependency\ndependency::value drop\n'
+        dependency.write_text(broken)
+        server = Server(binary, root)
+
+        def published(since):
+            """Each diagnostics list published for the dependency since a notification count."""
+            return [item["params"]["diagnostics"] for item in server.notifications[since:]
+                    if item.get("method") == "textDocument/publishDiagnostics"
+                    and item["params"]["uri"] == dependency.as_uri()]
+
+        def sync():
+            """Collect the notifications sent before a request's response."""
+            assert server.query("hover", root / "unopened.casa", 0, 0)["result"] is None
+
+        def analyze_first():
+            """Query first after its inputs changed, so it analyzes again."""
+            count = len(server.notifications)
+            server.query("hover", first, 1, 13)
+            assert any(item.get("method") == "textDocument/publishDiagnostics"
+                       and item["params"]["uri"] == first.as_uri()
+                       for item in server.notifications[count:]), "first analyzed again"
+
+        try:
+            server.open(first, importer)
+            sync()
+            lists = published(0)
+            assert len(lists) == 1 and len(lists[0]) == 1, lists
+            assert lists[0][0]["range"]["start"]["line"] == 0, lists
+
+            # Two importers report the same diagnostic once.
+            count = len(server.notifications)
+            server.open(second, importer)
+            sync()
+            assert published(count) == [lists[0]], published(count)
+
+            # Fixing the file clears its diagnostics on the next analysis.
+            dependency.write_text(fixed)
+            count = len(server.notifications)
+            server.send("textDocument/didSave", {"textDocument": {"uri": first.as_uri()}})
+            server.send("textDocument/didSave", {"textDocument": {"uri": second.as_uri()}})
+            sync()
+            assert published(count)[-1] == [], published(count)
+
+            # Closing the last importer clears its imported files.
+            dependency.write_text(broken)
+            server.send("textDocument/didSave", {"textDocument": {"uri": second.as_uri()}})
+            sync()
+            assert len(published(0)[-1]) == 1, published(0)
+            server.send("textDocument/didClose", {"textDocument": {"uri": second.as_uri()}})
+            sync()
+            assert len(published(0)[-1]) == 1, "first still imports the file"
+            count = len(server.notifications)
+            server.send("textDocument/didClose", {"textDocument": {"uri": first.as_uri()}})
+            sync()
+            assert published(count) == [[]], published(count)
+
+            # An open file publishes only its own analysis, also after importers analyze it.
+            server.open(first, importer)
+            server.open(dependency, "pub fn value -> i64 { true }\n")
+            sync()
+            own = published(0)[-1]
+            assert len(own) == 1, own
+            count = len(server.notifications)
+            analyze_first()
+            server.send("textDocument/didChange", {
+                "textDocument": {"uri": dependency.as_uri(), "version": 2},
+                "contentChanges": [{"text": fixed}],
+            })
+            analyze_first()
+            assert published(count) == [[]], published(count)
+
+            # Closing it hands its diagnostics back to the importer, which reads the disk text.
+            count = len(server.notifications)
+            server.send("textDocument/didClose", {"textDocument": {"uri": dependency.as_uri()}})
+            sync()
+            assert published(count) and published(count)[-1] == lists[0], published(count)
+            assert server.request("shutdown", None)["result"] is None
+        finally:
+            server.close()
+
+
 def main(binary):
     with tempfile.TemporaryDirectory(prefix="casa workspace ") as temporary:
         root = Path(temporary)
@@ -281,6 +371,7 @@ def main(binary):
             server.close()
     check_malformed_messages(binary)
     check_query_reuse(binary)
+    check_imported_diagnostics(binary)
     print("LSP transport and workspace tests passed")
 
 
