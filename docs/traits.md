@@ -375,13 +375,26 @@ effects. Two unrelated applicable defaults with the same name are ambiguous.
 
 ## Advanced method selection
 
-Inside generic code, dot syntax and the type-parameter namespace are
-equivalent:
+For a method whose first parameter is `self`, generic code can use dot syntax
+or the type-parameter namespace:
 
 ```casa
 import "std"
 
 fn description[T:Describe] value:T -> std::String { value T::describe }
+```
+
+The `T::method` form selects the implementation for `T`, including when the
+first parameter has another type. For example, `T::from_json` selects the
+`Deserialize` implementation for `T` while borrowing a JSON value:
+
+```casa
+import "std"
+import "json"
+
+fn convert[T:json::Deserialize] value:$json::JsonValue -> std::Result[T json::Error] {
+    value T::from_json
+}
 ```
 
 Qualify a method when more than one trait provides the same name:
