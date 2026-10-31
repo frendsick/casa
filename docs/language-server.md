@@ -82,6 +82,7 @@ request types find the same libraries.
 | Completion | Names, keywords, intrinsics, dot methods, and qualified names |
 | Definition | Functions, bindings, structs, enum variants, and qualified methods |
 | Diagnostics | Analyze on open and full-document change, and on save or local editor queries after inputs change |
+| Formatting | Whole-document `casafmt` result for the open text |
 | Hover | Types and stack effects for symbols, literals, operators, and intrinsics |
 | References | Verified uses across discovered workspace roots and imports |
 | Rename | Validated workspace edits for functions and bindings |
@@ -106,6 +107,12 @@ importer is analyzed again. Closing a document hands its diagnostics to the
 open documents that import it, or clears them. Before that, those documents
 check that their analysis is current, because it may have used the closed
 document's unsaved text.
+
+`textDocument/formatting` formats the open text of the document with the same
+pipeline as `casafmt`. The server returns one edit that replaces the whole
+document. It returns no edit when the text is already formatted, when `casafmt`
+would reject the text or its own output, or when the document is not open.
+The formatter has no options, so the server ignores the request `options`.
 
 Definitions and references can resolve imported declarations. Unsaved content
 from other open Casa documents is included in analysis. Queries use a source
@@ -168,7 +175,7 @@ return no result until it analyzes again.
 - Changes use full-document synchronization, not incremental edits.
 - Completion is broad. The editor performs prefix filtering.
 - Dot completion does not support every arbitrary expression.
-- There are no code actions or formatting requests.
+- There are no code actions, range formatting, or on-type formatting requests.
 - Type rename remains unavailable until signature and field type references have
   complete coverage.
 - Rename validation is conservative. Syntax failures or diagnostics in a required
