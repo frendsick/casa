@@ -71,7 +71,6 @@ names. Call forms below assume a list binding named `numbers`.
 | [slice](#listtslice) | `fn slice[T] self:$List[T] start:u64 stop:u64 -> Slice[T]` | Borrowed half-open range `[start, stop)` |
 | [sort](#listtsort) | `fn sort self:mut$List[T]` | Sort in place when `T` implements `Ord` |
 | [sort_by](#listtsort_by) | `fn sort_by self:mut$List[T] f:fn[$T $T -> bool]` | Sort in place with a callback |
-| [sort_by_range](#listtsort_by_range) | `fn sort_by_range self:mut$List[T] low:u64 high:u64 f:$fn[$T $T -> bool]` | Sort an inclusive index range |
 | [swap_at](#listtswap_at) | `fn swap_at[T] self:mut$List[T] i:u64 j:u64` | Exchange two elements |
 
 ### List[T]::append
@@ -448,19 +447,6 @@ elements that compare equal keep their original order. Sorting allocates
 temporary storage for about half of the sorted elements.
 
 Call `compare numbers.sort_by`. See [the sorting example](../examples/sorting.casa).
-
-### List[T]::sort_by_range
-
-```text
-fn sort_by_range self:mut$List[T] low:u64 high:u64 f:$fn[$T $T -> bool]
-```
-
-`sort_by_range` sorts the inclusive index range with a borrowed callback using
-the [sort_by](#listtsort_by) contract. If `low >= high`, the method leaves the
-list unchanged. Otherwise, both indices must be in range or the program
-terminates.
-
-Call `compare high low numbers.sort_by_range`.
 
 ### List[T]::swap_at
 
