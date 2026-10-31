@@ -241,6 +241,36 @@ def check_type_references(binary):
             server.close()
 
 
+def check_member_trivia_rename(binary):
+    """Rename uses member tokens even when trivia separates associated names."""
+    with tempfile.TemporaryDirectory(prefix="casa-member-trivia-") as temporary:
+        root = Path(temporary)
+        source = root / "members.casa"
+        text = ("struct Boxed[T] { inner: T }\n"
+                "impl[T] Boxed[T] { fn new inner:T -> Boxed[T] { inner Boxed } }\n"
+                "1 Boxed[i64]\n::new drop\n"
+                "1 Boxed[i64]:: # comment\nnew drop\n"
+                "1 Boxed[ # ] in comment\ni64]::new drop\n"
+                "1 &Boxed[i64]:: # reference comment\nnew exec drop\n")
+        source.write_text(text)
+        server = Server(binary, root)
+        try:
+            response = server.query("rename", source, 1, text.splitlines()[1].index("new"), newName="make")
+            assert "error" not in response, response
+            changes = response["result"]["documentChanges"]
+            assert len(changes) == 1, changes
+            edits = changes[0]["edits"]
+            assert len(edits) == 5, edits
+            lines = text.splitlines()
+            for edit in edits:
+                start, end = edit["range"]["start"], edit["range"]["end"]
+                assert start["line"] == end["line"], edit
+                assert lines[start["line"]][start["character"]:end["character"]] == "new", edit
+                assert edit["newText"] == "make", edit
+        finally:
+            server.close()
+
+
 def main(binary):
     with tempfile.TemporaryDirectory(prefix="casa workspace ") as temporary:
         root = Path(temporary)
@@ -402,6 +432,7 @@ def main(binary):
     check_query_reuse(binary)
     check_imported_diagnostics(binary)
     check_type_references(binary)
+    check_member_trivia_rename(binary)
     print("LSP transport and workspace tests passed")
 
 

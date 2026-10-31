@@ -539,7 +539,7 @@ impl ProjectionSymbol {
 }
 
 # A qualified name splits at its last `::`. The type part excludes module prefixes.
-# A member written after explicit type arguments lies outside the location.
+# Members after explicit type arguments already have their own token location.
 fn get_symbol_location source:$str op:$ProjectionOperation part:$SymbolPart -> common::Location {
     if part SymbolPart::Whole is then
         op.location.clone return
@@ -552,20 +552,16 @@ fn get_symbol_location source:$str op:$ProjectionOperation part:$SymbolPart -> c
         .location
         .span
         .length str::substring = spelling
-    if source op find_trailing_member std::Option::Some(member) is then
-        false spelling.as_str common::find_path_name_span = name_length = name_offset
-        part copy match
-            SymbolPart::TypeName => name_length start name_offset + op.location.with_span
-            SymbolPart::MemberName => member.clone
-            _ => 0 start op.location.with_span
-        end return
-    fi
-    true spelling.as_str common::find_path_name_span = type_length = type_offset
-    false spelling.as_str common::find_path_name_span = member_length = member_offset
+    spelling.as_str common::path_name_spans = spans
+    spans
+        .qualifier
+        .clone
+        .unwrap = type_span
+    spans.name copy = member_span
     part copy match
-        SymbolPart::TypeName => type_length start type_offset + op.location.with_span
-        SymbolPart::Separator => 2 start member_offset + 2 - op.location.with_span
-        SymbolPart::MemberName => member_length start member_offset + op.location.with_span
+        SymbolPart::TypeName => type_span.length start type_span.offset + op.location.with_span
+        SymbolPart::Separator => 2 start member_span.offset + 2 - op.location.with_span
+        SymbolPart::MemberName => member_span.length start member_span.offset + op.location.with_span
         SymbolPart::Whole => op.location.clone
     end
 }
@@ -688,69 +684,6 @@ fn is_qualified_operation source:$str op:$ProjectionOperation -> bool {
         .location
         .span
         .length str::substring.as_str "::" str::contains
-}
-
-# Explicit type arguments can end an associated name's location before its
-# member, as `Boxed` in `Boxed[Item]::new`. Returns the member's span after `::`,
-# an empty span when no name follows, or `None` without that suffix.
-fn find_trailing_member op:$ProjectionOperation source:$str -> std::Option[common::Location] {
-    if
-        op.value semantic_body::OccurrenceValue::FnCall is !
-        op.value semantic_body::OccurrenceValue::FnPush is ! &&
-        op.value semantic_body::OccurrenceValue::PushEnumVariant is ! &&
-    then
-        std::Option[common::Location]::None return
-    fi
-    op.location = location: $common::Location
-    location.span.offset location.span.length + = start
-    start = cursor
-    0 = depth: u64
-    while cursor source.length < do
-        cursor source.at.unwrap = character
-        if '[' character == then
-            1 += depth
-        elif 0 depth == then
-            break
-        elif ']' character == then
-            1 -= depth
-        fi
-        1 += cursor
-        if 0 depth == then
-            break
-        fi
-    done
-    if start cursor == then
-        std::Option[common::Location]::None return
-    fi
-    cursor source skip_blanks = cursor
-    if cursor 2 + source.length > then
-        std::Option[common::Location]::None return
-    fi
-    if source cursor 2 str::substring "::" != then
-        std::Option[common::Location]::None return
-    fi
-    cursor 2 + source skip_blanks = member_start
-    member_start = member_end
-    while member_end source.length < do
-        member_end source.at.unwrap = character
-        if character.is_space character common::is_delimiter_char || then
-            break
-        fi
-        1 += member_end
-    done
-    member_end member_start - member_start location.with_span std::Option::Some
-}
-
-fn skip_blanks source:$str offset:u64 -> u64 {
-    offset = cursor
-    while cursor source.length < do
-        cursor source.at.unwrap = character
-        if ' ' character != '\t' character != && then
-            break
-        fi
-        1 += cursor
-    done
-    cursor
 }
 
 fn classify_qualified_member op_value:$semantic_body::OccurrenceValue -> DocumentTokenKind {
@@ -962,7 +895,7 @@ impl IndexBuilder {
                     op.value semantic_body::OccurrenceValue::FnCall is
                     op.value semantic_body::OccurrenceValue::FnPush is ||
                     op.value semantic_body::OccurrenceValue::PushEnumVariant is ||
-                    op self.source.as_str is_qualified_operation self.source.as_str op find_trailing_member.is_some || &&
+                    op self.source.as_str is_qualified_operation &&
                 then
                     SymbolPart::TypeName op self.source.as_str get_symbol_location self.locate
                     DocumentTokenKind::Type DocumentToken tokens.push
@@ -996,6 +929,18 @@ impl IndexBuilder {
 
     pub fn find_semantic_tokens self:$IndexBuilder -> std::List[DocumentToken] {
         std::List[DocumentToken]::new = tokens
+        for
+            reference in self
+                .store
+                .type_references
+                .iter
+        do
+            if reference.location.file self.file_path == then
+                if reference.name.as_str self.find_type_symbol.is_some then
+                    reference.location self.locate DocumentTokenKind::Type DocumentToken tokens.push
+                fi
+            fi
+        done
         tokens self.root_occurrences self.collect_operation_tokens
         for function_name in self.collect_document_functions.iter do
             function_name.as_str self.lookup_function.unwrap = function
@@ -1764,7 +1709,7 @@ impl IndexBuilder {
     -> std::Option[common::Location] {
         variant.enum_name.as_str self.lookup_enum = enum_result
         if enum_result std::Option::Some(casa_enum) is then
-            if symbol.part SymbolPart::MemberName is then
+            if symbol.part SymbolPart::TypeName is ! then
                 variant.variant_name casa_enum.variant_locations.get = variant_location
                 if variant_location std::Option::Some(location) is then
                     location.clone std::Option::Some return
@@ -1964,10 +1909,10 @@ impl IndexBuilder {
                     location identity.declaration.matches = declaration
                 fi
             fi
-            false source.as_str location.span.offset location.span.length str::substring.as_str
-            common::find_path_name_span = reference_length = name_offset
-            location.span.offset name_offset + = reference_offset
-            reference_length reference_offset declaration symbol definition element self.format_hover location self.locate
+            source.as_str location.span.offset location.span.length str::substring.as_str
+            common::path_name_spans.name copy = name_span
+            location.span.offset name_span.offset + = reference_offset
+            name_span.length reference_offset declaration symbol definition element self.format_hover location self.locate
             Occurrence index.occurrences.push
         fi
     }
@@ -2000,16 +1945,6 @@ impl IndexBuilder {
                     .file
                     .as_str self.sources.get std::Option::Some(source) is
             then
-                if source.as_str op find_trailing_member std::Option::Some(member) is then
-                    if 0 member.span.length == then
-                        # The member's uses cannot be listed without its range.
-                        QueryReason::MissingSemanticFact op.location self.locate CoverageRegion index.unavailable.push
-                        QueryReason::MissingSemanticFact std::Option::Some = index.coverage
-                    else
-                        index SymbolPart::MemberName op self.project_operation
-                    fi
-                    continue
-                fi
                 if op source.as_str is_qualified_operation then
                     index SymbolPart::TypeName op self.project_operation
                     index SymbolPart::MemberName op self.project_operation

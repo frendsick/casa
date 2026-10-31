@@ -338,7 +338,10 @@ type reference. These names answer definition and references without hover text.
 Reference ranges exclude borrow sigils, module prefixes, and type arguments. A
 qualified body name splits at its last `::`, so `Point` is the type in
 `shapes::Point::norm`. In an associated name with explicit type arguments, such
-as `Boxed[Item]::new`, the member keeps its own range after the arguments.
+as `Boxed[Item]::new`, lowering retains the member token location on the operation.
+The type reference retains the receiver location separately. Projection uses
+these recorded ranges for references and highlighting, including when comments
+or newlines separate the arguments and member.
 Type references still report incomplete coverage, and rename must reject them.
 
 `workspace.casa` aggregates owned answers across fresh snapshots, retains exact
