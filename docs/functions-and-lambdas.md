@@ -88,6 +88,24 @@ fn apply operation:fn[i64 -> i64] value:i64 -> i64 { value operation exec }
 The function value must be on top when `exec` runs. Its arguments stay below
 it.
 
+Recursive functions can return function values and execute them within the same
+recursive call cycle. The compiler settles possible targets and ownership effects
+before accepting the program:
+
+```casa
+fn answer -> i64 { 42 }
+fn select stop:bool -> fn[-> i64] {
+    if stop then &answer else true forward exec drop &answer fi
+}
+fn forward stop:bool -> fn[-> i64] { stop select }
+
+false select exec print # 42
+```
+
+The usual ownership rules still apply to returned borrows and writes through
+mutable arguments or captures. Explicit `fn[...]` contracts keep their
+conservative borrowing rules.
+
 A generic function reference must name its concrete arguments:
 
 ```casa

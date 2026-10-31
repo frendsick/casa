@@ -642,6 +642,7 @@ enum BorrowShape derives std::Copy {
     Shared
     Exclusive
     Captured
+    CallableAccess
     MutablePayload
     RawStorage
 }
@@ -652,8 +653,18 @@ fn type_contains_borrow
     store:$common::SymbolStore
     visiting:mut$std::List[std::String]
 -> bool {
-    if shape BorrowShape::Captured is shape BorrowShape::MutablePayload is || typ.is_function && then
+    if
+        shape BorrowShape::Captured is shape BorrowShape::MutablePayload is ||
+        shape BorrowShape::CallableAccess is || typ.is_function &&
+    then
         true return
+    fi
+    # Callable access follows borrowed fields too. Captured remains the shape
+    # of owned capture storage and deliberately stops at a borrow.
+    if shape BorrowShape::CallableAccess is then
+        if typ.borrow_target std::Option::Some(target) is then
+            visiting store shape target type_contains_borrow return
+        fi
     fi
     if shape BorrowShape::MutablePayload is then
         if typ.borrow_target std::Option::Some(target) is then
@@ -681,6 +692,7 @@ fn type_contains_borrow
             BorrowShape::Exclusive => typ.is_exclusive_borrow
             BorrowShape::Shared => typ.is_shared_borrow
             BorrowShape::Captured => false
+            BorrowShape::CallableAccess => false
             BorrowShape::MutablePayload => false
             BorrowShape::RawStorage => false
         end return
@@ -2227,6 +2239,7 @@ struct TypeChecker {
     seen_dependencies:          std::Set[std::String]
     diagnostics:                mut$error::Diagnostics
     facts_available:            bool
+    has_pending_execution:      bool
     checked_guards:             std::List[body_builder::Builder]
 }
 
@@ -2255,6 +2268,7 @@ impl FunctionSemantics {
 enum FunctionWork derives std::Clone {
     Pending(source_body::SourceBody)
     Reserved(CheckedFunction)
+    Provisional(CheckedFunction)
     Completed(CompletedFunction)
     Rejected(RejectedBody)
 }
@@ -2304,6 +2318,7 @@ impl FunctionWork {
             FunctionWork::Rejected(rejection) => rejected checks rejection.into_analysis
             FunctionWork::Pending(source) => source AnalysisBody::Source
             FunctionWork::Reserved(_) => "Cannot finish semantics with active body work" panic
+            FunctionWork::Provisional(_) => "Cannot finish semantics with pending execution" panic
         end
     }
 
@@ -2317,6 +2332,7 @@ impl FunctionWork {
     fn get_signature self:$FunctionWork -> std::Option[$CheckedFunction] {
         self match
             FunctionWork::Reserved(signature) => signature std::Option::Some
+            FunctionWork::Provisional(signature) => signature std::Option::Some
             FunctionWork::Completed(completed) => completed.signature std::Option[$CheckedFunction]::Some
             _ => std::Option[$CheckedFunction]::None
         end
@@ -2335,7 +2351,8 @@ pub struct SemanticChecks derives std::Clone {
     capture_bindings:      std::Map[std::String std::Map[std::String u64]]
     recheck_inputs:        std::Map[std::String FunctionCheckInput]
     recursive_groups:      std::Map[std::String std::Set[std::String]]
-    settling_mutations:    bool
+    settling_summaries:    bool
+    body_diagnostics:      std::Map[std::String error::Diagnostics]
 }
 
 fn mutation_summaries_equal
@@ -2360,42 +2377,64 @@ fn mutation_summaries_equal
     true
 }
 
+fn call_return_summaries_equal left:$CallReturnSummary right:$CallReturnSummary -> bool {
+    if left.callables.length right.callables.length != then
+        false return
+    fi
+    for index in left.callables.length 0 std::Range::new do
+        index left.callables.get = targets
+        index right.callables.get = other
+        if targets.length other.length != then
+            false return
+        fi
+        for target in targets.iter do
+            if target other.has ! then
+                false return
+            fi
+        done
+    done
+    left.has_raw_storage right.has_raw_storage ==
+    left.mutations right.mutations mutation_summaries_equal &&
+}
+
 impl SemanticChecks {
-    fn settle_recursive_mutations
+    # Each pass starts from source and the previous monotone summaries. Only
+    # completed recursive groups can publish execution and ownership facts.
+    fn settle_recursive_summaries
         self:mut$SemanticChecks
         function_name:$str
         store:mut$common::SymbolStore
-        diagnostics:mut$error::Diagnostics
-    {
-        if self.settling_mutations then
-            return
+    -> std::Option[CheckedOperations] {
+        if self.settling_summaries then
+            std::Option[CheckedOperations]::None return
         fi
         function_name self.recursive_groups.get_str match
             std::Option::Some(group) => group.clone
-            std::Option::None => return
+            std::Option::None => std::Option[CheckedOperations]::None return
         end = recursive
         for name in self.checking_functions.iter do
             if name recursive.has then
-                return
+                std::Option[CheckedOperations]::None return
             fi
         done
         if function_name self.recheck_inputs.has_str ! then
-            return
+            std::Option[CheckedOperations]::None return
         fi
-        true = self.settling_mutations
+        std::Option[CheckedOperations]::None = completed
+        true = self.settling_summaries
         true = changed
         while changed do
             false = changed
+            std::Map[std::String CallReturnSummary]::new = previous
+            for name in recursive.iter do
+                if name self.return_summaries.get std::Option::Some(summary) is then
+                    summary.clone name.clone previous.set
+                fi
+            done
             for name in recursive.iter do
                 if name.as_str self.function_is_rejected then
                     continue
                 fi
-                name self
-                    .return_summaries
-                    .get
-                    .unwrap
-                    .mutations
-                    .clone = previous
                 name self
                     .recheck_inputs
                     .get
@@ -2405,30 +2444,68 @@ impl SemanticChecks {
                 input.declaration.clone store.set_function
                 input.declaration.clone self.begin_function = active
                 input.infer_parameters self input.active_calls.clone
-                input.argument_callables diagnostics store active.check = checked
-                if checked.is_valid ! then
+                input.argument_callables store active.check = checked
+                if name.as_str function_name == then
+                    checked std::Option::Some = completed
+                fi
+            done
+            self.settle_return_callables
+            # Execution can expose a recursive edge that was not known in the
+            # first pass. Check its entire component before accepting callers.
+            if function_name self.recursive_groups.get_str std::Option::Some(group) is then
+                for member in group.iter do
+                    if member recursive.has ! then
+                        member.clone recursive.add
+                        true = changed
+                    fi
+                done
+            fi
+            std::List[std::String]::new = names
+            for name in recursive.iter do
+                name.clone names.push
+                if name.as_str self.function_is_rejected then
                     continue
                 fi
                 if
                     name self
-                        .return_summaries
+                        .functions
                         .get
-                        .unwrap
-                        .mutations previous mutation_summaries_equal !
+                        .unwrap FunctionWork::Provisional is
                 then
                     true = changed
                 fi
-            done
-            std::List[std::String]::new = names
-            for name in recursive.iter do
-                name.clone names.push
+                if name previous.get std::Option::Some(before) is then
+                    if name self.return_summaries.get std::Option::Some(after) is then
+                        if before after call_return_summaries_equal ! then
+                            true = changed
+                        fi
+                    fi
+                else
+                    true = changed
+                fi
             done
             names self.settle_function_rejections
         done
-        false = self.settling_mutations
-        for name in recursive.iter do
-            name self.recheck_inputs.delete
+        false = self.settling_summaries
+        # An enclosing traversal can still discover an execution edge into
+        # this component. Its saved source is released at outermost publication.
+        completed
+    }
+
+    # A function's own diagnostics stay separate from those of nested checks.
+    # Rechecking replaces them, and provisional executions publish none.
+    fn publish_diagnostics self:mut$SemanticChecks diagnostics:mut$error::Diagnostics {
+        if self.checking_functions.is_empty ! self.settling_summaries || then
+            return
+        fi
+        self.body_diagnostics.keys = names
+        for name in names.iter do
+            name self
+                .body_diagnostics
+                .remove
+                .unwrap diagnostics.merge
         done
+        std::Map[std::String FunctionCheckInput]::new = self.recheck_inputs
     }
 
     fn resolve_callables
@@ -2621,7 +2698,9 @@ impl SemanticChecks {
 
     fn solve_return_callables self:mut$SemanticChecks ready:$std::Set[std::String] {
         for reference in ready.iter do
-            std::Set[std::String]::new reference.clone self.resolved_callables.set
+            if reference self.resolved_callables.has ! then
+                std::Set[std::String]::new reference.clone self.resolved_callables.set
+            fi
         done
         true = changed
         while changed do
@@ -2673,15 +2752,8 @@ impl SemanticChecks {
             return
         fi
         ready self.solve_return_callables
-        std::List[CallableReturnDependency]::new = pending
-        self.callable_dependencies.reverse
-        while self.callable_dependencies.is_empty ! do
-            self.callable_dependencies.pop = remaining
-            if remaining.reference ready.has ! then
-                remaining pending.push
-            fi
-        done
-        pending = self.callable_dependencies
+        # Keep equations through recursive rechecks. A previously resolved
+        # reference can gain targets when an executed callable gains returns.
     }
 
     fn function_is_rejected self:$SemanticChecks name:$str -> bool {
@@ -2812,6 +2884,7 @@ impl SemanticChecks {
     }
 
     fn new -> SemanticChecks {
+        std::Map[std::String error::Diagnostics]::new
         false std::Map[std::String std::Set[std::String]]::new
         std::Map[std::String FunctionCheckInput]::new
         std::Map[std::String std::Map[std::String u64]]::new binding::BindingStore::new
@@ -3081,6 +3154,7 @@ impl TypeChecker {
         infer_parameters:bool
     -> TypeChecker {
         std::List[body_builder::Builder]::new # checked_guards
+        false # has_pending_execution
         true # facts_available
         diagnostics # diagnostics
         std::Set[std::String]::new # seen_dependencies
@@ -6279,6 +6353,72 @@ impl TypeChecker {
                 function_opt cleanup_origins origins destination self.retain_stored_origins
             done
         fi
+    }
+
+    # An unknown higher-order target may invoke callable arguments, including
+    # those held in aggregates. Such invocations can write captured sources to
+    # captured destinations even when no explicit mutable argument is present.
+    fn retain_callable_argument_writes
+        self:mut$TypeChecker
+        effect:$common::StackEffect
+        function_opt:mut$std::Option[common::Function]
+    {
+        self
+            .stack
+            .values
+            .length = depth
+        for index in effect.parameters.length 0 std::Range::new do
+            if index depth >= then
+                break
+            fi
+            depth 1 - index - = argument_index
+            # Check an inline lambda before deciding whether it can write
+            # captures. A read-only inferred lambda needs no retained writes.
+            index effect
+                .parameters
+                .get
+                .typ
+                .clone std::Option::Some
+            argument_index self.materialize_pending_lambda_at
+            argument_index self
+                .stack
+                .values
+                .get
+                .clone = argument
+            std::List[std::String]::new = visiting
+            if
+                visiting self.store BorrowShape::CallableAccess argument.type_value type_contains_borrow
+                argument.type_value.has_unresolved_type_var ||
+                argument.type_value.is_unknown_placeholder ||
+            then
+                function_opt argument self.retain_callable_capture_writes
+            fi
+        done
+    }
+
+    fn retain_callable_capture_writes
+        self:mut$TypeChecker
+        value:$TypedValue
+        function_opt:mut$std::Option[common::Function]
+    {
+        if value self.callable_preserves_capture_loans then
+            return
+        fi
+        value.place self.ownership.canonical_storage = storage
+        storage value.origins callable_capture_origins = captured_origins
+        storage value.cleanup_origins callable_capture_origins = captured_cleanup
+        if value.place std::Option::Some(place) is then
+            if place.fields.is_empty function_opt place.binding.as_str is_function_parameter && then
+                true false OriginKind::CallableCaptures place.clone Origin = destination
+                function_opt captured_cleanup captured_origins destination self.retain_stored_origins
+                return
+            fi
+        fi
+        value.clone = captured_value
+        captured_origins.clone = captured_value.origins
+        std::Option[Place]::None = captured_value.place
+        function_opt captured_cleanup captured_origins captured_value
+        self.retain_mutable_argument_origins
     }
 
     fn retain_mutable_call_origins
@@ -10747,12 +10887,9 @@ impl TypeChecker {
             fi
         elif fn_value common::OpValue::FnExec is fn_value common::OpValue::FnExecOwned is || then
             tc.stack.peek_callables tc.checks.resolve_callables = executable_callables
-            # Executing a still-pending recursive target needs deferred ownership
-            # obligations. Reject this context until those obligations are represented.
-            if executable_callables tc.checks.has_pending_callables then
-                op.location "Cannot execute a recursive callable before its return targets are established"
-                common::ErrorKind::TypeMismatch tc.diagnostics.record_error
-                false = tc.facts_available
+            executable_callables tc.checks.has_pending_callables = execution_pending
+            if execution_pending then
+                true = tc.has_pending_execution
             fi
             executable_callables.is_empty ! = precise_callable
             CallReturnSummary::new = executable_summary
@@ -10831,33 +10968,24 @@ impl TypeChecker {
                 fi
                 if effect_opt std::Option::Some(effect) is then
                     std::Map[std::String common::Type]::new = mutation_bindings
-                    if precise_callable ! then
+                    if precise_callable ! execution_pending ! && then
                         function_value.place tc.ownership.canonical_storage function_value.origins callable_capture_origins
                         = captured_origins
                         function_value.place tc.ownership.canonical_storage function_value.cleanup_origins callable_capture_origins
                         = captured_cleanup
                         function_opt captured_cleanup captured_origins
                         mutation_bindings effect tc.retain_mutable_call_origins
-                        false = deferred_capture_writes
-                        if function_value.place std::Option::Some(place) is then
-                            if place.fields.is_empty function_opt place.binding.as_str is_function_parameter && then
-                                true false OriginKind::CallableCaptures place.clone Origin = destination
-                                function_opt captured_cleanup captured_origins destination tc.retain_stored_origins
-                                true = deferred_capture_writes
-                            fi
-                        fi
-                        if deferred_capture_writes ! then
-                            function_value.clone = captured_value
-                            captured_origins.clone = captured_value.origins
-                            std::Option[Place]::None = captured_value.place
-                            function_opt captured_cleanup captured_origins captured_value
-                            tc.retain_mutable_argument_origins
-                        fi
+                        function_opt function_value tc.retain_callable_capture_writes
+                        function_opt effect tc.retain_callable_argument_writes
                     fi
                     function_opt std::Option[common::Type]::None "exec"
                     effect tc.apply_stack_effect
                     if precise_callable then
                         function_opt executable_summary tc.apply_call_return_summary
+                    else
+                        # An erased return contract cannot erase a known target's
+                        # writes through callback captures or mutable arguments.
+                        function_opt executable_summary.mutations tc.apply_mutation_summary
                     fi
                     function_value effect tc.apply_executed_function_origins
                     executable_summary.callables tc.stack.set_return_callables
@@ -13068,11 +13196,13 @@ fn ensure_checked_function
     end = function
     function checks.begin_function = active
     infer_parameters checks std::Set[std::String]::new
-    std::Map[std::String std::Set[std::String]]::new diagnostics store active.check = checked
+    std::Map[std::String std::Set[std::String]]::new store active.check = checked
     if checked.is_valid ! then
+        diagnostics checks.publish_diagnostics
         std::Option[CheckedFunction]::None return
     fi
-    diagnostics store function_name checks.settle_recursive_mutations
+    store function_name checks.settle_recursive_summaries drop
+    diagnostics checks.publish_diagnostics
     if function_name checks.function_is_rejected then
         std::Option[CheckedFunction]::None return
     fi
@@ -13104,7 +13234,6 @@ impl ActiveFunction {
     fn check
         self:ActiveFunction
         store:mut$common::SymbolStore
-        diagnostics:mut$error::Diagnostics
         argument_callables:$std::Map[std::String std::Set[std::String]]
         active_calls:std::Set[std::String]
         checks:mut$SemanticChecks
@@ -13112,7 +13241,7 @@ impl ActiveFunction {
     -> CheckedOperations {
         self match
             ActiveFunction { declaration: declaration source: source } => {
-                if checks.settling_mutations ! then
+                if declaration.name checks.recheck_inputs.has ! then
                     FunctionCheckInput {
                         declaration: declaration.clone
                         source: source.clone
@@ -13124,7 +13253,8 @@ impl ActiveFunction {
                 declaration std::Option::Some = function_opt
                 body_builder::Builder::new = operations
                 infer_parameters checks active_calls argument_callables
-                false diagnostics store function_opt operations source analyze_ops = checked
+                error::Diagnostics::new = body_diagnostics
+                false body_diagnostics store function_opt operations source analyze_ops = checked
                 checks.checking_functions.pop drop
                 function_opt.unwrap = function
                 if
@@ -13134,9 +13264,6 @@ impl ActiveFunction {
                     checked.inferred_effect.clone = function.stack_effect
                 fi
                 function.name.clone = name
-                if name checks.recursive_functions.has ! then
-                    name checks.recheck_inputs.delete
-                fi
                 if checked.is_valid then
                     store function.stack_effect checked.return_origin_summaries format_borrow_sources
                     = function.borrow_sources
@@ -13149,21 +13276,29 @@ impl ActiveFunction {
                 fi
                 function checked_function_summary = signature
                 function store.set_function
+                if checked.has_pending_execution then
+                    signature FunctionWork::Provisional name.clone checks.functions.set
+                    true = checked.is_valid
+                else
+                    body_diagnostics name.clone checks.body_diagnostics.set
+                    if checked.is_valid then
+                        store operations.into_body.unwrap = body
+                        body signature CompletedFunction FunctionWork::Completed name.clone checks.functions.set
+                    else
+                        operations RejectedBody::Partial FunctionWork::Rejected name.clone checks.functions.set
+                    fi
+                fi
                 if checked.is_valid then
-                    store operations.into_body.unwrap = body
-                    body signature CompletedFunction FunctionWork::Completed name.clone checks.functions.set
                     checked.has_raw_storage checked.mutation_summaries.clone
                     checked.return_origin_summaries.clone checked.return_callables.clone CallReturnSummary
                     = summary
-                    if checks.settling_mutations then
+                    if checks.settling_summaries then
                         if name checks.return_summaries.get std::Option::Some(previous) is then
                             previous summary TypeChecker::merge_call_return_summaries
                         fi
                     fi
                     summary name checks.return_summaries.set
                     checks.settle_return_callables
-                else
-                    operations RejectedBody::Partial FunctionWork::Rejected name checks.functions.set
                 fi
                 checked
             }
@@ -13757,15 +13892,23 @@ impl TypeChecker {
         has_raw_storage mutations origins callables CallReturnSummary
     }
 
+    fn apply_mutation_summary
+        self:mut$TypeChecker
+        mutations:$std::Map[Origin ReturnOriginSummary]
+        function_opt:mut$std::Option[common::Function]
+    {
+        for mutation in mutations.iter do
+            function_opt mutation.second.cleanup_origins mutation.second.origins
+            mutation.first self.retain_stored_origins
+        done
+    }
+
     fn apply_call_return_summary
         self:mut$TypeChecker
         summary:$CallReturnSummary
         function_opt:mut$std::Option[common::Function]
     {
-        for mutation in summary.mutations.iter do
-            function_opt mutation.second.cleanup_origins mutation.second.origins
-            mutation.first self.retain_stored_origins
-        done
+        function_opt summary.mutations self.apply_mutation_summary
         if
             summary.origins.length self
                 .stack
@@ -15016,6 +15159,7 @@ struct CheckedOperations {
     return_origin_summaries: std::List[ReturnOriginSummary]
     mutation_summaries:      std::Map[Origin ReturnOriginSummary]
     has_raw_storage:         bool
+    has_pending_execution:   bool
 }
 
 fn analyze_ops
@@ -15264,6 +15408,7 @@ fn analyze_ops
     if checker.conservative_loop_returns then
         std::List[ReturnOriginSummary]::new = checker.return_origin_summaries
     fi
+    checker.has_pending_execution
     checker.has_raw_storage checker.mutation_summaries.clone
     checker.return_origin_summaries.clone checker.return_callables.clone
     checker.ordered_facts.clone inferred
@@ -15365,8 +15510,12 @@ fn analyze_function_semantics_in_store
         .unwrap
         .clone checks.begin_function = active
     error::Diagnostics::new = diagnostics
-    infer_parameters checks active_calls argument_callables diagnostics store active.check = checked
-    diagnostics store function.name.as_str checks.settle_recursive_mutations
+    infer_parameters checks active_calls argument_callables store active.check = checked
+    store function.name.as_str checks.settle_recursive_summaries match
+        std::Option::Some(completed) => completed
+        std::Option::None => checked
+    end = checked
+    diagnostics checks.publish_diagnostics
     function.name.as_str checks
         .functions
         .get_str
@@ -15680,7 +15829,7 @@ impl TypeChecker {
             .bindings
             .declarations
             .length = identity
-        if self.checks.settling_mutations then
+        if self.checks.settling_summaries then
             for
                 index in self
                     .checks

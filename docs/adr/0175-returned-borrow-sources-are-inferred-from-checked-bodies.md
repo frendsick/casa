@@ -60,15 +60,30 @@ Capture writes from an unknown callable use its captured sources. Inferred
 callback targets can prove that an invocation leaves captured loans unchanged.
 An erased callable retains the conservative rule.
 
-Mutation summaries for a recursive component grow to a fixed point before an
-outside caller uses them. The checker repeats the symbolic checks for that
-component from the original declarations, source, and callable context. This
-also validates moves and local escapes affected by newly discovered writes.
-Source binding identities and lexical visibility remain stable across these
-passes. Recursive return summaries remain conservative.
+Callable targets and mutation summaries for a recursive component grow to a
+fixed point before an outside caller uses them. The checker repeats symbolic
+checks from the original declarations, source, and callable context when either
+summary grows. Execution can expose more call dependencies, so newly discovered
+members join the component before it settles. These checks also validate moves,
+cleanup, and local escapes affected by newly discovered writes.
 
-This is an exception to the single symbolic check in
-[ADR-0170](0170-generics-specialize-after-symbolic-checking.md). Specialization
+An execution whose targets are pending marks its body provisional and uses the
+declared stack effect for structural checking. Callable dependencies remain in
+the return-summary equations. The checker must validate ownership against
+established targets before accepting that body.
+An in-progress empty target set is distinct from a stable empty set.
+
+Each function keeps its diagnostics separate from nested function checks.
+Rechecking replaces provisional diagnostics and dependent editor facts. Independent
+source errors remain available, and a failed final ownership check cannot produce
+a checked program. Source binding identities and lexical visibility remain stable
+across passes. Recursive return summaries and explicit function contracts remain
+conservative.
+
+This extends the recursive-mutation exception to the single symbolic check in
+[ADR-0170](0170-generics-specialize-after-symbolic-checking.md) and the callable
+completion rules in
+[ADR-0173](0173-semantic-checking-owns-source-obligations.md). Specialization
 still uses the checked recipe and does not check the source again.
 
 ## Rationale

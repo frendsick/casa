@@ -263,11 +263,19 @@ borrowed callable results retain conservative input origins when a recursive
 summary is still active. Recursive callable returns retain dependencies and
 symbolic callable arguments during source checking. Once the participating
 functions publish their return equations, the checker unions possible targets
-until the summaries stop growing. Completed callers receive those targets
-without checking their source bodies again. Each return position keeps its own
-target set. Calls substitute their callable arguments into the stable summary.
-Executing a callable whose recursive targets are still pending produces a source
-error because deferred execution ownership obligations are not yet represented.
+until the summaries stop growing. Each return position keeps its own target
+set. Calls substitute their callable arguments into the stable summary.
+
+Executing a callable whose recursive targets are pending leaves the owning body
+provisional. Callable dependencies remain in the return-summary equations. The
+checker repeats the affected component's symbolic checks as callable targets or
+mutation summaries grow. Execution can add recursive call dependencies to that
+component. Its bodies are accepted only after ownership checks pass against
+stable summaries. Function diagnostics stay
+separate from nested checks, and rechecking replaces provisional diagnostics and
+dependent editor facts. Other callable-target completion preserves checked bodies
+without checking their source again. Recursive borrowed results and explicit
+function contracts retain conservative input origins.
 
 Independent function-analysis queries create their own source snapshots. Session
 consumers request completed declarations and borrow checked bodies without

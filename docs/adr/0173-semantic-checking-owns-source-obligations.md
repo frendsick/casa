@@ -159,8 +159,11 @@ Callable effect and return-summary computation uses constraints recorded
 during the single source-body traversal. Calls whose recursive return facts
 are not yet known retain summary dependencies and ownership obligations.
 After the summaries stabilize, the checker discharges those obligations
-against the final facts before accepting the recipe. It does not parse or
-typecheck the body again. The summary key includes declaration identity,
+against the final facts before accepting the recipe. Recursive callable execution
+and stored-borrow mutations use the component rechecking exception in
+[ADR-0175](0175-returned-borrow-sources-are-inferred-from-checked-bodies.md).
+Other callable-target completion does not check source bodies again.
+The summary key includes declaration identity,
 relevant trait
 implementation identity, complete type and constant bindings, and the
 callable-target sets bound to input parameters. The summary has a finite
