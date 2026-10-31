@@ -176,8 +176,8 @@ return no result until it analyzes again.
 - Completion is broad. The editor performs prefix filtering.
 - Dot completion does not support every arbitrary expression.
 - There are no code actions, range formatting, or on-type formatting requests.
-- Type rename remains unavailable until signature and field type references have
-  complete coverage.
+- Type rename remains unavailable. Struct and enum references cover written type
+  names but still report partial coverage.
 - Rename validation is conservative. Syntax failures or diagnostics in a required
   root can prevent rename even when some references remain queryable.
 - An open document whose imports report diagnostics gets no import reuse. Each

@@ -538,6 +538,8 @@ impl ProjectionSymbol {
     }
 }
 
+# A qualified name splits at its last `::`. The type part excludes module prefixes.
+# Members after explicit type arguments already have their own token location.
 fn get_symbol_location source:$str op:$ProjectionOperation part:$SymbolPart -> common::Location {
     if part SymbolPart::Whole is then
         op.location.clone return
@@ -546,20 +548,20 @@ fn get_symbol_location source:$str op:$ProjectionOperation part:$SymbolPart -> c
         .location
         .span
         .offset = start
-    op
+    source start op
         .location
         .span
-        .length = length
-    source start length str::substring.as_str "::" str::find = separator
-    separator u64::try_from.unwrap = separator_index
+        .length str::substring = spelling
+    spelling.as_str common::path_name_spans = spans
+    spans
+        .qualifier
+        .clone
+        .unwrap = type_span
+    spans.name copy = member_span
     part copy match
-        SymbolPart::TypeName => separator_index start op.location.with_span
-        SymbolPart::Separator => 2 start separator_index + op.location.with_span
-        SymbolPart::MemberName => {
-            length separator_index - 2 -
-            start separator_index + 2 +
-            op.location.with_span
-        }
+        SymbolPart::TypeName => type_span.length start type_span.offset + op.location.with_span
+        SymbolPart::Separator => 2 start member_span.offset + 2 - op.location.with_span
+        SymbolPart::MemberName => member_span.length start member_span.offset + op.location.with_span
         SymbolPart::Whole => op.location.clone
     end
 }
@@ -665,12 +667,13 @@ pub fn infer_literal_type text:$str -> std::Option[common::Type] {
     std::Option[common::Type]::None
 }
 
+# A qualified struct name has no member. Its module prefix is not a type.
 fn is_qualified_operation source:$str op:$ProjectionOperation -> bool {
     if
         0 op
             .location
             .span
-            .length ==
+            .length == op.value semantic_body::OccurrenceValue::StructNew is ||
     then
         false return
     fi
@@ -926,6 +929,18 @@ impl IndexBuilder {
 
     pub fn find_semantic_tokens self:$IndexBuilder -> std::List[DocumentToken] {
         std::List[DocumentToken]::new = tokens
+        for
+            reference in self
+                .store
+                .type_references
+                .iter
+        do
+            if reference.location.file self.file_path == then
+                if reference.name.as_str self.find_type_symbol.is_some then
+                    reference.location self.locate DocumentTokenKind::Type DocumentToken tokens.push
+                fi
+            fi
+        done
         tokens self.root_occurrences self.collect_operation_tokens
         for function_name in self.collect_document_functions.iter do
             function_name.as_str self.lookup_function.unwrap = function
@@ -1694,7 +1709,7 @@ impl IndexBuilder {
     -> std::Option[common::Location] {
         variant.enum_name.as_str self.lookup_enum = enum_result
         if enum_result std::Option::Some(casa_enum) is then
-            if symbol.part SymbolPart::MemberName is then
+            if symbol.part SymbolPart::TypeName is ! then
                 variant.variant_name casa_enum.variant_locations.get = variant_location
                 if variant_location std::Option::Some(location) is then
                     location.clone std::Option::Some return
@@ -1894,17 +1909,10 @@ impl IndexBuilder {
                     location identity.declaration.matches = declaration
                 fi
             fi
-            location.span.length = reference_length
-            location.span.offset = reference_offset
-            if '&' reference_offset source.at.unwrap == then
-                1 += reference_offset
-                1 -= reference_length
-            fi
-            source.as_str reference_offset reference_length str::substring.as_str "[" str::find = type_arguments
-            if 0 type_arguments <= then
-                type_arguments u64::try_from.unwrap = reference_length
-            fi
-            reference_length reference_offset declaration symbol definition element self.format_hover location self.locate
+            source.as_str location.span.offset location.span.length str::substring.as_str
+            common::path_name_spans.name copy = name_span
+            location.span.offset name_span.offset + = reference_offset
+            name_span.length reference_offset declaration symbol definition element self.format_hover location self.locate
             Occurrence index.occurrences.push
         fi
     }
@@ -2143,6 +2151,34 @@ impl IndexBuilder {
         done
     }
 
+    # Written type names that resolve to a struct or enum answer definition and
+    # references. They omit hover text, which would copy the declaration's hover to
+    # every use. Body occurrences come first, so they keep any position both claim.
+    fn project_type_references
+        self:$IndexBuilder
+        index:mut$EditorIndex
+        imported_files:$std::Set[std::String]
+    {
+        for
+            reference in self
+                .store
+                .type_references
+                .iter
+        do
+            if reference.location.file imported_files.has then
+                continue
+            fi
+            if reference.name.as_str self.find_type_symbol std::Option::Some(symbol) is then
+                reference.location.span = span
+                span.length span.offset false symbol.project std::Option::Some
+                symbol.declaration self.locate std::Option::Some
+                std::Option[std::String]::None
+                reference.location self.locate
+                Occurrence index.occurrences.push
+            fi
+        done
+    }
+
     fn project_file self:mut$IndexBuilder file:$std::String index:mut$EditorIndex {
         file.clone = self.file_path
         file self
@@ -2184,6 +2220,7 @@ impl IndexBuilder {
             fi
         done
         imports.types imports.functions index self.project_facts
+        imports.files index self.project_type_references
         imports.bindings index self.project_bindings
         imports.index index.append_copy
         # Move the retained text and index. The temporary compiler maps are destroyed here.
@@ -2715,7 +2752,7 @@ impl EditorIndex {
         self:$EditorIndex
         symbol:$DocumentSymbol
     -> std::Option[QueryReason] {
-        # Signature and field type occurrences are not represented yet.
+        # Rename does not validate type references yet.
         if symbol.kind DocumentSymbolKind::Struct == symbol.kind DocumentSymbolKind::Enum == || then
             QueryReason::MissingSemanticFact std::Option::Some return
         fi

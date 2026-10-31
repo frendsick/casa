@@ -213,6 +213,65 @@ def check_imported_diagnostics(binary):
             server.close()
 
 
+def check_type_references(binary):
+    """Type references cover declarations, bodies, and qualified uses in importing files."""
+    with tempfile.TemporaryDirectory(prefix="casa-type-references-") as temporary:
+        root = Path(temporary)
+        shapes = root / "shapes.casa"
+        user = root / "user.casa"
+        shapes.write_text("pub struct Point { pub x: i64 }\n"
+                          "impl Point { pub fn get self:$Point -> i64 { self.x } }\n")
+        user.write_text('import "shapes.casa" as shapes\n'
+                        "fn shadow[Point] v:Point -> Point { v }\n"
+                        "fn read point:mut$shapes::Point -> i64 { point shapes::Point::get }\n"
+                        "shapes::Point { x: 1 } match shapes::Point { x: x } => x drop end\n")
+        server = Server(binary, root)
+        try:
+            response = server.query("references", shapes, 0, 11, context={"includeDeclaration": True})
+            ranges = sorted((item["uri"].rsplit("/", 1)[1], item["range"]["start"]["line"],
+                             item["range"]["start"]["character"], item["range"]["end"]["character"])
+                            for item in response["result"])
+            assert ranges == [
+                ("shapes.casa", 0, 11, 16), ("shapes.casa", 1, 5, 10), ("shapes.casa", 1, 30, 35),
+                ("user.casa", 2, 26, 31), ("user.casa", 2, 55, 60), ("user.casa", 3, 8, 13),
+                ("user.casa", 3, 37, 42),
+            ], ranges
+            # Type rename stays refused until rename accepts struct and enum coverage.
+            assert "error" in server.query("rename", shapes, 0, 11, newName="Vector")
+        finally:
+            server.close()
+
+
+def check_member_trivia_rename(binary):
+    """Rename uses member tokens even when trivia separates associated names."""
+    with tempfile.TemporaryDirectory(prefix="casa-member-trivia-") as temporary:
+        root = Path(temporary)
+        source = root / "members.casa"
+        text = ("struct Boxed[T] { inner: T }\n"
+                "impl[T] Boxed[T] { fn new inner:T -> Boxed[T] { inner Boxed } }\n"
+                "1 Boxed[i64]\n::new drop\n"
+                "1 Boxed[i64]:: # comment\nnew drop\n"
+                "1 Boxed[ # ] in comment\ni64]::new drop\n"
+                "1 &Boxed[i64]:: # reference comment\nnew exec drop\n")
+        source.write_text(text)
+        server = Server(binary, root)
+        try:
+            response = server.query("rename", source, 1, text.splitlines()[1].index("new"), newName="make")
+            assert "error" not in response, response
+            changes = response["result"]["documentChanges"]
+            assert len(changes) == 1, changes
+            edits = changes[0]["edits"]
+            assert len(edits) == 5, edits
+            lines = text.splitlines()
+            for edit in edits:
+                start, end = edit["range"]["start"], edit["range"]["end"]
+                assert start["line"] == end["line"], edit
+                assert lines[start["line"]][start["character"]:end["character"]] == "new", edit
+                assert edit["newText"] == "make", edit
+        finally:
+            server.close()
+
+
 def check_formatting(binary):
     """Formatting returns one whole-document casafmt edit, or no edit when casafmt rejects the text."""
     with tempfile.TemporaryDirectory(prefix="casa-formatting-") as temporary:
@@ -410,6 +469,8 @@ def main(binary):
     check_malformed_messages(binary)
     check_query_reuse(binary)
     check_imported_diagnostics(binary)
+    check_type_references(binary)
+    check_member_trivia_rename(binary)
     check_formatting(binary)
     print("LSP transport and workspace tests passed")
 
