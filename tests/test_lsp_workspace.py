@@ -250,6 +250,26 @@ def check_type_references(binary):
             server.close()
 
 
+def check_derived_trait_definition(binary):
+    with tempfile.TemporaryDirectory(prefix="casa-derived-trait-") as temporary:
+        root = Path(temporary)
+        library = Path(__file__).resolve().parent.parent / "lib" / "std.casa"
+        (root / "std.casa").write_text(library.read_text())
+        source = root / "derived.casa"
+        text = 'import "std"\nstruct Item derives std::Clone { value: i64 }\n'
+        source.write_text(text)
+        server = Server(binary, root)
+        try:
+            server.open(source, text)
+            response = server.query("definition", source, 1, text.splitlines()[1].index("Clone"))
+            target = response["result"]
+            assert target["uri"].endswith("/std.casa"), response
+            line = library.read_text().splitlines()[target["range"]["start"]["line"]]
+            assert line.startswith("pub trait Clone"), line
+        finally:
+            server.close()
+
+
 def check_type_rename_collisions(binary):
     with tempfile.TemporaryDirectory(prefix="casa-type-rename-") as temporary:
         root = Path(temporary)
@@ -529,6 +549,7 @@ def main(binary):
     check_query_reuse(binary)
     check_imported_diagnostics(binary)
     check_type_references(binary)
+    check_derived_trait_definition(binary)
     check_type_rename_collisions(binary)
     check_variant_pattern_rename(binary)
     check_member_trivia_rename(binary)

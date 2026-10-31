@@ -596,12 +596,21 @@ fn collect_reference_ranges
 pub const SHAPES_FILE "/tmp/editor_type_shapes.casa"
 pub const SHAPES_SOURCE "pub struct Point { pub x: i64 pub y: i64 }\nimpl Point { pub fn norm self:$Point -> i64 { self.x self.y + } }\npub enum Shape { Circle(i64) Square(Point) }"
 
-# Analyze `source` with `SHAPES_SOURCE` importable from `SHAPES_FILE`.
-fn make_shapes_document source:$str -> products::AnalysisSnapshot {
+# Analyze `source` with `module_source` importable from `module_file`.
+fn make_module_document
+    source:$str
+    module_file:$str
+    module_source:$str
+-> products::AnalysisSnapshot {
     source.to_str DOCUMENT_TEST_FILE.to_str products::SourceUnit
     "" lexer::absolute_normalize_path swap products::CompilationInput::new = input
-    SHAPES_SOURCE.to_str SHAPES_FILE.to_str input.source_overrides.set
+    module_source.to_str module_file.to_str input.source_overrides.set
     input products::analyze.unwrap
+}
+
+# Analyze `source` with `SHAPES_SOURCE` importable from `SHAPES_FILE`.
+fn make_shapes_document source:$str -> products::AnalysisSnapshot {
+    SHAPES_SOURCE SHAPES_FILE source make_module_document
 }
 
 # Each range in `file` spells `name` in `source`.
@@ -838,6 +847,56 @@ fn test_enum_variant_pattern_references {
         document::PointAnswer::Known(hover) => "pattern variant hover" "Leaf::Plain" hover.content test::assert_str_eq
         _ => "pattern variant hover available" false test::assert_true
     end
+}
+pub const TRAIT_SITES_SOURCE "struct Box[T] { value: T }\nstruct Plain { value: i64 }\ntrait Tagged { fn tag self:self -> i64 }\ntrait Labeled: Tagged { fn label self:self -> i64 { self Tagged::tag } }\ntrait Convert[T] { fn convert self:self -> T }\nimpl Box[i64]: Tagged { fn tag self:Box[i64] -> i64 { self drop 1 } }\nimpl Box[i64]: Labeled {}\nimpl Plain: Tagged + Convert[i64] { fn tag self:Plain -> i64 { self.value } fn convert self:Plain -> i64 { self.value } }\nimpl[T: Tagged] Box[T]: Convert[i64] { fn convert self:Box[T] -> i64 { self match Box { value: v } => v.tag end } }\nfn show[T: Tagged + Convert[i64]] value:T -> i64 { value Tagged::tag }\n1 Box Box[i64]::Tagged::tag drop\n2 Plain Tagged::tag drop\n3 Plain Plain::Tagged::tag drop\n5 Plain Plain::tag drop\n&Box[i64]::Tagged::tag drop\n4 Plain Convert[i64]::convert drop\n&Plain::Convert[i64]::convert drop"
+
+fn test_trait_name_references {
+    "trait_name_references" test::test_start
+    TRAIT_SITES_SOURCE make_analyzed_document = snapshot
+    "valid trait site source" snapshot.is_incomplete ! test::assert_true
+    snapshot.get_index = index
+    "" "Tagged" TRAIT_SITES_SOURCE find_word_offsets = offsets
+    "every listed trait site" 12 offsets.length test::assert_eq
+    0 offsets.get copy = declaration
+    declaration DOCUMENT_TEST_FILE index collect_reference_ranges = ranges
+    "only trait uses" offsets.length ranges.length test::assert_eq
+    6 offsets DOCUMENT_TEST_FILE 0 ranges assert_reference_ranges
+    for offset in offsets.iter do
+        offset copy DOCUMENT_TEST_FILE index.find_definition match
+            document::PointAnswer::Known(location) => f"trait use at {offset} defines the trait" declaration location.offset test::assert_eq
+            _ => f"trait use at {offset} has a definition" false test::assert_true
+        end
+    done
+    declaration DOCUMENT_TEST_FILE index.find_hover match
+        document::PointAnswer::Known(hover) => "trait declaration hover" "trait Tagged { tag }" hover.content test::assert_str_eq
+        _ => "trait declaration hover available" false test::assert_true
+    end
+    "" "Convert" TRAIT_SITES_SOURCE find_word_offsets = convert_offsets
+    "every listed generic trait site" 6 convert_offsets.length test::assert_eq
+    0 convert_offsets.get DOCUMENT_TEST_FILE index collect_reference_ranges = convert_ranges
+    "generic trait uses" convert_offsets.length convert_ranges.length test::assert_eq
+    7 convert_offsets DOCUMENT_TEST_FILE 0 convert_ranges assert_reference_ranges
+    TRAIT_SITES_SOURCE "struct Plain" str::find u64::try_from.unwrap 7 + = plain
+    "Plain" TRAIT_SITES_SOURCE DOCUMENT_TEST_FILE plain DOCUMENT_TEST_FILE index collect_reference_ranges assert_ranges_spell
+    "trait references stay incomplete until rename accepts them"
+    true declaration DOCUMENT_TEST_FILE index.find_references document::ReferenceAnswer::Incomplete is test::assert_true
+}
+pub const TRAIT_MODULE_FILE "/tmp/editor_trait_module.casa"
+pub const TRAIT_MODULE_SOURCE "pub trait Tagged { fn tag self:self -> i64 }\npub struct Item { pub value: i64 }\nimpl Item: Tagged { pub fn tag self:Item -> i64 { self.value } }"
+pub const TRAIT_USER_SOURCE "import \"/tmp/editor_trait_module.casa\" as traits\nstruct Local { value: i64 }\nimpl Local: traits::Tagged { fn tag self:Local -> i64 { self.value } }\nfn show[T: traits::Tagged] value:T -> i64 { value traits::Tagged::tag }\n1 Local traits::Tagged::tag drop"
+
+fn test_qualified_trait_name_references {
+    "qualified_trait_name_references" test::test_start
+    TRAIT_MODULE_SOURCE TRAIT_MODULE_FILE TRAIT_USER_SOURCE make_module_document = snapshot
+    "valid qualified trait source" snapshot.is_incomplete ! test::assert_true
+    snapshot.get_index = index
+    "" "Tagged" TRAIT_USER_SOURCE find_word_offsets = user_offsets
+    "" "Tagged" TRAIT_MODULE_SOURCE find_word_offsets = declared_offsets
+    "every qualified trait site" 4 user_offsets.length test::assert_eq
+    10 TRAIT_MODULE_FILE index collect_reference_ranges = ranges
+    "user and declaring file uses" user_offsets.length declared_offsets.length + ranges.length test::assert_eq
+    6 user_offsets DOCUMENT_TEST_FILE 0 ranges assert_reference_ranges
+    6 declared_offsets TRAIT_MODULE_FILE user_offsets.length ranges assert_reference_ranges
 }
 pub const SHAPES_USER_SOURCE "import \"/tmp/editor_type_shapes.casa\" as shapes\nfn origin -> shapes::Point { 0 0 shapes::Point }\nfn length point:$shapes::Point -> i64 { point shapes::Point::norm }\nfn area shape:shapes::Shape -> i64 { shape match shapes::Shape::Circle(radius) => radius shapes::Shape::Square(_) => 0 end }\nshapes::Point { x: 1 y: 2 } match shapes::Point { x: x } => x drop end\n1 shapes::Shape::Circle area drop"
 
@@ -1478,6 +1537,8 @@ pub fn run_tests {
     test_struct_type_name_references
     test_enum_type_name_references
     test_enum_variant_pattern_references
+    test_trait_name_references
+    test_qualified_trait_name_references
     test_qualified_type_name_references
     test_source_generic_hover
     test_aliased_type_hover_uses_source_names

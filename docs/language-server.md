@@ -80,7 +80,7 @@ request types find the same libraries.
 | Feature | Behavior |
 |---|---|
 | Completion | Names, keywords, intrinsics, dot methods, and qualified names |
-| Definition | Functions, bindings, structs, enum variants, and qualified methods |
+| Definition | Functions, bindings, structs, enum variants, traits, and qualified methods |
 | Diagnostics | Analyze on open and full-document change, and on save or local editor queries after inputs change |
 | Formatting | Whole-document `casafmt` result for the open text |
 | Hover | Types and stack effects for symbols, literals, operators, and intrinsics |
@@ -176,6 +176,7 @@ return no result until it analyzes again.
 - Completion is broad. The editor performs prefix filtering.
 - Dot completion does not support every arbitrary expression.
 - There are no code actions, range formatting, or on-type formatting requests.
+- Trait rename remains unavailable. Trait references report partial coverage.
 - Rename validation is conservative. Syntax failures or diagnostics in a required
   root can prevent rename even when some references remain queryable.
 - An open document whose imports report diagnostics gets no import reuse. Each

@@ -352,6 +352,17 @@ these recorded ranges for references and highlighting, including when comments
 or newlines separate the arguments and member.
 Type references use the same coverage and rename validation as other top-level symbols.
 
+Trait names use the same type references. They cover trait bounds, supertraits,
+`impl` headers, `derives` clauses, and trait-qualified calls such as `Tagged::tag`,
+`Plain::Tagged::tag`, `Convert[i64]::convert`, and `&Token::Convert[i64]::convert`.
+A checked generic call keeps no trait name, so resolution retains the written trait
+segment of `Tagged::tag`. A qualified call resolves to a name such as
+`Plain::Tagged::tag` whether its source spells `Plain::tag`, `Tagged::tag`, or
+`Plain::Tagged::tag`. Projection selects the receiver or trait whose source name
+matches the written segment before the member. When a call spells both, as in
+`Plain::Tagged::tag`, the receiver segment has no type reference. Trait references report incomplete
+coverage, and rename must reject them.
+
 `workspace.casa` aggregates owned answers across fresh snapshots, retains exact
 source revisions, and validates proposed rename bindings through reanalysis.
 Workspace discovery and LSP document versions stay outside the compiler products.
