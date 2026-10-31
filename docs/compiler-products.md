@@ -340,6 +340,9 @@ resolved to. This covers signature, field, variant payload, receiver, binding, a
 type-argument annotations, struct literals and patterns, and enum variant patterns.
 A generic parameter that shadows a type name resolves to the parameter and adds no
 type reference. These names answer definition and references without hover text.
+An enum variant pattern, including the pattern of an `is` check, also retains its
+variant name. That name answers definition, references, and the same
+`Enum::Variant` hover as a variant expression.
 Reference ranges exclude borrow sigils, module prefixes, and type arguments. A
 qualified body name splits at its last `::`, so `Point` is the type in
 `shapes::Point::norm`. In an associated name with explicit type arguments, such
