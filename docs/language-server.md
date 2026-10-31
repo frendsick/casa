@@ -136,9 +136,11 @@ and token facts available. Partial completion lists set `isIncomplete`.
 Completion edits replace the selected identifier range.
 References discover Casa files beneath `workspaceFolders` or `rootUri` on demand,
 including unopened files and unsaved documents. No manifest is required. Directory
-symlinks are not traversed. Add absolute files or directories to the initialization
-option `excludePaths` to exclude them from discovery. Imported sources still
-participate when required by an included root.
+symlinks are not traversed. File symlinks include their resolved targets, and
+references and edits use the resolved file URI. These targets are writable for
+rename when their file permissions allow it. Add absolute files or directories
+to the initialization option `excludePaths` to exclude them from discovery.
+Imported sources still participate when required by an included root.
 
 Requests analyze current open text and disk sources, correlate declaration ranges
 and exact source revisions, and deduplicate uses. Incomplete discovery, failed

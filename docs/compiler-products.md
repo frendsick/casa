@@ -29,9 +29,10 @@ failures. Process termination and allocation failure are excluded.
 ordered library paths, and source overrides. Relative file identities, library
 paths, and override keys resolve against that base without changing the process
 directory. Root text takes precedence over overrides for the root file. Import overrides take
-precedence over disk text. Override keys for the same normalized non-root file
-must have identical text. Root overrides are ignored. Casa's path-style and
-module-style search rules apply.
+precedence over disk text. Existing files use absolute identities with symlinks
+resolved. Missing files use normalized absolute identities. Override keys for the
+same non-root file, including symlink aliases, must have identical text. Root
+overrides are ignored. Casa's path-style and module-style search rules apply.
 
 Reports expose shared borrows through `get_diagnostics` and `get_sources`, with
 diagnostics in front-end order and exact root and loaded import text, including

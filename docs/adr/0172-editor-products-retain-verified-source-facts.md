@@ -164,12 +164,15 @@ those buffers.
 
 ## Source identity and repeated edits
 
-Use the same file identity rules for roots, imports, and overrides: normalized
-absolute paths, resolved against the request's captured base directory.
-Preserve case and normalize `.` and `..` after combining relative paths with
-that base. Identity does not require filesystem existence or `realpath`, so
-unsaved files work. Symlink spellings remain distinct identities. The LSP owns
-URI conversion, including escaping, outside the compiler.
+Use the same file identity rules for roots, imports, and overrides: absolute
+paths with symlinks resolved against the request's captured base directory.
+Preserve case. Resolve symlinks before processing `..`. Missing files keep
+normalized absolute paths, so unsaved files work. Linux resolution uses
+`/proc/self/fd` and falls back to lexical normalization if it is unavailable.
+The LSP owns URI conversion, including escaping, outside the compiler. Discovery
+includes a file symlink's resolved target and uses one identity for references
+and edits. A discovered file symlink includes its target in the writable
+workspace, subject to the target's file permissions.
 
 Normalize override keys before lookup. Root input is authoritative for its
 identity. Identical non-root aliases may coalesce. Reject conflicting override
