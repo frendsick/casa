@@ -72,24 +72,35 @@ pub struct HoverContent {
     pub range:   LspRange
 }
 
+# Diagnostics of one analysis, split by the file of their primary location.
+pub struct AnalysisDiagnostics {
+    # The analyzed document's diagnostics and request-level diagnostics without a location.
+    pub root:     std::List[LspDiagnostic]
+    # Diagnostics located in imported files, by file path.
+    pub imported: std::Map[std::String std::List[LspDiagnostic]]
+}
+
 pub struct CompileResult {
     pub document:    products::AnalysisSnapshot
-    pub diagnostics: std::List[LspDiagnostic]
+    pub diagnostics: AnalysisDiagnostics
 }
 
 pub struct LspState {
-    pub library_paths:   std::List[std::String]
-    pub open_documents:  std::Map[std::String products::AnalysisSnapshot]
+    pub library_paths:        std::List[std::String]
+    pub open_documents:       std::Map[std::String products::AnalysisSnapshot]
     # Reusable import analyses by open document path.
-    pub analysis_caches: std::Map[std::String products::AnalysisCache]
-    pub workspace:       workspace::Workspace
-    pub versions:        std::Map[std::String i64]
-    pub versioned_edits: bool
-    pub reader:          io::StdinReader
+    pub analysis_caches:      std::Map[std::String products::AnalysisCache]
+    # Imported-file diagnostics of each open document's latest analysis, by
+    # document path and then by imported file path.
+    pub imported_diagnostics: std::Map[std::String std::Map[std::String std::List[LspDiagnostic]]]
+    pub workspace:            workspace::Workspace
+    pub versions:             std::Map[std::String i64]
+    pub versioned_edits:      bool
+    pub reader:               io::StdinReader
 }
 
 impl CompileResult {
-    pub fn into_parts self:CompileResult -> products::AnalysisSnapshot std::List[LspDiagnostic] {
+    pub fn into_parts self:CompileResult -> products::AnalysisSnapshot AnalysisDiagnostics {
         self match
             CompileResult { document: document diagnostics: diagnostics } => document diagnostics
         end
@@ -102,6 +113,7 @@ impl LspState {
             library_paths: std::List[std::String]::new
             open_documents: std::Map[std::String products::AnalysisSnapshot]::new
             analysis_caches: std::Map[std::String products::AnalysisCache]::new
+            imported_diagnostics: std::Map[std::String std::Map[std::String std::List[LspDiagnostic]]]::new
             workspace: workspace::Workspace::new
             versions: std::Map[std::String i64]::new
             versioned_edits: false
@@ -580,7 +592,7 @@ fn make_document_input
 fn analyze_document
     input:products::CompilationInput
     cache:mut$products::AnalysisCache
--> std::Result[CompileResult std::List[LspDiagnostic]] {
+-> std::Result[CompileResult AnalysisDiagnostics] {
     input
         .root
         .file
@@ -602,7 +614,7 @@ pub fn compile_document
     file_path:$str
     source:$str
     open_docs:$std::Map[std::String products::AnalysisSnapshot]
--> std::Result[CompileResult std::List[LspDiagnostic]] {
+-> std::Result[CompileResult AnalysisDiagnostics] {
     std::List[std::String]::new = library_paths
     products::AnalysisCache::new = cache
     cache library_paths open_docs source file_path make_document_input analyze_document
@@ -612,14 +624,14 @@ pub fn ingest_document_into
     uri:$str
     source:$str
     open_docs:std::Map[std::String products::AnalysisSnapshot]
--> std::List[LspDiagnostic] std::Map[std::String products::AnalysisSnapshot] {
+-> AnalysisDiagnostics std::Map[std::String products::AnalysisSnapshot] {
     uri uri_to_path = path
     open_docs source path.as_str compile_document uri open_docs store_compile_result = diagnostics
     diagnostics
     open_docs
 }
 
-pub fn ingest_document uri:$str source:$str state:mut$LspState -> std::List[LspDiagnostic] {
+pub fn ingest_document uri:$str source:$str state:mut$LspState -> AnalysisDiagnostics {
     uri uri_to_path = path
     source.to_str path.clone state
         .workspace
@@ -636,8 +648,8 @@ pub fn ingest_document uri:$str source:$str state:mut$LspState -> std::List[LspD
 fn store_compile_result
     open_docs:mut$std::Map[std::String products::AnalysisSnapshot]
     uri:$str
-    result:std::Result[CompileResult std::List[LspDiagnostic]]
--> std::List[LspDiagnostic] {
+    result:std::Result[CompileResult AnalysisDiagnostics]
+-> AnalysisDiagnostics {
     result match
         std::Result::Ok(compiled) => {
             compiled.into_parts = diagnostics = document
@@ -684,19 +696,75 @@ impl LspState {
         path.as_str self.analysis_caches find_analysis_cache = cache
         cache input analyze_document
         uri self.open_documents store_compile_result = diagnostics
-        diagnostics uri publish_diagnostics
+        diagnostics uri self.publish_analysis
+    }
+
+    # Publishes one analysis of the open document `uri`. Its imported-file
+    # diagnostics replace this document's earlier ones.
+    fn publish_analysis self:mut$LspState uri:$str diagnostics:AnalysisDiagnostics {
+        diagnostics match
+            AnalysisDiagnostics { root: root imported: imported } => root imported
+        end = imported = root
+        root uri publish_diagnostics
+        uri uri_to_path = path
+        # Files that had or have diagnostics from this document.
+        std::Set[std::String]::new = files
+        for file in imported.iter_keys do
+            file.clone files.add
+        done
+        if path.as_str self.imported_diagnostics.get_str std::Option::Some(previous) is then
+            for file in previous.iter_keys do
+                file.clone files.add
+            done
+        fi
+        imported path self.imported_diagnostics.set
+        for file in files.iter do
+            file.as_str self.publish_imported
+        done
+    }
+
+    # An open file publishes only its own analysis. Otherwise, publish the
+    # diagnostics that open importers report for it, once each.
+    fn publish_imported self:$LspState path:$str {
+        if
+            path self
+                .workspace
+                .overrides
+                .has_str
+        then
+            return
+        fi
+        std::Set[std::String]::new = seen
+        std::List[json::JsonValue]::new = json_array
+        for contribution in self.imported_diagnostics.iter do
+            if path contribution.second.get_str std::Option::Some(diagnostics) is then
+                for diagnostic in diagnostics.iter do
+                    if diagnostic.to_json std::Option::Some(value) is then
+                        value.clone json::json_serialize = key
+                        if key seen.has ! then
+                            key seen.add
+                            value json_array.push
+                        fi
+                    fi
+                done
+            fi
+        done
+        json_array path path_to_uri.as_str send_diagnostics
     }
 }
 
-pub fn diagnostics_from report:$products::Report path:$str -> std::List[LspDiagnostic] {
-    std::List[LspDiagnostic]::new = diagnostics
+# Diagnostics without a location stay with the analyzed document at `path`.
+pub fn diagnostics_from report:$products::Report path:$str -> AnalysisDiagnostics {
+    std::List[LspDiagnostic]::new = root
+    std::Map[std::String std::List[LspDiagnostic]]::new = imported
     0 = index: u64
     while index report.count_diagnostics < do
         index report.get_presentation = presentation
         1 += index
+        std::Option[std::String]::None = imported_file
         if presentation.location std::Option::Some(location) is then
             if location.file.as_str path != then
-                continue
+                location.file.clone std::Option::Some = imported_file
             fi
             location report.get_sources convert_location_to_lsp_range std::Option::Some
         else
@@ -712,23 +780,34 @@ pub fn diagnostics_from report:$products::Report path:$str -> std::List[LspDiagn
         else
             std::List[LspDiagnosticRelatedInformation]::new
         fi = related_information
-        related_information presentation.code severity message range LspDiagnostic diagnostics.push
+        related_information presentation.code severity message range LspDiagnostic = diagnostic
+        if imported_file std::Option::Some(file) is then
+            if file imported.has ! then
+                std::List[LspDiagnostic]::new file.clone imported.set
+            fi
+            diagnostic file imported
+                .get_mut
+                .unwrap
+                .push
+        else
+            diagnostic root.push
+        fi
     done
-    diagnostics
+    imported root AnalysisDiagnostics
 }
 
 # The failure becomes a request-level diagnostic beside any accumulated source diagnostics.
 pub fn diagnostics_from_failure
     failure:$products::CompilerFailure
     path:$str
--> std::List[LspDiagnostic] {
+-> AnalysisDiagnostics {
     path failure.get_report diagnostics_from = diagnostics
     std::List[LspDiagnosticRelatedInformation]::new
     "INTERNAL_COMPILER_ERROR"
     DIAGNOSTIC_ERROR
     failure.get_message.clone
     std::Option[LspRange]::None
-    LspDiagnostic diagnostics.push
+    LspDiagnostic diagnostics.root.push
     diagnostics
 }
 
@@ -775,9 +854,13 @@ pub fn publish_diagnostics uri:$str diagnostics:std::List[LspDiagnostic] {
             diagnostic.to_message_json "window/showMessage" send_notification
         fi
     done
+    json_array uri send_diagnostics
+}
+
+fn send_diagnostics uri:$str diagnostics:std::List[json::JsonValue] {
     json::json_object
     "uri".to_str uri.to_str json::JsonValue::JsonString json::json_set
-    "diagnostics".to_str json_array json::JsonValue::JsonArray json::json_set
+    "diagnostics".to_str diagnostics json::JsonValue::JsonArray json::json_set
     json::JsonValue::JsonObject = params
     params "textDocument/publishDiagnostics" send_notification
 }
@@ -846,7 +929,7 @@ pub fn handle_did_open message:$json::JsonValue state:mut$LspState {
         uri.as_str uri_to_path.as_str state.versions.remove_str drop
     fi
     state text.as_str uri.as_str ingest_document = diagnostics
-    diagnostics uri.as_str publish_diagnostics
+    diagnostics uri.as_str state.publish_analysis
 }
 
 pub fn handle_did_change message:$json::JsonValue state:mut$LspState {
@@ -882,7 +965,7 @@ pub fn handle_did_change message:$json::JsonValue state:mut$LspState {
         uri.as_str uri_to_path.as_str state.versions.remove_str drop
     fi
     state text.as_str uri.as_str ingest_document = diagnostics
-    diagnostics uri.as_str publish_diagnostics
+    diagnostics uri.as_str state.publish_analysis
 }
 
 pub fn handle_did_save message:$json::JsonValue state:mut$LspState {
@@ -909,6 +992,22 @@ pub fn handle_did_close message:$json::JsonValue state:mut$LspState {
     path.as_str state.analysis_caches.remove_str drop
     uri.as_str state.open_documents.remove_str drop
     1 += state.workspace.generation
+    std::Set[std::String]::new = files
+    path.clone files.add
+    if path.as_str state.imported_diagnostics.remove_str std::Option::Some(previous) is then
+        for file in previous.iter_keys do
+            file.clone files.add
+        done
+    fi
+    # Importers that analyzed the closed document's unsaved text analyze it again.
+    state.open_documents.keys = importers
+    for importer in importers.iter do
+        importer.as_str state.refresh_document
+    done
+    # The closed document and its imports keep only what open importers report.
+    for file in files.iter do
+        file.as_str state.publish_imported
+    done
 }
 
 # Go-to-definition handler

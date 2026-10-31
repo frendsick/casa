@@ -96,6 +96,17 @@ Diagnostics without a primary source location appear as `window/showMessage`
 notifications instead of file diagnostics.
 The notification text includes any available note locations.
 
+Diagnostics located in an imported file appear under that file's URI. If
+several open documents import the file, each distinct diagnostic appears once.
+These diagnostics update when an importing document is analyzed again. They
+clear when the error is fixed or when no open document imports the file. While
+a file is open, only its own analysis publishes its diagnostics. That analysis
+follows each edit of the file, while an importer's analysis can lag until the
+importer is analyzed again. Closing a document hands its diagnostics to the
+open documents that import it, or clears them. Before that, those documents
+check that their analysis is current, because it may have used the closed
+document's unsaved text.
+
 Definitions and references can resolve imported declarations. Unsaved content
 from other open Casa documents is included in analysis. Queries use a source
 index built during analysis. Replacing a document releases its old snapshot.
@@ -154,8 +165,6 @@ return no result until it analyzes again.
 
 ## Limitations
 
-- Diagnostics from imported files are not published. Open the imported file to
-  see its diagnostics.
 - Changes use full-document synchronization, not incremental edits.
 - Completion is broad. The editor performs prefix filtering.
 - Dot completion does not support every arbitrary expression.
