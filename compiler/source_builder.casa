@@ -24,11 +24,26 @@ pub struct ParseState {
     pub recovery_required: bool
     pub store_mutated:     bool
     pub constant_errors:   u64
+    type_references:       std::List[common::TypeReference]
 }
 
 impl ParseState {
     pub fn new diagnostics:error::Diagnostics -> ParseState {
-        0 false false true diagnostics ParseState
+        std::List[common::TypeReference]::new 0 false false true diagnostics ParseState
+    }
+
+    # Retain the written name of a type that `token` spells as the store key `name`.
+    # With `qualifier`, the token names a member of that type, as in `Kind::Plain`.
+    pub fn record_type_reference self:mut$ParseState token:$common::Token name:$str qualifier:bool {
+        qualifier token.value.as_str common::find_path_name_span = length = offset
+        if 0 length == then
+            return
+        fi
+        name.to_str length token
+            .location
+            .span
+            .offset offset + token.location.with_span
+        common::TypeReference self.type_references.push
     }
 
     pub fn record_error
@@ -88,9 +103,9 @@ impl ParseState {
 
     pub fn store_was_mutated self:$ParseState -> bool { self.store_mutated }
 
-    pub fn into_diagnostics self:ParseState -> error::Diagnostics {
+    pub fn into_parts self:ParseState -> error::Diagnostics std::List[common::TypeReference] {
         self match
-            ParseState { diagnostics: diagnostics } => diagnostics
+            ParseState { diagnostics: diagnostics type_references: references } => diagnostics references
         end
     }
 }
@@ -365,10 +380,12 @@ impl Parser {
 
     pub fn into_parts
         self:Parser
-    -> common::SymbolStore std::Set[std::String] ParseState std::Map[std::String source_body::SourceBody] {
+    -> common::SymbolStore std::Set[std::String] error::Diagnostics std::Map[std::String source_body::SourceBody] {
         self match
             Parser { store: store analyzed_files: analyzed_files state: state bodies: bodies } => {
-                store analyzed_files state bodies.into_bodies
+                state.into_parts = references = diagnostics
+                references store.type_references.append
+                store analyzed_files diagnostics bodies.into_bodies
             }
         end
     }
@@ -382,8 +399,8 @@ impl Parser {
     }
 
     pub fn into_diagnostics self:Parser -> error::Diagnostics {
-        self.into_parts = resolved_bodies = state = included_files = store
-        state.into_diagnostics
+        self.into_parts = resolved_bodies = diagnostics = included_files = store
+        diagnostics
     }
 
     pub fn into_result
@@ -394,13 +411,13 @@ impl Parser {
             .imports
             .resolutions
             .clone = resolutions
-        self.into_parts = resolved_bodies = state = included_files = store
+        self.into_parts = resolved_bodies = diagnostics = included_files = store
         included_files.to_list = included_file_list
         ops match
             std::Option::Some(operations) => resolved_bodies operations source_body::consume_source_body store source_body::SourceProgram::new std::Option::Some
             std::Option::None => std::Option[source_body::SourceProgram]::None
         end = source
-        resolutions state.into_diagnostics source ParseResolveResult
+        resolutions diagnostics source ParseResolveResult
         included_file_list
     }
 
@@ -409,11 +426,11 @@ impl Parser {
             .imports
             .resolutions
             .clone = resolutions
-        self.into_parts = resolved_bodies = state = included_files = store
+        self.into_parts = resolved_bodies = diagnostics = included_files = store
         store drop
         included_files.to_list = included_file_list
         std::Option[source_body::SourceProgram]::None = source
-        resolutions state.into_diagnostics source ParseResolveResult
+        resolutions diagnostics source ParseResolveResult
         included_file_list
     }
 
@@ -781,6 +798,12 @@ fn resolve_type_head
         base borrow_prefix constant_type std::Option::Some return
     fi
 
+    if
+        common::TokenKind::Identifier token.kind == base store.builtins.has ! &&
+        base.as_str "@unbound" str::ends_with ! &&
+    then
+        false base.as_str token state.record_type_reference
+    fi
     base borrow_prefix std::Option[common::Type]::None
 }
 
@@ -4672,6 +4695,7 @@ impl Parser {
             base.as_str 1 base.length 1 - str::substring = base
         fi
         if name.member std::Option::Some(position) is then
+            false base.as_str token self.state.record_type_reference
             position copy resolver.tokens.get = member
             token.location f"{token.value}::{member.value}" common::OpValue::Identifier common::Op::new
         else
@@ -4764,6 +4788,7 @@ impl Parser {
             return
         fi
         member_names_opt.unwrap = member_names
+        false struct_name.as_str token self.state.record_type_reference
         std::List[std::String]::new = field_order
         std::Set[std::String]::new = seen
         for term in brace.terms.iter do
@@ -4952,8 +4977,9 @@ impl Parser {
                     fi
                     true field.value resolver self.lower_pattern label.value.clone values.set
                 done
-                values token.value.as_str resolver.resolve_name common::StructPattern
-                common::PatternValue::Struct return
+                token.value.as_str resolver.resolve_name = struct_name
+                false struct_name.as_str token self.state.record_type_reference
+                values struct_name common::StructPattern common::PatternValue::Struct return
             fi
         fi
         token.value.as_str resolver.resolve_name = name
@@ -4980,6 +5006,7 @@ impl Parser {
             common::PatternValue::EnumVariant return
         fi
         name.as_str 0 separator u64::try_from.unwrap str::substring = enum_name
+        true enum_name.as_str token self.state.record_type_reference
         separator 2 + u64::try_from.unwrap = start
         name.as_str start name.length start - str::substring = variant_name
         std::Option[i64]::None variant_name enum_name common::EnumVariant::new = variant
@@ -5675,7 +5702,9 @@ pub fn parse_imports
     tokens parser enter_root
     "" tokens parser.prepare_imports
     parser match
-        Parser { bodies: bodies store: store analyzed_files: analyzed_files source_prefixes: prefixes imports: imports } => {
+        Parser { bodies: bodies store: store state: state analyzed_files: analyzed_files source_prefixes: prefixes imports: imports } => {
+            state.into_parts = references drop
+            references store.type_references.append
             bodies.into_bodies store imports prefixes analyzed_files
         }
     end = analyzed_files = prefixes = imports = store = bodies

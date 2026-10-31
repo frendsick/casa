@@ -330,8 +330,16 @@ compilation coverage for top-level symbols and body coverage for local bindings.
 A damaged construct cannot contribute an invented operation fact. Lexical token
 categories remain available after syntax rejection.
 
-Type references are incomplete while signature and field type occurrences are
-not represented. Rename must reject these answers.
+Parsing retains each written struct or enum name with the declaration it
+resolved to. This covers signature, field, variant payload, receiver, binding, and
+type-argument annotations, struct literals and patterns, and enum variant patterns.
+A generic parameter that shadows a type name resolves to the parameter and adds no
+type reference. These names answer definition and references without hover text.
+Reference ranges exclude borrow sigils, module prefixes, and type arguments. A
+qualified body name splits at its last `::`, so `Point` is the type in
+`shapes::Point::norm`. In an associated name with explicit type arguments, such
+as `Boxed[Item]::new`, the member keeps its own range after the arguments.
+Type references still report incomplete coverage, and rename must reject them.
 
 `workspace.casa` aggregates owned answers across fresh snapshots, retains exact
 source revisions, and validates proposed rename bindings through reanalysis.

@@ -577,7 +577,7 @@ fn test_lexical_recovery_and_type_reference_coverage {
         _ => "lexical failure has partial tokens" false test::assert_true
     end
     "struct Point { x:i64 } fn take value:Point { value drop }" make_analyzed_document = snapshot
-    "unrepresented annotations prevent complete references"
+    "type references stay incomplete until rename accepts them"
     false 7 DOCUMENT_TEST_FILE snapshot.get_index.find_references document::ReferenceAnswer::Incomplete is test::assert_true
 }
 
@@ -681,6 +681,125 @@ fn test_members_after_type_arguments {
     done
     "type token before type arguments" type_token test::assert_true
     "member token after type arguments" member_token test::assert_true
+}
+
+# Offsets of `name` as a whole word in `source`, outside the first `excluded` span.
+fn find_word_offsets source:$str name:$str excluded:$str -> std::List[u64] {
+    source excluded str::find = excluded_start
+    std::List[u64]::new = offsets
+    0 = offset: u64
+    while offset name.length + source.length <= do
+        offset = start
+        1 += offset
+        if source start name.length str::substring name != then
+            continue
+        fi
+        if 0 start != then
+            start 1 - source.at.unwrap = before
+            if before.is_alpha before.is_digit || '_' before == || then
+                continue
+            fi
+        fi
+        start name.length + = end_offset
+        if end_offset source.length < then
+            end_offset source.at.unwrap = after
+            if after.is_alpha after.is_digit || '_' after == || then
+                continue
+            fi
+        fi
+        if 0 excluded_start <= then
+            excluded_start u64::try_from.unwrap = skipped
+            if skipped start <= start skipped excluded.length + < && then
+                continue
+            fi
+        fi
+        start offsets.push
+    done
+    offsets
+}
+
+# `ranges` from `first` on name `length` bytes at each of `offsets` in `file`.
+fn assert_reference_ranges
+    ranges:$std::List[document::DocumentLocation]
+    first:u64
+    file:$str
+    offsets:$std::List[u64]
+    length:u64
+{
+    for index in offsets.length 0 std::Range::new do
+        first index + = position
+        index offsets.get copy = expected
+        if ranges.length position <= then
+            f"reference {position} at {expected} exists" false test::assert_true return
+        fi
+        position ranges.get = range
+        f"reference {position} file" file range.file test::assert_str_eq
+        f"reference {position} offset" expected range.offset test::assert_eq
+        f"reference {position} length" length range.length test::assert_eq
+    done
+}
+pub const TYPE_SITES_SOURCE "struct Item { value: i64 }\ntrait Named { fn name self:$self -> i64 }\nenum Kind { Plain Wrapped(Item) }\nstruct Boxed[T] { inner: T }\nimpl[T] Boxed[T] { fn new inner:T -> Boxed[T] { inner Boxed } }\nimpl Item { fn get self:$Item -> i64 { self.value } fn touch self:mut$Item { } }\nimpl Item: Named { fn name self:$Item -> i64 { 1 } }\nfn make value:i64 -> Item { value Item }\nfn visit callback:fn[$Item -> i64] item:$Item -> i64 { item callback exec }\nfn wrap item:Item -> Boxed[Item] { item Boxed }\nfn shadow[Item] v:Item -> Item { v }\nfn uses {\n    1 make = typed:Item\n    typed Item::get drop\n    size_of[Item] drop\n    Item { value: 2 } drop\n    1 make Boxed[Item]::new drop\n    1 make match\n        Item { value: v } => v drop\n    end\n}"
+
+fn test_struct_type_name_references {
+    "struct_type_name_references" test::test_start
+    TYPE_SITES_SOURCE make_analyzed_document = snapshot
+    "valid type site source" snapshot.is_incomplete ! test::assert_true
+    snapshot.get_index = index
+    "shadow[Item] v:Item -> Item" "Item" TYPE_SITES_SOURCE find_word_offsets = offsets
+    "every listed site" 19 offsets.length test::assert_eq
+    7 DOCUMENT_TEST_FILE index collect_reference_ranges = ranges
+    "only struct uses" offsets.length ranges.length test::assert_eq
+    4 offsets DOCUMENT_TEST_FILE 0 ranges assert_reference_ranges
+    "" "Boxed" TYPE_SITES_SOURCE find_word_offsets = boxed_offsets
+    0 boxed_offsets.get DOCUMENT_TEST_FILE index collect_reference_ranges = boxed_ranges
+    "generic struct uses" boxed_offsets.length boxed_ranges.length test::assert_eq
+    5 boxed_offsets DOCUMENT_TEST_FILE 0 boxed_ranges assert_reference_ranges
+    TYPE_SITES_SOURCE "-> Item {" str::find u64::try_from.unwrap 3 + DOCUMENT_TEST_FILE index.find_definition match
+        document::PointAnswer::Known(location) => "signature type definition" 7 location.offset test::assert_eq
+        _ => "signature type definition available" false test::assert_true
+    end
+    "generic parameter use has no struct identity"
+    TYPE_SITES_SOURCE "v:Item" str::find u64::try_from.unwrap 2 + DOCUMENT_TEST_FILE index.find_symbol_identity.is_none test::assert_true
+    "struct references stay incomplete until rename accepts them"
+    true 7 DOCUMENT_TEST_FILE index.find_references document::ReferenceAnswer::Incomplete is test::assert_true
+}
+pub const ENUM_SITES_SOURCE "enum Kind { Plain Wrapped(i64) }\nenum Maybe[T] { Nothing Just(T) }\nfn wrap value:i64 -> Kind { value Kind::Wrapped }\nfn read kind:Kind -> i64 { kind match Kind::Wrapped(value) => value Kind::Plain => 0 end }\nfn shadow[Kind] v:Kind -> Kind { v }\n1 wrap Kind::Plain is drop\nMaybe[Kind]::Nothing drop"
+
+fn test_enum_type_name_references {
+    "enum_type_name_references" test::test_start
+    ENUM_SITES_SOURCE make_analyzed_document = snapshot
+    "valid enum site source" snapshot.is_incomplete ! test::assert_true
+    snapshot.get_index = index
+    "shadow[Kind] v:Kind -> Kind" "Kind" ENUM_SITES_SOURCE find_word_offsets = offsets
+    "every listed enum site" 8 offsets.length test::assert_eq
+    5 DOCUMENT_TEST_FILE index collect_reference_ranges = ranges
+    "only enum uses" offsets.length ranges.length test::assert_eq
+    4 offsets DOCUMENT_TEST_FILE 0 ranges assert_reference_ranges
+    "" "Maybe" ENUM_SITES_SOURCE find_word_offsets = maybe_offsets
+    0 maybe_offsets.get DOCUMENT_TEST_FILE index collect_reference_ranges = maybe_ranges
+    "generic enum uses" maybe_offsets.length maybe_ranges.length test::assert_eq
+    5 maybe_offsets DOCUMENT_TEST_FILE 0 maybe_ranges assert_reference_ranges
+}
+pub const SHAPES_USER_SOURCE "import \"/tmp/editor_type_shapes.casa\" as shapes\nfn origin -> shapes::Point { 0 0 shapes::Point }\nfn length point:$shapes::Point -> i64 { point shapes::Point::norm }\nfn area shape:shapes::Shape -> i64 { shape match shapes::Shape::Circle(radius) => radius shapes::Shape::Square(_) => 0 end }\nshapes::Point { x: 1 y: 2 } match shapes::Point { x: x } => x drop end\n1 shapes::Shape::Circle area drop"
+
+fn test_qualified_type_name_references {
+    "qualified_type_name_references" test::test_start
+    SHAPES_USER_SOURCE make_shapes_document = snapshot
+    "valid qualified source" snapshot.is_incomplete ! test::assert_true
+    snapshot.get_index = index
+    "" "Point" SHAPES_USER_SOURCE find_word_offsets = user_points
+    "" "Point" SHAPES_SOURCE find_word_offsets = declared_points
+    "every qualified point site" 6 user_points.length test::assert_eq
+    11 SHAPES_FILE index collect_reference_ranges = points
+    "user and declaring file uses" user_points.length declared_points.length + points.length test::assert_eq
+    5 user_points DOCUMENT_TEST_FILE 0 points assert_reference_ranges
+    5 declared_points SHAPES_FILE user_points.length points assert_reference_ranges
+    "" "Shape" SHAPES_USER_SOURCE find_word_offsets = user_shapes
+    "" "Shape" SHAPES_SOURCE find_word_offsets = declared_shapes
+    0 declared_shapes.get SHAPES_FILE index collect_reference_ranges = shapes
+    "qualified enum uses" user_shapes.length declared_shapes.length + shapes.length test::assert_eq
+    5 user_shapes DOCUMENT_TEST_FILE 0 shapes assert_reference_ranges
+    5 declared_shapes SHAPES_FILE user_shapes.length shapes assert_reference_ranges
 }
 
 fn test_commented_function_declaration {
@@ -1296,6 +1415,9 @@ pub fn run_tests {
     test_lexical_recovery_and_type_reference_coverage
     test_qualified_body_names_use_type_segment
     test_members_after_type_arguments
+    test_struct_type_name_references
+    test_enum_type_name_references
+    test_qualified_type_name_references
     test_source_generic_hover
     test_aliased_type_hover_uses_source_names
     test_scoped_completion_and_replacement

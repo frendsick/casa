@@ -212,6 +212,35 @@ def check_imported_diagnostics(binary):
             server.close()
 
 
+def check_type_references(binary):
+    """Type references cover declarations, bodies, and qualified uses in importing files."""
+    with tempfile.TemporaryDirectory(prefix="casa-type-references-") as temporary:
+        root = Path(temporary)
+        shapes = root / "shapes.casa"
+        user = root / "user.casa"
+        shapes.write_text("pub struct Point { pub x: i64 }\n"
+                          "impl Point { pub fn get self:$Point -> i64 { self.x } }\n")
+        user.write_text('import "shapes.casa" as shapes\n'
+                        "fn shadow[Point] v:Point -> Point { v }\n"
+                        "fn read point:mut$shapes::Point -> i64 { point shapes::Point::get }\n"
+                        "shapes::Point { x: 1 } match shapes::Point { x: x } => x drop end\n")
+        server = Server(binary, root)
+        try:
+            response = server.query("references", shapes, 0, 11, context={"includeDeclaration": True})
+            ranges = sorted((item["uri"].rsplit("/", 1)[1], item["range"]["start"]["line"],
+                             item["range"]["start"]["character"], item["range"]["end"]["character"])
+                            for item in response["result"])
+            assert ranges == [
+                ("shapes.casa", 0, 11, 16), ("shapes.casa", 1, 5, 10), ("shapes.casa", 1, 30, 35),
+                ("user.casa", 2, 26, 31), ("user.casa", 2, 55, 60), ("user.casa", 3, 8, 13),
+                ("user.casa", 3, 37, 42),
+            ], ranges
+            # Type rename stays refused until rename accepts struct and enum coverage.
+            assert "error" in server.query("rename", shapes, 0, 11, newName="Vector")
+        finally:
+            server.close()
+
+
 def main(binary):
     with tempfile.TemporaryDirectory(prefix="casa workspace ") as temporary:
         root = Path(temporary)
@@ -372,6 +401,7 @@ def main(binary):
     check_malformed_messages(binary)
     check_query_reuse(binary)
     check_imported_diagnostics(binary)
+    check_type_references(binary)
     print("LSP transport and workspace tests passed")
 
 
