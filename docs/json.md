@@ -88,7 +88,7 @@ implicitly become `Option::None`.
 Nested lists, maps, and optional values use the element type's conversion.
 `Option[T]` cannot distinguish `None` from a `Some` value whose own representation
 is `null`. Use a custom tagged representation when that distinction matters.
-Object member order follows map iteration and is not a stable output contract.
+Object members are serialized in ascending Unicode scalar order by key.
 Duplicate input keys use the last value.
 
 ## Numbers
