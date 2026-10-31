@@ -277,6 +277,11 @@ dependent editor facts. Other callable-target completion preserves checked bodie
 without checking their source again. Recursive borrowed results and explicit
 function contracts retain conservative input origins.
 
+Outermost publication releases callable return equations with the saved recheck
+inputs. Resolved targets remain available for checked facts and later callers.
+Nested components retain equations until their enclosing traversal finishes.
+Callable reference identities do not depend on the number of retained equations.
+
 Independent function-analysis queries create their own source snapshots. Session
 consumers request completed declarations and borrow checked bodies without
 managing body phase transitions.
