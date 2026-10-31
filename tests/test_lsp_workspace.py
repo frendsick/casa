@@ -250,6 +250,90 @@ def check_type_references(binary):
             server.close()
 
 
+def check_derived_trait_definition(binary):
+    with tempfile.TemporaryDirectory(prefix="casa-derived-trait-") as temporary:
+        root = Path(temporary)
+        library = Path(__file__).resolve().parent.parent / "lib" / "std.casa"
+        (root / "std.casa").write_text(library.read_text())
+        source = root / "derived.casa"
+        text = 'import "std"\nstruct Item derives std::Clone { value: i64 }\n'
+        source.write_text(text)
+        server = Server(binary, root)
+        try:
+            server.open(source, text)
+            response = server.query("definition", source, 1, text.splitlines()[1].index("Clone"))
+            target = response["result"]
+            assert target["uri"].endswith("/std.casa"), response
+            line = library.read_text().splitlines()[target["range"]["start"]["line"]]
+            assert line.startswith("pub trait Clone"), line
+        finally:
+            server.close()
+
+
+def rename_edits(response):
+    assert "error" not in response, response
+    return sorted((change["textDocument"]["uri"].rsplit("/", 1)[1],
+                   edit["range"]["start"]["line"], edit["range"]["start"]["character"],
+                   edit["range"]["end"]["character"], edit["newText"])
+                  for change in response["result"]["documentChanges"] for edit in change["edits"])
+
+
+def check_trait_rename(binary):
+    with tempfile.TemporaryDirectory(prefix="casa-trait-rename-") as temporary:
+        root = Path(temporary)
+        traits = root / "traits.casa"
+        traits.write_text("pub trait Tagged { fn tag self:self -> i64 }\n"
+                          "pub struct Item { pub value: i64 }\n"
+                          "impl Item: Tagged { pub fn tag self:Item -> i64 { self.value } }\n")
+        (root / "user.casa").write_text('import "traits.casa" as traits\n'
+                                        "struct Local { value: i64 }\n"
+                                        "impl Local: traits::Tagged { fn tag self:Local -> i64 { self.value } }\n"
+                                        "fn show[T: traits::Tagged] value:T -> i64 { value.tag }\n"
+                                        "1 Local traits::Tagged::tag drop\n")
+        (root / "other.casa").write_text("trait Tagged { fn tag self:self -> i64 }\n"
+                                         "struct Other { value: i64 }\n"
+                                         "impl Other: Tagged { fn tag self:Other -> i64 { self.value } }\n"
+                                         "1 Other Tagged::tag drop\n")
+        server = Server(binary, root)
+        try:
+            references = server.query("references", traits, 0, 11, context={"includeDeclaration": True})
+            ranges = sorted((item["uri"].rsplit("/", 1)[1], item["range"]["start"]["line"],
+                             item["range"]["start"]["character"], item["range"]["end"]["character"])
+                            for item in references["result"])
+            assert ranges == [
+                ("traits.casa", 0, 10, 16), ("traits.casa", 2, 11, 17),
+                ("user.casa", 2, 20, 26), ("user.casa", 3, 19, 25),
+                ("user.casa", 4, 16, 22),
+            ], ranges
+            edits = rename_edits(server.query("rename", traits, 0, 11, newName="Marked"))
+            assert edits == [(*item, "Marked") for item in ranges], edits
+        finally:
+            server.close()
+
+
+def check_trait_rename_collisions(binary):
+    with tempfile.TemporaryDirectory(prefix="casa-trait-collisions-") as temporary:
+        root = Path(temporary)
+        (root / "helpers.casa").write_text("pub fn help -> i64 { 1 }\n")
+        source = root / "traits.casa"
+        source.write_text('import "helpers.casa" as helpers\n'
+                          "struct Item { value: i64 }\n"
+                          "enum Kind { First }\n"
+                          "trait Tagged { fn tag self:self -> i64 }\n"
+                          "trait Other {}\n"
+                          "trait Labeled: Tagged {}\n"
+                          "impl Item: Tagged { fn tag self:Item -> i64 { self.value } }\n"
+                          "fn show[Next: Tagged] value:Next -> i64 { value Tagged::tag }\n"
+                          "helpers::help drop\n")
+        server = Server(binary, root)
+        try:
+            for name in ("Other", "Labeled", "Item", "Kind", "Next", "i64", "helpers"):
+                assert "error" in server.query("rename", source, 3, 7, newName=name), name
+            assert len(rename_edits(server.query("rename", source, 3, 7, newName="Marked"))) == 5
+        finally:
+            server.close()
+
+
 def check_type_rename_collisions(binary):
     with tempfile.TemporaryDirectory(prefix="casa-type-rename-") as temporary:
         root = Path(temporary)
@@ -529,8 +613,11 @@ def main(binary):
     check_query_reuse(binary)
     check_imported_diagnostics(binary)
     check_type_references(binary)
+    check_derived_trait_definition(binary)
     check_type_rename_collisions(binary)
     check_variant_pattern_rename(binary)
+    check_trait_rename(binary)
+    check_trait_rename_collisions(binary)
     check_member_trivia_rename(binary)
     check_formatting(binary)
     print("LSP transport and workspace tests passed")

@@ -21,6 +21,7 @@ pub enum DocumentSymbolKind derives std::Eq std::Copy {
     Struct
     Enum
     EnumVariant
+    Trait
 }
 
 # Facts needed while building the index. No ownership effects, substitutions, or executable bodies survive here.
@@ -780,6 +781,42 @@ impl common::Function {
     }
 }
 
+impl common::CasaTrait {
+    pub fn format_hover
+        self:$common::CasaTrait
+        store:$common::SymbolStore
+        file:$str
+    -> std::String {
+        std::String::new = builder
+        "trait " builder.append
+        file self.name.as_str store.format_name_for_source.as_str builder.append
+        if 0 self.type_params.length != then
+            "[" builder.append
+            " " self
+                .type_params
+                .join_strings
+                .as_str builder.append
+            "]" builder.append
+        fi
+        if 0 self.supertraits.length != then
+            std::List[std::String]::new = supertraits
+            for supertrait in self.supertraits.iter do
+                file supertrait common::trait_bound_to_type store.format_type_for_source supertraits.push
+            done
+            ": " builder.append
+            " + " supertraits.join_strings.as_str builder.append
+        fi
+        std::List[std::String]::new = methods
+        for method in self.methods.iter do
+            method.name.clone methods.push
+        done
+        " { " builder.append
+        ", " methods.join_strings.as_str builder.append
+        " }" builder.append
+        builder
+    }
+}
+
 impl common::CasaEnum {
     pub fn format_hover self:$common::CasaEnum store:$common::SymbolStore file:$str -> std::String {
         std::String::new = builder
@@ -1356,16 +1393,56 @@ impl IndexBuilder {
         std::List[CompletionCandidate]::new
     }
 
+    # The type key that the written qualifier of a callable `element` names, or an empty
+    # string. `Plain::tag`, `Tagged::tag`, and `Plain::Tagged::tag` all resolve to
+    # `Plain::Tagged::tag`, so the written segment selects the receiver or the trait.
+    # Only the segment before the member is projected, so `Plain` in
+    # `Plain::Tagged::tag` has no answer. Project it too if struct rename must edit it.
+    fn find_qualifier_name self:$IndexBuilder element:$DocumentElement -> std::String {
+        element
+            .location
+            .file
+            .as_str = file
+        if file self.sources.get std::Option::Some(source) is then
+            source.as_str element
+                .location
+                .span
+                .offset element
+                .location
+                .span
+                .length str::substring = written
+            element
+                .op
+                .get_symbol_name
+                .as_str "::" str::split.unwrap = parts
+            # The last part is the member.
+            parts.length 1 - = position
+            while 0 position < do
+                1 -= position
+                position parts.get.clone = key
+                key.as_str "[" str::find = bracket
+                if 0 bracket <= then
+                    key.as_str 0 bracket u64::try_from.unwrap str::substring = key
+                fi
+                file key.as_str self.store.format_name_for_source = source_name
+                source_name.as_str common::path_name_spans.name copy = span
+                if source_name.as_str span.offset span.length str::substring written == then
+                    key return
+                fi
+            done
+        fi
+        std::String::new
+    }
+
     pub fn find_callable_symbol
         self:$IndexBuilder
+        element:$DocumentElement
         name:$str
-        part:$SymbolPart
     -> std::Option[ProjectionSymbol] {
-        if part SymbolPart::TypeName is then
-            name "::" str::split.unwrap = parts
-            0 parts.get.as_str self.find_type_symbol return
+        if element.part SymbolPart::TypeName is then
+            element self.find_qualifier_name.as_str self.find_type_symbol return
         fi
-        if part SymbolPart::Separator is then
+        if element.part SymbolPart::Separator is then
             std::Option[ProjectionSymbol]::None return
         fi
         if name self.lookup_function std::Option::Some(function) is then
@@ -1414,8 +1491,8 @@ impl IndexBuilder {
         element:$DocumentElement
     -> std::Option[ProjectionSymbol] {
         element.op.value match
-            semantic_body::OccurrenceValue::FnCall(name) => element.part name.as_str self.find_callable_symbol
-            semantic_body::OccurrenceValue::FnPush(name) => element.part name.as_str self.find_callable_symbol
+            semantic_body::OccurrenceValue::FnCall(name) => name.as_str element self.find_callable_symbol
+            semantic_body::OccurrenceValue::FnPush(name) => name.as_str element self.find_callable_symbol
             semantic_body::OccurrenceValue::PushEnumVariant(variant) => element.part variant self.find_enum_variant_symbol
             semantic_body::OccurrenceValue::StructNew(casa_struct) => {
                 std::Option[common::Location]::None
@@ -1448,6 +1525,13 @@ impl IndexBuilder {
             DocumentSymbolKind::Enum
             ProjectionSymbol::new std::Option::Some return
         fi
+        if name self.lookup_trait std::Option::Some(casa_trait) is then
+            std::Option[common::Location]::None
+            casa_trait.location
+            casa_trait.name.as_str
+            DocumentSymbolKind::Trait
+            ProjectionSymbol::new std::Option::Some return
+        fi
         std::Option[ProjectionSymbol]::None
     }
 
@@ -1466,6 +1550,13 @@ impl IndexBuilder {
         name self
             .store
             .enums
+            .get_str
+    }
+
+    pub fn lookup_trait self:$IndexBuilder name:$str -> std::Option[$common::CasaTrait] {
+        name self
+            .store
+            .traits
             .get_str
     }
 
@@ -1506,6 +1597,9 @@ impl IndexBuilder {
         if name self.lookup_enum std::Option::Some(casa_enum) is then
             file self.store casa_enum.format_hover std::Option::Some return
         fi
+        if name self.lookup_trait std::Option::Some(casa_trait) is then
+            file self.store casa_trait.format_hover std::Option::Some return
+        fi
         std::Option[std::String]::None
     }
 
@@ -1542,11 +1636,7 @@ impl IndexBuilder {
                 symbol.op.value semantic_body::OccurrenceValue::FnCall is
                 symbol.op.value semantic_body::OccurrenceValue::FnPush is ||
             then
-                symbol
-                    .op
-                    .get_symbol_name
-                    .as_str "::" str::split.unwrap = parts
-                file 0 parts.get.as_str self.format_type_hover return
+                file symbol self.find_qualifier_name.as_str self.format_type_hover return
             fi
             if symbol.op.value semantic_body::OccurrenceValue::PushEnumVariant(variant) is then
                 file variant.enum_name.as_str self.format_type_hover return
@@ -1666,6 +1756,12 @@ impl IndexBuilder {
                     std::Option[std::String]::None
                 fi
             }
+            DocumentSymbolKind::Trait => {
+                symbol
+                    .declaration
+                    .file
+                    .as_str symbol.name.as_str self.format_type_hover
+            }
             DocumentSymbolKind::EnumVariant => {
                 if symbol self.find_enum_name_for_variant std::Option::Some(enum_name) is then
                     symbol
@@ -1687,6 +1783,9 @@ impl IndexBuilder {
         if name self.lookup_enum std::Option::Some(casa_enum) is then
             casa_enum.location.clone std::Option::Some return
         fi
+        if name self.lookup_trait std::Option::Some(casa_trait) is then
+            casa_trait.location.clone std::Option::Some return
+        fi
         std::Option[common::Location]::None
     }
 
@@ -1695,11 +1794,7 @@ impl IndexBuilder {
         symbol:$DocumentElement
     -> std::Option[common::Location] {
         if symbol.part SymbolPart::TypeName is then
-            symbol
-                .op
-                .get_symbol_name
-                .as_str "::" str::split.unwrap = parts
-            0 parts.get.as_str self.find_type_definition return
+            symbol self.find_qualifier_name.as_str self.find_type_definition return
         fi
         if
             symbol
@@ -1915,6 +2010,11 @@ impl IndexBuilder {
             if element self.find_definition std::Option::Some(target) is then
                 target self.locate std::Option::Some = definition
             fi
+            element self.format_hover = hover
+            # A checked trait call keeps no trait name. Its written type reference answers instead.
+            if part SymbolPart::TypeName is symbol.is_none && definition.is_none && hover.is_none && then
+                return
+            fi
             false = declaration
             if symbol.clone std::Option::Some(identity) is then
                 if identity.kind DocumentSymbolKind::Variable == then
@@ -1924,7 +2024,7 @@ impl IndexBuilder {
             source.as_str location.span.offset location.span.length str::substring.as_str
             common::path_name_spans.name copy = name_span
             location.span.offset name_span.offset + = reference_offset
-            name_span.length reference_offset declaration symbol definition element self.format_hover location self.locate
+            name_span.length reference_offset declaration symbol definition hover location self.locate
             Occurrence index.occurrences.push
         fi
     }
@@ -2161,9 +2261,21 @@ impl IndexBuilder {
                 DocumentSymbolKind::EnumVariant ProjectionSymbol::new self.project_declaration
             done
         done
+        for
+            entry in self
+                .store
+                .traits
+                .iter
+        do
+            if entry.first imported_types.has then
+                continue
+            fi
+            index std::Option[common::Location]::None entry.second.location entry.first.as_str
+            DocumentSymbolKind::Trait ProjectionSymbol::new self.project_declaration
+        done
     }
 
-    # Written type names that resolve to a struct or enum answer definition and
+    # Written type names that resolve to a struct, enum, or trait answer definition and
     # references. They omit hover text, which would copy the declaration's hover to
     # every use. Variant names in patterns also answer hover with the short
     # `Enum::Variant` text of a variant expression. Body occurrences come first, so
@@ -2623,6 +2735,15 @@ pub fn project_imports
         name in builder
             .store
             .enums
+            .keys
+            .iter
+    do
+        name.clone types.add
+    done
+    for
+        name in builder
+            .store
+            .traits
             .keys
             .iter
     do

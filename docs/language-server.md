@@ -80,12 +80,12 @@ request types find the same libraries.
 | Feature | Behavior |
 |---|---|
 | Completion | Names, keywords, intrinsics, dot methods, and qualified names |
-| Definition | Functions, bindings, structs, enum variants, and qualified methods |
+| Definition | Functions, bindings, structs, enum variants, traits, and qualified methods |
 | Diagnostics | Analyze on open and full-document change, and on save or local editor queries after inputs change |
 | Formatting | Whole-document `casafmt` result for the open text |
 | Hover | Types and stack effects for symbols, literals, operators, and intrinsics |
 | References | Verified uses across discovered workspace roots and imports |
-| Rename | Validated workspace edits for functions, bindings, structs, enums, and enum variants |
+| Rename | Validated workspace edits for functions, bindings, structs, enums, enum variants, and traits |
 | Semantic tokens | Full-document token classification |
 
 Diagnostics expose the same error and warning codes as the compiler CLI.
