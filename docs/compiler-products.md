@@ -267,11 +267,11 @@ until the summaries stop growing. Each return position keeps its own target
 set. Calls substitute their callable arguments into the stable summary.
 
 Executing a callable whose recursive targets are pending leaves the owning body
-provisional. The checker records the execution's operation identity, source
-location, and callable dependencies, then repeats the affected component's
-symbolic checks as callable targets or mutation summaries grow. Execution can
-add recursive call dependencies to that component. Its bodies are accepted only
-after ownership checks pass against stable summaries. Function diagnostics stay
+provisional. Callable dependencies remain in the return-summary equations. The
+checker repeats the affected component's symbolic checks as callable targets or
+mutation summaries grow. Execution can add recursive call dependencies to that
+component. Its bodies are accepted only after ownership checks pass against
+stable summaries. Function diagnostics stay
 separate from nested checks, and rechecking replaces provisional diagnostics and
 dependent editor facts. Other callable-target completion preserves checked bodies
 without checking their source again. Recursive borrowed results and explicit
