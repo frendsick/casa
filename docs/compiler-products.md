@@ -360,8 +360,10 @@ segment of `Tagged::tag`. A qualified call resolves to a name such as
 `Plain::Tagged::tag` whether its source spells `Plain::tag`, `Tagged::tag`, or
 `Plain::Tagged::tag`. Projection selects the receiver or trait whose source name
 matches the written segment before the member. When a call spells both, as in
-`Plain::Tagged::tag`, the receiver segment has no type reference. Trait references report incomplete
-coverage, and rename must reject them.
+`Plain::Tagged::tag`, the receiver segment has no type reference. Trait references
+use the same coverage and rename validation as struct and enum references. Rename
+also rejects a new type name that spells a builtin type, because trait positions
+accept it.
 
 `workspace.casa` aggregates owned answers across fresh snapshots, retains exact
 source revisions, and validates proposed rename bindings through reanalysis.

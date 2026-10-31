@@ -85,7 +85,7 @@ request types find the same libraries.
 | Formatting | Whole-document `casafmt` result for the open text |
 | Hover | Types and stack effects for symbols, literals, operators, and intrinsics |
 | References | Verified uses across discovered workspace roots and imports |
-| Rename | Validated workspace edits for functions, bindings, structs, enums, and enum variants |
+| Rename | Validated workspace edits for functions, bindings, structs, enums, enum variants, and traits |
 | Semantic tokens | Full-document token classification |
 
 Diagnostics expose the same error and warning codes as the compiler CLI.
@@ -176,7 +176,6 @@ return no result until it analyzes again.
 - Completion is broad. The editor performs prefix filtering.
 - Dot completion does not support every arbitrary expression.
 - There are no code actions, range formatting, or on-type formatting requests.
-- Trait rename remains unavailable. Trait references report partial coverage.
 - Rename validation is conservative. Syntax failures or diagnostics in a required
   root can prevent rename even when some references remain queryable.
 - An open document whose imports report diagnostics gets no import reuse. Each
