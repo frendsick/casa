@@ -67,10 +67,10 @@ summary grows. Execution can expose more call dependencies, so newly discovered
 members join the component before it settles. These checks also validate moves,
 cleanup, and local escapes affected by newly discovered writes.
 
-An execution whose targets are pending records its owning body, operation
-identity, source location, and callable dependencies. It uses the declared stack
-effect for structural checking and leaves its body provisional. The checker must
-validate ownership against established targets before accepting that body.
+An execution whose targets are pending marks its body provisional and uses the
+declared stack effect for structural checking. Callable dependencies remain in
+the return-summary equations. The checker must validate ownership against
+established targets before accepting that body.
 An in-progress empty target set is distinct from a stable empty set.
 
 Each function keeps its diagnostics separate from nested function checks.
