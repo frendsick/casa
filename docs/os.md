@@ -264,7 +264,7 @@ line.to_str.unwrap print
 
 | Function | Result |
 |---|---|
-| `io::stdin_read_byte reader:mut$StdinReader -> i64` | Byte value, or `-1` at end of input |
+| `io::stdin_read_byte reader:mut$StdinReader -> Option[u8]` | Next byte, or `None` at end of input |
 | `io::stdin_read_exact reader:mut$StdinReader count:u64 -> Bytes` | Up to `count` bytes |
 | `io::stdin_read_line reader:mut$StdinReader -> Bytes` | Bytes before a newline or end of input |
 
