@@ -201,8 +201,9 @@ cleanup order and reserved `drop` method. `panic` and `std::process::exit` termi
 without cleanup.
 
 Destroying a recursive struct or enum uses bounded call-stack space at any
-depth. This covers chains, trees, mutually recursive types, and recursive
-fields inside arrays. Pending levels use heap memory instead, so a failed
+depth. This covers chains, trees, mutually recursive types, recursive
+fields inside arrays, and ownership chains through closure captures. Pending
+levels use heap memory instead, so a failed
 allocation still terminates the process. A `drop` method that destroys values
 runs as an ordinary call. If a type keeps its recursive children in a
 collection such as `std::List`, the collection's `drop` method destroys them,

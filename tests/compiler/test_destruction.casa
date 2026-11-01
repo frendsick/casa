@@ -157,6 +157,28 @@ pub enum CountedTree {
     Branch(SpecializedResource[i64] CountedTree CountedTree)
 }
 
+pub enum ClosureChain {
+    End
+    Direct(ClosureChain)
+    Deferred(fn[->])
+}
+
+pub fn inspect_closure_chain chain:$ClosureChain {}
+
+pub fn wrap_closure_chain chain:ClosureChain count:ptr -> ClosureChain {
+    count 0 SpecializedResource = marker
+    move { marker.value drop chain inspect_closure_chain } ClosureChain::Deferred
+}
+
+pub struct ClosureNode {
+    pub callback: fn[->]
+}
+
+pub fn wrap_callback node:ClosureNode count:ptr -> ClosureNode {
+    count 0 SpecializedResource = marker
+    move { marker.value drop node.callback exec } ClosureNode
+}
+
 pub struct SpecializedResource[T] {
     pub value: T
     pub count: ptr
@@ -616,6 +638,53 @@ pub fn test_deep_recursive_owner_cleanup {
     unsafe { "deep branching count" tree_count count load64 test::assert_eq }
 }
 
+pub fn deep_closure_scope_cleanup count:ptr {
+    ClosureChain::End = chain
+    0 = depth
+    while depth DEEP_RECURSIVE_OWNER_DEPTH < do
+        count chain wrap_closure_chain = chain
+        1 += depth
+    done
+}
+
+pub fn test_deep_closure_cleanup {
+    "deep_closure_cleanup" test::test_start
+    DESTRUCTION_INDEX_SIZE std::RawBuffer::new = count
+    count.data reset
+    count.data deep_closure_scope_cleanup
+    unsafe { "closure enum scope count" DEEP_RECURSIVE_OWNER_DEPTH count.data load64 test::assert_eq }
+
+    count.data reset
+    {} ClosureNode = callback
+    0 = depth
+    while depth DEEP_RECURSIVE_OWNER_DEPTH < do
+        count.data callback wrap_callback = callback
+        1 += depth
+    done
+    callback drop
+    unsafe { "closure capture drop count" DEEP_RECURSIVE_OWNER_DEPTH count.data load64 test::assert_eq }
+}
+
+pub fn make_resetting_callback node:ClosureNode sentinel:i64 -> fn[-> i64] {
+    move {
+        node drop
+        {} ClosureNode = node
+        sentinel
+    }
+}
+
+pub fn test_closure_cleanup_preserves_calling_environment {
+    "closure_cleanup_preserves_calling_environment" test::test_start
+    DESTRUCTION_INDEX_SIZE std::RawBuffer::new = count
+    count.data reset
+    41 count.data {} ClosureNode wrap_callback make_resetting_callback = outer
+    "calling closure keeps its captures" 41 outer exec test::assert_eq
+    unsafe { "nested cleanup finishes during call" 1 count.data load64 test::assert_eq }
+    "calling closure remains repeatable" 41 outer exec test::assert_eq
+    outer drop
+    unsafe { "nested owner is destroyed once" 1 count.data load64 test::assert_eq }
+}
+
 pub fn array_literal_cleanup log:ptr index:ptr {
     index log 1 resource = first
     index log 2 resource = second
@@ -801,6 +870,8 @@ pub fn run_tests {
     test_recursive_owner_cleanup
     test_recursive_layouts_keep_cleanup_order
     test_deep_recursive_owner_cleanup
+    test_deep_closure_cleanup
+    test_closure_cleanup_preserves_calling_environment
     test_array_literal_owns_its_elements
     test_generic_array_owns_its_elements
     test_borrowed_pattern_keeps_owner
