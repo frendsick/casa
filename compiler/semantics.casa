@@ -892,6 +892,50 @@ pub fn capability_matches_receiver capability:$ValueCapability expected:$common:
     end
 }
 
+fn have_same_pattern_bindings
+    first:$std::Map[std::String common::Type]
+    second:$std::Map[std::String common::Type]
+-> bool {
+    if first.length second.length != then
+        false return
+    fi
+    for binding in first.iter do
+        if binding.first second.get std::Option::Some(typ) is else
+            false return
+        fi
+        if binding.second typ.eq ! then
+            false return
+        fi
+    done
+    true
+}
+
+# The origins of a value read through a shared field. A loan of the field's own
+# ancestor no longer applies, and only a mutable payload keeps its strength.
+fn project_getter_origins
+    shared_origins:$std::Option[std::List[Origin]]
+    projected_place:$std::Option[Place]
+    mutable_payload:bool
+-> std::Option[std::List[Origin]] {
+    std::Option[std::List[Origin]]::None = origins
+    if shared_origins std::Option::Some(current_origins) is else
+        origins return
+    fi
+    for origin in current_origins.iter do
+        if projected_place std::Option::Some(place) is then
+            if origin.kind OriginKind::Place is place origin.place.contains && then
+                continue
+            fi
+        fi
+        false origin.with_capability = adjusted
+        if adjusted.kind OriginKind::Place is ! mutable_payload ! && then
+            false = adjusted.mutable_payload
+        fi
+        adjusted origins append_origin = origins
+    done
+    origins
+}
+
 # Whether any origin overlaps `place` under the requested access.
 fn does_loan_conflict origins:$std::Option[std::List[Origin]] place:$Place exclusive:bool -> bool {
     if origins std::Option::Some(items) is else
@@ -1600,6 +1644,24 @@ impl OwnershipChecker {
 
     pub fn owner_is_moved self:$OwnershipChecker name:$str -> bool {
         name self.moved_owners common::string_list_contains
+    }
+
+    # Whether `place` projects through a borrowed binding that has no local storage.
+    fn is_storage_alias self:$OwnershipChecker place:$Place -> bool {
+        if place.binding.as_str self.find_binding_loans std::Option::Some(binding) is else
+            false return
+        fi
+        if binding.capability ValueCapability::Owned is then
+            false return
+        fi
+        if binding.origins std::Option::Some(sources) is then
+            for source in sources.iter do
+                if source.kind OriginKind::Place is source.place.binding place.binding == && then
+                    false return
+                fi
+            done
+        fi
+        true
     }
 
     pub fn mark_owner_moved self:mut$OwnershipChecker name:$str {
@@ -5544,22 +5606,7 @@ impl TypeChecker {
             .values
             .get_mut = value
 
-        std::Option[std::List[Origin]]::None = origins
-        if shared_origins std::Option::Some(current_origins) is then
-            for origin in current_origins.iter do
-                false = projected_ancestor
-                if projected_place std::Option::Some(place) is then
-                    origin.kind OriginKind::Place is place origin.place.contains && = projected_ancestor
-                fi
-                if projected_ancestor ! then
-                    false origin.with_capability = adjusted
-                    if adjusted.kind OriginKind::Place is ! mutable_payload ! && then
-                        false = adjusted.mutable_payload
-                    fi
-                    adjusted origins append_origin = origins
-                fi
-            done
-        fi
+        mutable_payload projected_place shared_origins project_getter_origins = origins
         if duplicable then
             if origins.is_some then
                 origins = value.origins
@@ -5574,22 +5621,10 @@ impl TypeChecker {
         origins = value.origins
         if projected_place std::Option::Some(place) is then
             place.clone std::Option::Some = value.place
-            if place.binding.as_str self.ownership.find_binding_loans std::Option::Some(binding) is then
-                if binding.capability ValueCapability::Owned is ! then
-                    false = has_local_storage
-                    if binding.origins std::Option::Some(sources) is then
-                        for source in sources.iter do
-                            if source.kind OriginKind::Place is source.place.binding place.binding == && then
-                                true = has_local_storage
-                            fi
-                        done
-                    fi
-                    # The alias already carries its storage sources. Its local name
-                    # must not become a new owner after the pattern scope closes.
-                    if has_local_storage ! then
-                        std::Option[Place]::None = value.place
-                    fi
-                fi
+            # The alias already carries its storage sources. Its local name must not
+            # become a new owner after the pattern scope closes.
+            if place self.ownership.is_storage_alias then
+                std::Option[Place]::None = value.place
             fi
         fi
         if receiver_capability ValueCapability::Shared is then
@@ -11640,12 +11675,14 @@ impl TypeChecker {
                     op.location f"Variant `{variant.enum_name.as_str self.format_source_name}::{variant.variant_name}` has {types.length} inner value(s), but {variant.bindings.length} pattern(s) provided" common::ErrorKind::TypeMismatch self.diagnostics.record_error_string
                     return
                 fi
-                0 = index: u64
-                for child in variant.bindings.iter do
-                    index types.get = typ
-                    function typ self.type_is_duplicable typ.clone subject rules::pattern_binding_type = child_type
-                    function op bindings child_type child self.collect_pattern_types
-                    1 += index
+                for
+                    pair in types.iter variant
+                        .bindings
+                        .list_iter
+                        .zip
+                do
+                    function pair.second self.type_is_duplicable pair.second.clone subject rules::pattern_binding_type = child_type
+                    function op bindings child_type pair.first self.collect_pattern_types
                 done
             }
             common::PatternValue::Struct(struct_pattern) => {
@@ -11676,28 +11713,16 @@ impl TypeChecker {
                 done
             }
             common::PatternValue::Alternatives(alternatives) => {
-                false = first
+                false = seen_first
                 for alternative in alternatives.iter do
                     std::Map[std::String common::Type]::new = current
                     function op current subject alternative self.collect_pattern_types
-                    if first ! then
+                    if seen_first ! then
                         for binding in current.iter do
                             binding.second.clone binding.first.clone bindings.set
                         done
-                        true = first
-                        continue
-                    fi
-                    current.length bindings.length == = compatible
-                    for binding in bindings.iter do
-                        if binding.first current.get std::Option::Some(typ) is then
-                            if binding.second typ.eq ! then
-                                false = compatible
-                            fi
-                        else
-                            false = compatible
-                        fi
-                    done
-                    if compatible ! then
+                        true = seen_first
+                    elif current bindings have_same_pattern_bindings ! then
                         op.location "Pattern alternatives must bind the same names with the same types and capabilities" common::ErrorKind::TypeMismatch self.diagnostics.record_error
                     fi
                 done
@@ -14604,30 +14629,26 @@ impl TypeChecker {
             fi
             std::List[common::Op]::new = emitted_ops
             source_work match
-                std::Option::Some(work) => {
-                    work match
-                        SourceWork::Array(body) => {
-                            body_builder::Builder::new = items
-                            function_opt items pending_ops body self.check_source_sequence
-                            items.has_numeric_literal items.length current_op self.finish_array_literal
-                            items std::Option::Some = compound
-                        }
-                        SourceWork::Group(body) => {
-                            body_builder::Builder::new = items
-                            function_opt items pending_ops body self.check_source_sequence
-                            items std::Option::Some = compound
-                        }
-                        SourceWork::Arm(body) => {
-                            if body.get_nodes.is_empty then
-                                std::Option[source_body::SourceBody]::None
-                            else
-                                body std::Option::Some
-                            fi current_op function_opt self.typecheck_match_op = errors_before
-                            if self.checked_guards.is_empty ! then
-                                self.checked_guards.pop std::Option::Some = compound
-                            fi
-                        }
-                    end
+                std::Option::Some(SourceWork::Array(body)) => {
+                    body_builder::Builder::new = items
+                    function_opt items pending_ops body self.check_source_sequence
+                    items.has_numeric_literal items.length current_op self.finish_array_literal
+                    items std::Option::Some = compound
+                }
+                std::Option::Some(SourceWork::Group(body)) => {
+                    body_builder::Builder::new = items
+                    function_opt items pending_ops body self.check_source_sequence
+                    items std::Option::Some = compound
+                }
+                std::Option::Some(SourceWork::Arm(body)) => {
+                    if body.get_nodes.is_empty then
+                        std::Option[source_body::SourceBody]::None
+                    else
+                        body std::Option::Some
+                    fi current_op function_opt self.typecheck_match_op = errors_before
+                    if self.checked_guards.is_empty ! then
+                        self.checked_guards.pop std::Option::Some = compound
+                    fi
                 }
                 std::Option::None => function_opt emitted_ops pending_ops current_op self.run_type_check_op
             end
@@ -14737,28 +14758,13 @@ impl TypeChecker {
                 # An early exit's rest is checked first but ends after `fi` in source.
                 self.current_location.clone = rest_location
                 std::Option[body_builder::Alternative]::None = checked_alternative
-                if alternative std::Option::Some(branch) is then
-                    branch match
-                        source_body::SourceAlternative { origin: origin body: body } => {
-                            # The early-exit branch, which holds the rest of the body, ends here.
-                            origin.span.offset = else_offset
-                            origin.clone = boundary
-                            if early_exit std::Option::Some(exit) is then
-                                function origin exit locate_early_exit_rest = boundary
-                            fi
-                            function common::OpValue::IfElse boundary self.check_source_boundary = entry
-                            body_builder::Builder::new = checked_body
-                            function checked_body pending body self.check_source_sequence
-                            if exits_early self.path_continues && then
-                                origin "The `else` body of an `if` without `then` must not reach `fi`"
-                                common::ErrorKind::InvalidScope self.diagnostics.record_error
-                                # Report only the missing exit, not the resulting branch mismatch.
-                                self.end_path
-                            fi
-                            function checked_body join_id self.bind_branch_views
-                            checked_body entry body_builder::Alternative std::Option::Some = checked_alternative
-                        }
-                    end
+                if
+                    alternative std::Option::Some(source_body::SourceAlternative { origin: origin body: body }) is
+                then
+                    # The early-exit branch, which holds the rest of the body, ends here.
+                    origin.span.offset = else_offset
+                    join_id function pending body origin early_exit self.check_source_alternative
+                    std::Option::Some = checked_alternative
                 fi
                 if exits_early then
                     end_origin else_offset first_identity self.open_early_exit_bindings
@@ -14770,6 +14776,32 @@ impl TypeChecker {
                 exit checked_alternative checked_branches body_builder::Part::Conditional emitted.push
             }
         end
+    }
+
+    fn check_source_alternative
+        self:mut$TypeChecker
+        early_exit:$std::Option[source_body::SourceEarlyExit]
+        origin:$common::Location
+        body:source_body::SourceBody
+        pending:mut$std::List[common::Op]
+        function:mut$std::Option[common::Function]
+        join_id:i64
+    -> body_builder::Alternative {
+        origin.clone = boundary
+        if early_exit std::Option::Some(exit) is then
+            function origin exit locate_early_exit_rest = boundary
+        fi
+        function common::OpValue::IfElse boundary self.check_source_boundary = entry
+        body_builder::Builder::new = checked_body
+        function checked_body pending body self.check_source_sequence
+        if early_exit.is_some self.path_continues && then
+            origin "The `else` body of an `if` without `then` must not reach `fi`"
+            common::ErrorKind::InvalidScope self.diagnostics.record_error
+            # Report only the missing exit, not the resulting branch mismatch.
+            self.end_path
+        fi
+        function checked_body join_id self.bind_branch_views
+        checked_body entry body_builder::Alternative
     }
 
     # Early-exit condition bindings are visible from `fi`, after the alternative
