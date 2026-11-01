@@ -892,6 +892,62 @@ pub fn capability_matches_receiver capability:$ValueCapability expected:$common:
     end
 }
 
+# Whether any origin overlaps `place` under the requested access.
+fn does_loan_conflict origins:$std::Option[std::List[Origin]] place:$Place exclusive:bool -> bool {
+    if origins std::Option::Some(items) is else
+        false return
+    fi
+    for origin in items.iter do
+        if place origin.overlaps origin.exclusive exclusive || && then
+            true return
+        fi
+    done
+    false
+}
+
+# Forward the sources of a borrowed binding. A self-reference names the binding's
+# own storage instead. The projected value already carries its payload sources.
+fn add_binding_source_origins
+    origins:std::Option[std::List[Origin]]
+    sources:$std::List[Origin]
+    place:$Place
+    exclusive:bool
+-> std::Option[std::List[Origin]] {
+    for source in sources.iter do
+        if place.fields.is_empty ! source.kind OriginKind::Place is ! && then
+            continue
+        fi
+        if
+            source.kind OriginKind::Place is source.place.binding place.binding == && source
+                .place
+                .fields
+                .is_empty &&
+        then
+            exclusive place origins add_origin = origins
+        else
+            source.clone origins append_origin = origins
+        fi
+    done
+    origins
+}
+
+# The place a pattern binding refers to: a named struct field or the subject itself.
+fn get_pattern_binding_place
+    pattern_value:$common::PatternValue
+    subject_place:$Place
+    binding_name:$str
+-> Place {
+    subject_place.clone = binding_place
+    if pattern_value common::PatternValue::Struct(struct_pattern) is then
+        for pair in struct_pattern.bindings.iter do
+            if binding_name pair.second pattern::binding_names common::string_list_contains then
+                pair.first.as_str subject_place.project = binding_place
+            fi
+        done
+    fi
+    binding_place
+}
+
 pub fn contains_literal literals:$std::List[LiteralRef] candidate:$LiteralRef -> bool {
     for literal in literals.iter do
         if candidate.id literal.id == then
@@ -979,6 +1035,51 @@ impl TypedValue {
             fi
         done
         true
+    }
+}
+
+impl TypedValue {
+    # Keep an origin's span only when this value and `candidate` agree on it.
+    fn merge_shared_loan_span self:mut$TypedValue candidate:$TypedValue origin:$Origin {
+        if
+            origin self.loan_spans.get std::Option::Some(std::Option::Some(existing_span)) is
+            origin candidate.loan_spans.get std::Option::Some(std::Option::Some(candidate_span)) is &&
+        then
+            if candidate_span existing_span loan_spans_equal then
+                return
+            fi
+        fi
+        std::Option[LoanSpan]::None origin.clone self.loan_spans.set
+    }
+
+    fn merge_loan_spans
+        self:mut$TypedValue
+        candidate:$TypedValue
+        original_origins:$std::Option[std::List[Origin]]
+    {
+        if original_origins std::Option::Some(original_items) is then
+            for original_origin in original_items.iter do
+                if original_origin self.loan_spans.has ! then
+                    std::Option[LoanSpan]::None original_origin.clone self.loan_spans.set
+                fi
+            done
+        fi
+        if candidate.origins std::Option::Some(candidate_origins) is else
+            return
+        fi
+        for candidate_origin in candidate_origins.iter do
+            if original_origins std::Option::Some(known_origins) is then
+                if candidate_origin known_origins contains_origin then
+                    candidate_origin candidate self.merge_shared_loan_span
+                    continue
+                fi
+            fi
+            if candidate_origin candidate.loan_spans.get std::Option::Some(candidate_span) is then
+                candidate_span.clone candidate_origin.clone self.loan_spans.set
+            else
+                std::Option[LoanSpan]::None candidate_origin.clone self.loan_spans.set
+            fi
+        done
     }
 }
 
@@ -1088,51 +1189,7 @@ impl TypedStack {
                 std::Option[Place]::None = value.address_place
             fi
             value.origins.clone = original_origins
-            if original_origins.clone std::Option::Some(original_items) is then
-                for original_origin in original_items.iter do
-                    if original_origin value.loan_spans.has ! then
-                        std::Option[LoanSpan]::None original_origin.clone value.loan_spans.set
-                    fi
-                done
-            fi
-            if candidate_value.origins std::Option::Some(candidate_origins) is then
-                for candidate_origin in candidate_origins.iter do
-                    false = value_has_origin
-                    if original_origins.clone std::Option::Some(original_items) is then
-                        candidate_origin original_items contains_origin
-                        = value_has_origin
-                    fi
-                    if value_has_origin then
-                        false = spans_match
-                        if
-                            candidate_origin value.loan_spans.get
-                            std::Option::Some(existing) is
-                        then
-                            if
-                                candidate_origin candidate_value.loan_spans.get
-                                std::Option::Some(candidate_span_opt) is
-                            then
-                                if existing std::Option::Some(existing_span) is then
-                                    if candidate_span_opt std::Option::Some(candidate_span) is then
-                                        candidate_span existing_span loan_spans_equal = spans_match
-                                    fi
-                                fi
-                            fi
-                        fi
-                        if spans_match ! then
-                            std::Option[LoanSpan]::None candidate_origin.clone
-                            value.loan_spans.set
-                        fi
-                    elif
-                        candidate_origin candidate_value.loan_spans.get
-                        std::Option::Some(candidate_span_opt) is
-                    then
-                        candidate_span_opt.clone candidate_origin.clone value.loan_spans.set
-                    else
-                        std::Option[LoanSpan]::None candidate_origin.clone value.loan_spans.set
-                    fi
-                done
-            fi
+            original_origins candidate_value value.merge_loan_spans
             candidate_value.origins original_origins merge_origins = merged_origins
             merged_origins = value.origins
             candidate_value.cleanup_origins value.cleanup_origins.clone merge_origins
@@ -1858,58 +1915,59 @@ impl OwnershipChecker {
             else
                 continue
             fi = active_origins: $std::Option[std::List[Origin]]
-            if active_origins std::Option::Some(origins) is then
-                for origin in origins.iter do
-                    if
-                        place origin.overlaps
-                        origin.exclusive exclusive || &&
-                    then
-                        common::empty_location binding_name.clone std::Option::Some self.make_loan_conflict
-                        std::Option::Some return
-                    fi
-                done
+            if exclusive place active_origins does_loan_conflict then
+                common::empty_location binding_name.clone std::Option::Some self.make_loan_conflict
+                std::Option::Some return
             fi
         done
         for frame in branches.iter do
-            if frame BranchFrame::BranchWhile(while_ctx) is then
-                for
-                    pair in while_ctx
-                        .flow_before
-                        .bindings
-                        .iter
-                do
-                    if
-                        place.binding.as_str pair.first.as_str ==
-                        pair.first.as_str ignored_bindings common::string_list_contains ||
-                        pair.first.as_str scope
-                            .has_binding ! ||
-                    then
-                        continue
-                    fi
-                    if pair.first while_ctx.live_bindings.has then
-                        pair.second.origins
-                    else
-                        pair.second.cleanup_origins
-                    fi match
-                        std::Option::Some(origins) => origins
-                        std::Option::None => continue
-                    end = loop_origins: $std::List[Origin]
-                    for origin in loop_origins.iter do
-                        if
-                            place origin.overlaps
-                            origin.exclusive exclusive || &&
-                        then
-                            common::empty_location = loan_origin
-                            if pair.second.location std::Option::Some(location) is then
-                                location.clone = loan_origin
-                            fi
-                            std::Option[common::Location]::None
-                            loan_origin std::Option::Some
-                            pair.first.clone std::Option::Some LoanConflict
-                            std::Option::Some return
-                        fi
-                    done
-                done
+            if frame BranchFrame::BranchWhile(while_context) is then
+                ignored_bindings exclusive place scope while_context self.find_loop_loan_conflict = loop_conflict
+                if loop_conflict.is_some then
+                    loop_conflict return
+                fi
+            fi
+        done
+        std::Option[LoanConflict]::None
+    }
+
+    # Loans held on a loop's back edge conflict with an access in the loop body.
+    fn find_loop_loan_conflict
+        self:$OwnershipChecker
+        while_context:$WhileContext
+        scope:$block_scope::BlockScope
+        place:$Place
+        exclusive:bool
+        ignored_bindings:$std::List[std::String]
+    -> std::Option[LoanConflict] {
+        for
+            pair in while_context
+                .flow_before
+                .bindings
+                .iter
+        do
+            if
+                place.binding.as_str pair.first.as_str ==
+                pair.first.as_str ignored_bindings common::string_list_contains ||
+                pair.first.as_str scope
+                    .has_binding ! ||
+            then
+                continue
+            fi
+            if pair.first while_context.live_bindings.has then
+                pair.second.origins
+            else
+                pair.second.cleanup_origins
+            fi = loop_origins: $std::Option[std::List[Origin]]
+            if exclusive place loop_origins does_loan_conflict then
+                common::empty_location = loan_origin
+                if pair.second.location std::Option::Some(location) is then
+                    location.clone = loan_origin
+                fi
+                std::Option[common::Location]::None
+                loan_origin std::Option::Some
+                pair.first.clone std::Option::Some LoanConflict
+                std::Option::Some return
             fi
         done
         std::Option[LoanConflict]::None
@@ -1997,33 +2055,17 @@ impl OwnershipChecker {
         storage:$std::Option[Place]
         exclusive:bool
     -> std::Option[std::List[Origin]] {
-        if storage std::Option::Some(place) is then
-            if place.binding self.binding_loans.get std::Option::Some(binding) is then
-                if binding.capability ValueCapability::Owned is ! then
-                    if binding.origins std::Option::Some(sources) is then
-                        for source in sources.iter do
-                            # The projected value already carries its payload sources.
-                            if place.fields.is_empty ! source.kind OriginKind::Place is ! && then
-                                continue
-                            fi
-                            if
-                                source.kind OriginKind::Place is source.place.binding place.binding == && source
-                                    .place
-                                    .fields
-                                    .is_empty &&
-                            then
-                                exclusive place origins add_origin = origins
-                            else
-                                source.clone origins append_origin = origins
-                            fi
-                        done
-                        origins return
-                    fi
-                fi
-            fi
-            exclusive place origins add_origin = origins
+        if storage std::Option::Some(place) is else
+            origins return
         fi
-        origins
+        if place.binding self.binding_loans.get std::Option::Some(binding) is then
+            if
+                binding.capability ValueCapability::Owned is ! binding.origins std::Option::Some(sources) is &&
+            then
+                exclusive place sources origins add_binding_source_origins return
+            fi
+        fi
+        exclusive place origins add_origin
     }
 
     fn merge_destination_origins
@@ -9600,40 +9642,33 @@ pub fn bind_from_type_slot
     expected:$common::Type
     actual:$common::Type
 {
-    if expected.type_var_name std::Option::Some(direct_tv_name) is then
-        direct_tv_name.as_str tparams find_tparam_index = direct_tp_idx
-        if direct_tp_idx std::Option::Some(direct_index) is then
-            direct_index bargs.get = direct_caller_ref
-            actual direct_caller_ref effect bindings try_bind_caller_tvar
-            return
+    if expected.type_var_name std::Option::Some(direct_name) is then
+        if direct_name.as_str tparams find_tparam_index std::Option::Some(direct_index) is then
+            actual direct_index bargs.get effect bindings try_bind_caller_tvar
         fi
         return
     fi
-    if expected.as_generic std::Option::Some(expected_g) is then
-        if actual.as_generic std::Option::Some(actual_g) is then
-            if expected_g.base actual_g.base == then
-                0 = slot_index: u64
-                while
-                    slot_index expected_g.params.length <
-                    slot_index actual_g.params.length < &&
-                do
-                    if
-                        slot_index expected_g
-                            .params
-                            .get
-                            .type_var_name std::Option::Some(nested_name) is
-                    then
-                        nested_name.as_str tparams find_tparam_index = nested_tp_idx
-                        if nested_tp_idx std::Option::Some(nested_index) is then
-                            nested_index bargs.get = nested_caller_ref
-                            slot_index actual_g.params.get nested_caller_ref effect bindings try_bind_caller_tvar
-                        fi
-                    fi
-                    1 += slot_index
-                done
+    if
+        expected.as_generic std::Option::Some(expected_generic) is
+        actual.as_generic std::Option::Some(actual_generic) is &&
+    else
+        return
+    fi
+    if expected_generic.base actual_generic.base != then
+        return
+    fi
+    for
+        pair in actual_generic.params.iter expected_generic
+            .params
+            .list_iter
+            .zip
+    do
+        if pair.first.type_var_name std::Option::Some(nested_name) is then
+            if nested_name.as_str tparams find_tparam_index std::Option::Some(nested_index) is then
+                pair.second nested_index bargs.get effect bindings try_bind_caller_tvar
             fi
         fi
-    fi
+    done
 }
 
 pub fn diff_method_stack_effect
@@ -11693,44 +11728,40 @@ impl TypeChecker {
         function_opt:mut$std::Option[common::Function]
     {
         for binding_name in op pattern::pattern_bindings.iter do
-            if binding_name.as_str self.scope.lookup std::Option::Some(binding_type) is then
-                if
-                    self.store binding_type.has_borrow
-                    binding_type.has_unresolved_type_var ||
-                    self.store binding_type get_borrow_shape CAPTURED_BORROW_SHAPE & 0 != ||
-                    match_subject_type.is_borrow
-                    function_opt binding_type self.type_is_duplicable ! && ||
-                then
-                    match_origins.clone = origins
-                    op common::pattern_value_of = pattern_value
-                    function_opt match_subject_type binding_name.as_str pattern_value self.pattern_copies_payload = copied
-                    if copied then
-                        match_place self.ownership.canonical_storage match_origins std::Option[std::List[Origin]]::None merge_contained_origins = origins
-                    elif match_subject_type.is_borrow then
-                        if match_place std::Option::Some(subject_place) is then
-                            subject_place.clone = binding_place
-                            if op common::pattern_value_of common::PatternValue::Struct(struct_pattern) is then
-                                for pair in struct_pattern.bindings.iter do
-                                    if binding_name.as_str pair.second pattern::binding_names common::string_list_contains then
-                                        pair.first.as_str subject_place.project = binding_place
-                                    fi
-                                done
-                            fi
-                            binding_type.is_exclusive_borrow binding_place std::Option::Some origins self.ownership.add_storage_origins = origins
-                        fi
-                    fi
-                    match_cleanup_origins.clone = cleanup_origins
-                    std::List[std::String]::new = visiting
-                    if visiting self.store binding_type does_cleanup_observe_borrow then
-                        origins cleanup_origins merge_origins = cleanup_origins
-                    fi
-                    binding_type.capability = capability
-                    if match_subject_type.is_borrow copied ! && then
-                        match_subject_type.capability = capability
-                    fi
-                    std::Option[Place]::None capability cleanup_origins origins binding_name.as_str self.current_location self.ownership.record_binding_origins
+            if binding_name.as_str self.scope.lookup std::Option::Some(binding_type) is else
+                continue
+            fi
+            if
+                self.store binding_type.has_borrow
+                binding_type.has_unresolved_type_var ||
+                self.store binding_type get_borrow_shape CAPTURED_BORROW_SHAPE & 0 != ||
+                match_subject_type.is_borrow
+                function_opt binding_type self.type_is_duplicable ! && ||
+                !
+            then
+                continue
+            fi
+            match_origins.clone = origins
+            op common::pattern_value_of = pattern_value
+            function_opt match_subject_type binding_name.as_str pattern_value self.pattern_copies_payload = copied
+            if copied then
+                match_place self.ownership.canonical_storage match_origins std::Option[std::List[Origin]]::None merge_contained_origins = origins
+            elif match_subject_type.is_borrow then
+                if match_place std::Option::Some(subject_place) is then
+                    binding_name.as_str subject_place pattern_value get_pattern_binding_place = binding_place
+                    binding_type.is_exclusive_borrow binding_place std::Option::Some origins self.ownership.add_storage_origins = origins
                 fi
             fi
+            match_cleanup_origins.clone = cleanup_origins
+            std::List[std::String]::new = visiting
+            if visiting self.store binding_type does_cleanup_observe_borrow then
+                origins cleanup_origins merge_origins = cleanup_origins
+            fi
+            binding_type.capability = capability
+            if match_subject_type.is_borrow copied ! && then
+                match_subject_type.capability = capability
+            fi
+            std::Option[Place]::None capability cleanup_origins origins binding_name.as_str self.current_location self.ownership.record_binding_origins
         done
     }
 
