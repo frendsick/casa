@@ -48,6 +48,10 @@ person Person::name print
 "Grace" person Person::set_name
 ```
 
+Struct fields and methods can use built-in names such as `codepoint`,
+`to_bits`, and `try_add`. Dot syntax resolves these members from the receiver
+type.
+
 ## Add methods
 
 An `impl` block adds methods to a type:
