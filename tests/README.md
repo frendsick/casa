@@ -17,5 +17,10 @@ fixtures also retain their individual builds. If the shared build fails, the
 runner retries individual builds to report each compilation failure and run the
 remaining tests.
 
+The runner sets `TMPDIR` to a private directory for each run. A test that creates
+a real file must get its path from `temp_paths::path` so concurrent runs do not
+collide. Paths that exist only in `source_overrides` or `SourceStore` never reach
+the file system and can remain fixed.
+
 Run `tests/test_compiler_runner.sh` to check selection, shared builds, process
 isolation, and failure reporting. These checks also run in the formatter shard.

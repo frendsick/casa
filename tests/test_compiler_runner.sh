@@ -79,6 +79,27 @@ run_tests no-such-test
 expect 'Notice: no tests matched filters: no-such-test'
 expect_builds 0
 
+# Concurrent runs must not share the directory that tests use for real files.
+cat > "$RUN_DIR/fixtures/test_lexer.casa" <<'CASA'
+import "os" as os
+pub fn run_tests {
+    "TMPDIR" os::env::get.unwrap.to_str.unwrap = directory
+    f"private directory: {directory}\n" print
+}
+run_tests
+CASA
+private_directory() {
+    run_tests lexer
+    [ "$status" -eq 0 ]
+    sed -n 's/.*private directory: //p' "$RUN_DIR/output"
+}
+first_directory=$(private_directory)
+second_directory=$(private_directory)
+if [ -z "$first_directory" ] || [ "$first_directory" = "$second_directory" ]; then
+    echo "Runs shared TMPDIR: '$first_directory' and '$second_directory'" >&2
+    exit 1
+fi
+
 # A process failure must not stop the following test or run it in the same process.
 cat > "$RUN_DIR/fixtures/test_lexer.casa" <<'CASA'
 import "std"
