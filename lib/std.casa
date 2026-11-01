@@ -1,3 +1,13 @@
+# Linux x86-64 system calls and process conventions
+const SYS_WRITE 1
+const SYS_FORK 57
+const SYS_EXECVE 59
+const SYS_EXIT 60
+const SYS_WAIT4 61
+const STDERR_FD 2
+const EXIT_FAILURE 1
+const EXEC_FAILURE_STATUS 127
+
 # SAFETY: The caller provides `n` readable bytes at `src` and `n` writable bytes at `dst`
 # for the call duration. The regions do not overlap.
 pub unsafe fn memcpy dst:ptr src:ptr n:u64 {
@@ -117,7 +127,7 @@ impl array {
         if N index <= then
             "error: array index out of bounds\n" eprint
             # SAFETY: The process exits without returning to the caller.
-            unsafe { 1 60 syscall1 drop }
+            unsafe { EXIT_FAILURE SYS_EXIT syscall1 drop }
         fi
         # An array value is its element storage.
         # SAFETY: The bounds check keeps the computed address inside initialized array storage.
@@ -196,7 +206,7 @@ impl List {
         if self.size n <= then
             "error: List index out of bounds\n" print
             # SAFETY: The process exits without returning to the caller.
-            unsafe { 1 60 syscall1 drop }
+            unsafe { EXIT_FAILURE SYS_EXIT syscall1 drop }
         fi
         size_of[T] = stride
         # SAFETY: The bounds check identifies one initialized element in the allocation.
@@ -209,7 +219,7 @@ impl List {
         if self.size n <= then
             "error: List index out of bounds\n" print
             # SAFETY: The process exits without returning to the caller.
-            unsafe { 1 60 syscall1 drop }
+            unsafe { EXIT_FAILURE SYS_EXIT syscall1 drop }
         fi
         size_of[T] = stride
         # SAFETY: The exclusive List borrow and bounds check identify one initialized element.
@@ -220,7 +230,7 @@ impl List {
         if self.size n <= then
             "error: List index out of bounds\n" print
             # SAFETY: The process exits without returning to the caller.
-            unsafe { 1 60 syscall1 drop }
+            unsafe { EXIT_FAILURE SYS_EXIT syscall1 drop }
         fi
         size_of[T] = stride
         # SAFETY: The bounds check identifies initialized T storage owned exclusively by the List.
@@ -235,7 +245,7 @@ impl List {
         if self.size n <= then
             "error: List index out of bounds\n" print
             # SAFETY: The process exits without returning to the caller.
-            unsafe { 1 60 syscall1 drop }
+            unsafe { EXIT_FAILURE SYS_EXIT syscall1 drop }
         fi
         size_of[T] = stride
         # SAFETY: The bounds check identifies initialized T storage owned exclusively by the List.
@@ -276,7 +286,7 @@ impl List {
         if 0 self.size >= then
             "error: pop from empty List\n" print
             # SAFETY: The process exits without returning to the caller.
-            unsafe { 1 60 syscall1 drop }
+            unsafe { EXIT_FAILURE SYS_EXIT syscall1 drop }
         fi
         1 -= self.size
         size_of[T] = stride
@@ -289,7 +299,7 @@ impl List {
         if self.size index < then
             "error: List insert index out of bounds\n" print
             # SAFETY: The process exits without returning to the caller.
-            unsafe { 1 60 syscall1 drop }
+            unsafe { EXIT_FAILURE SYS_EXIT syscall1 drop }
         fi
         # SAFETY: Capacity and bounds checks keep all moves inside allocated T storage.
         unsafe {
@@ -366,7 +376,7 @@ impl List {
         if self.size i <= self.size j <= || then
             "error: List index out of bounds\n" print
             # SAFETY: The process exits without returning to the caller.
-            unsafe { 1 60 syscall1 drop }
+            unsafe { EXIT_FAILURE SYS_EXIT syscall1 drop }
         fi
         size_of[T] = stride
         # SAFETY: Both bounds checks keep each byte swap inside initialized elements.
@@ -3542,7 +3552,7 @@ impl[K: Hashable + Clone] Set[K]: Clone {
 pub fn get_arg n:u64 -> Bytes {
     if argc n <= then
         "error: argument index out of bounds\n" eprint
-        unsafe { 1 60 syscall1 drop }
+        unsafe { EXIT_FAILURE SYS_EXIT syscall1 drop }
     fi
     # SAFETY: argv contains argc accessible NUL-terminated process argument pointers.
     unsafe { argv n 8 * + read_pointer ptr::as_ref[cstr] }.to_bytes
@@ -3550,8 +3560,8 @@ pub fn get_arg n:u64 -> Bytes {
 
 impl process {
     pub fn exit status:u8 {
-        # SAFETY: Linux syscall 60 terminates the current process with the supplied status.
-        unsafe { status 60 syscall1 drop }
+        # SAFETY: SYS_EXIT terminates the current process with the supplied status.
+        unsafe { status SYS_EXIT syscall1 drop }
         "fatal: process exit returned" panic
     }
 
@@ -3572,7 +3582,7 @@ pub fn println_string message:String { message print "\n" print }
 # Stderr output
 pub fn eprint message:$str {
     # SAFETY: The borrowed text contains `length` readable bytes after its header.
-    unsafe { message.length message ptr::from_ref 8 + 2 1 syscall3 drop }
+    unsafe { message.length message ptr::from_ref 8 + STDERR_FD SYS_WRITE syscall3 drop }
 }
 
 pub fn eprintln message:$str { f"{message}\n".as_str eprint }
@@ -4072,28 +4082,28 @@ pub fn run_command args:List[Bytes] -> i64 {
     # Null terminator
     unsafe { ptr::null argv_buf.data args.length 8 * + ptr::write[ptr] }
     # fork()
-    unsafe { 57 syscall0 = child_pid }
+    unsafe { SYS_FORK syscall0 = child_pid }
     if 0 child_pid > then
         child_pid return
     fi
     if 0 child_pid == then
         # SAFETY: argv_buf is terminated and its borrowed arguments are still live.
-        unsafe { envp argv_buf.data argv_buf.data read_pointer 59 syscall3 = exec_result }
+        unsafe { envp argv_buf.data argv_buf.data read_pointer SYS_EXECVE syscall3 = exec_result }
         # execve returns only on failure
         "error: cannot execute " eprint
         if args.is_empty ! then
             0 args.get = program
             # SAFETY: program has `size` initialized bytes.
-            unsafe { program.size program.data 2 1 syscall3 drop }
+            unsafe { program.size program.data STDERR_FD SYS_WRITE syscall3 drop }
         fi
         f": errno {0 exec_result -}\n".as_str eprint
-        unsafe { 127 60 syscall1 drop }
+        unsafe { EXEC_FAILURE_STATUS SYS_EXIT syscall1 drop }
     fi
     # Parent: wait4(pid, &status, 0, 0)
     # Casa installs no interrupting signal handlers, so wait4 does not return
     # EINTR. Add a retry if a program can install one.
     8 RawBuffer::new = wait_status
-    unsafe { ptr::null 0 wait_status.data child_pid 61 syscall4 = wait_result }
+    unsafe { ptr::null 0 wait_status.data child_pid SYS_WAIT4 syscall4 = wait_result }
     if 0 wait_result > then
         wait_result return
     fi
