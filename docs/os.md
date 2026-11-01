@@ -97,17 +97,17 @@ close errors are ignored, and a write error can leave a partial file.
 
 `FileStat` has `size`, `mode`, `mtime`, `atime`, and `ctime` fields. It also
 provides these checks. `os::file::stat` follows symbolic links, so its result describes
-the target rather than the link. Permission helpers inspect owner mode bits.
+the target rather than the link. The `is_owner_*` helpers inspect owner mode bits.
 They do not check effective access for the current process:
 
 | Method | Signature | Description |
 |---|---|---|
 | [is_dir](#filestatis_dir) | `fn is_dir self:$FileStat -> bool` | Directory |
-| [is_executable](#filestatis_executable) | `fn is_executable self:$FileStat -> bool` | Owner-executable mode bit |
 | [is_file](#filestatis_file) | `fn is_file self:$FileStat -> bool` | Regular file |
-| [is_readable](#filestatis_readable) | `fn is_readable self:$FileStat -> bool` | Owner-readable mode bit |
+| [is_owner_executable](#filestatis_owner_executable) | `fn is_owner_executable self:$FileStat -> bool` | Owner-executable mode bit |
+| [is_owner_readable](#filestatis_owner_readable) | `fn is_owner_readable self:$FileStat -> bool` | Owner-readable mode bit |
+| [is_owner_writable](#filestatis_owner_writable) | `fn is_owner_writable self:$FileStat -> bool` | Owner-writable mode bit |
 | [is_symlink](#filestatis_symlink) | `fn is_symlink self:$FileStat -> bool` | Symbolic link |
-| [is_writable](#filestatis_writable) | `fn is_writable self:$FileStat -> bool` | Owner-writable mode bit |
 
 ### FileStat::is_dir
 
@@ -117,14 +117,6 @@ fn is_dir self:$FileStat -> bool
 
 `is_dir` returns whether the entry is a directory.
 
-### FileStat::is_executable
-
-```text
-fn is_executable self:$FileStat -> bool
-```
-
-`is_executable` returns whether the owner-executable mode bit is set.
-
 ### FileStat::is_file
 
 ```text
@@ -133,13 +125,29 @@ fn is_file self:$FileStat -> bool
 
 `is_file` returns whether the entry is a regular file.
 
-### FileStat::is_readable
+### FileStat::is_owner_executable
 
 ```text
-fn is_readable self:$FileStat -> bool
+fn is_owner_executable self:$FileStat -> bool
 ```
 
-`is_readable` returns whether the owner-readable mode bit is set.
+`is_owner_executable` returns whether the owner-executable mode bit is set.
+
+### FileStat::is_owner_readable
+
+```text
+fn is_owner_readable self:$FileStat -> bool
+```
+
+`is_owner_readable` returns whether the owner-readable mode bit is set.
+
+### FileStat::is_owner_writable
+
+```text
+fn is_owner_writable self:$FileStat -> bool
+```
+
+`is_owner_writable` returns whether the owner-writable mode bit is set.
 
 ### FileStat::is_symlink
 
@@ -148,15 +156,6 @@ fn is_symlink self:$FileStat -> bool
 ```
 
 `is_symlink` returns whether the entry is a symbolic link.
-
-### FileStat::is_writable
-
-```text
-fn is_writable self:$FileStat -> bool
-```
-
-`is_writable` returns whether the owner-writable mode bit is set.
-
 
 The complete [OS example](../examples/os_interaction.casa) creates, inspects,
 and removes a file and directory.
@@ -258,24 +257,24 @@ import "std"
 import "io"
 
 io::StdinReader::new = reader
-reader io::stdin_read_line = line
+reader.read_line = line
 line.to_str.unwrap print
 ```
 
-| Function | Result |
+| Method | Result |
 |---|---|
-| `io::stdin_read_byte reader:mut$StdinReader -> i64` | Byte value, or `-1` at end of input |
-| `io::stdin_read_exact reader:mut$StdinReader count:u64 -> Bytes` | Up to `count` bytes |
-| `io::stdin_read_line reader:mut$StdinReader -> Bytes` | Bytes before a newline or end of input |
+| `read_byte self:mut$StdinReader -> Option[u8]` | Next byte, or `None` at end of input |
+| `read_exact self:mut$StdinReader count:u64 -> Bytes` | Up to `count` bytes |
+| `read_line self:mut$StdinReader -> Bytes` | Bytes before a newline or end of input |
 
 The reader's buffer and counters are private. `reader.has_buffered_input`
 reports whether an unread byte is buffered. `reader.buffer` returns a shared
 RawBuffer borrow for low-level access, with no storage replacement or counter
 setters. Raw memory access still requires `unsafe`.
 
-Read errors are treated as end of input. `stdin_read_exact` can return fewer
+Read errors are treated as end of input. `read_exact` can return fewer
 bytes than requested. Check the returned length when the protocol requires an
-exact count. `stdin_read_line` consumes the newline without including it in the
+exact count. `read_line` consumes the newline without including it in the
 result.
 
 ## Advanced file descriptors

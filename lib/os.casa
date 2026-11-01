@@ -1,8 +1,29 @@
 import "std" as std
 
+# Linux x86-64 system call numbers
+const SYS_READ 0
+const SYS_WRITE 1
+const SYS_OPEN 2
+const SYS_CLOSE 3
+const SYS_STAT 4
+const SYS_GETCWD 79
+const SYS_CHDIR 80
+const SYS_MKDIR 83
+const SYS_RMDIR 84
+const SYS_UNLINK 87
+const SYS_GETDENTS64 217
+
 # I/O error handling
-pub const EINVAL 22
+const EPERM 1
+const ENOENT 2
 const EIO 5
+const EBADF 9
+const EACCES 13
+const EEXIST 17
+const ENOTDIR 20
+const EISDIR 21
+pub const EINVAL 22
+const ENOTEMPTY 39
 
 pub enum IoError {
     NotFound
@@ -17,28 +38,28 @@ pub enum IoError {
 
 pub fn errno_to_io_error syscall_result:i64 -> IoError {
     0 syscall_result - = errno
-    if 2 errno == then
+    if ENOENT errno == then
         IoError::NotFound return
     fi
-    if 13 errno == then
+    if EACCES errno == then
         IoError::PermissionDenied return
     fi
-    if 1 errno == then
+    if EPERM errno == then
         IoError::PermissionDenied return
     fi
-    if 17 errno == then
+    if EEXIST errno == then
         IoError::AlreadyExists return
     fi
-    if 21 errno == then
+    if EISDIR errno == then
         IoError::IsDirectory return
     fi
-    if 20 errno == then
+    if ENOTDIR errno == then
         IoError::NotDirectory return
     fi
-    if 39 errno == then
+    if ENOTEMPTY errno == then
         IoError::NotEmpty return
     fi
-    if 9 errno == then
+    if EBADF errno == then
         IoError::BadFd return
     fi
     errno IoError::Other
@@ -66,8 +87,33 @@ pub const O_RDONLY 0
 pub const O_WRONLY 0x01
 pub const O_CREAT 0x40
 pub const O_TRUNC 0x200
+const O_DIRECTORY 0x10000
 const READ_CHUNK_SIZE 65536
 const WRITE_CHUNK_SIZE 65536
+
+# File type and owner permission bits of FileStat.mode
+const S_IFMT 0xF000
+const S_IFDIR 0x4000
+const S_IFREG 0x8000
+const S_IFLNK 0xA000
+const S_IRUSR 0x100
+const S_IWUSR 0x80
+const S_IXUSR 0x40
+
+# Layout of the Linux x86-64 stat buffer
+const STAT_BUFFER_SIZE 144
+const STAT_MODE_OFFSET 24
+const STAT_SIZE_OFFSET 48
+const STAT_ATIME_OFFSET 72
+const STAT_MTIME_OFFSET 88
+const STAT_CTIME_OFFSET 104
+
+# Layout of a Linux dirent64 record
+const DIRENT_BUFFER_SIZE 1024
+const DIRENT_RECORD_LENGTH_OFFSET 16
+const DIRENT_NAME_OFFSET 19
+const CURRENT_DIRECTORY_BUFFER_SIZE 4096
+const DOT_BYTE: u8 46
 
 pub struct FileStat {
     pub size:  u64
@@ -78,36 +124,37 @@ pub struct FileStat {
 }
 
 impl FileStat {
-    pub fn is_dir self:$FileStat -> bool { self.mode 0xF000 & 0x4000 == }
+    pub fn is_dir self:$FileStat -> bool { self.mode S_IFMT & S_IFDIR == }
 
-    pub fn is_file self:$FileStat -> bool { self.mode 0xF000 & 0x8000 == }
+    pub fn is_file self:$FileStat -> bool { self.mode S_IFMT & S_IFREG == }
 
-    pub fn is_symlink self:$FileStat -> bool { self.mode 0xF000 & 0xA000 == }
+    pub fn is_symlink self:$FileStat -> bool { self.mode S_IFMT & S_IFLNK == }
 
-    pub fn is_readable self:$FileStat -> bool { self.mode 0x100 & 0 != }
+    # The owner bits say nothing about whether the current process has access.
+    pub fn is_owner_readable self:$FileStat -> bool { self.mode S_IRUSR & 0 != }
 
-    pub fn is_writable self:$FileStat -> bool { self.mode 0x80 & 0 != }
+    pub fn is_owner_writable self:$FileStat -> bool { self.mode S_IWUSR & 0 != }
 
-    pub fn is_executable self:$FileStat -> bool { self.mode 0x40 & 0 != }
+    pub fn is_owner_executable self:$FileStat -> bool { self.mode S_IXUSR & 0 != }
 }
 
 # File I/O
 impl file {
     pub fn open path:$cstr flags:i64 mode:i64 -> i64 {
         # SAFETY: path is a borrowed NUL-terminated byte string that remains live for the syscall.
-        unsafe { mode flags path ptr::from_ref 2 syscall3 }
+        unsafe { mode flags path ptr::from_ref SYS_OPEN syscall3 }
     }
 
     # SAFETY: buf points to size writable bytes with exclusive access for the call.
     pub unsafe fn read fd:i64 buf:ptr size:u64 -> i64 {
         # SAFETY: The caller supplies a writable buffer of at least size bytes.
-        unsafe { size buf fd 0 syscall3 }
+        unsafe { size buf fd SYS_READ syscall3 }
     }
 
     # SAFETY: data points to size initialized bytes that remain readable for the call.
     unsafe fn write_buffer fd:i64 data:ptr size:u64 -> i64 {
         # SAFETY: The caller supplies size initialized bytes at data.
-        unsafe { size data fd 1 syscall3 }
+        unsafe { size data fd SYS_WRITE syscall3 }
     }
 
     pub fn write fd:i64 data:$std::Bytes -> i64 {
@@ -118,7 +165,7 @@ impl file {
 
     pub fn close fd:i64 -> i64 {
         # SAFETY: close accepts any file descriptor and reports invalid values as an error.
-        unsafe { fd 3 syscall1 }
+        unsafe { fd SYS_CLOSE syscall1 }
     }
 
     pub fn read_all path:$cstr -> std::Result[std::Bytes IoError] {
@@ -127,7 +174,7 @@ impl file {
             file_fd errno_to_io_error std::Result::Error return
         fi
         std::Bytes::new = result
-        READ_CHUNK_SIZE u64::try_from.unwrap = chunk_size
+        READ_CHUNK_SIZE = chunk_size: u64
         chunk_size std::RawBuffer::new = read_buffer
         while true do
             # SAFETY: read_buffer owns chunk_size writable bytes for the call.
@@ -175,7 +222,7 @@ impl file {
     # SAFETY: data points to size initialized bytes that remain readable for the call.
     unsafe fn write_all_buffer file_fd:i64 data:ptr size:u64 -> std::Result[std::Unit IoError] {
         0 = total_written: u64
-        WRITE_CHUNK_SIZE u64::try_from.unwrap = max_chunk_size
+        WRITE_CHUNK_SIZE = max_chunk_size: u64
         while total_written size < do
             size total_written - = chunk_size
             if chunk_size max_chunk_size > then
@@ -201,7 +248,7 @@ impl file {
 
     pub fn remove path:$cstr -> std::Result[std::Unit IoError] {
         # SAFETY: path is a borrowed NUL-terminated byte string that remains live for the syscall.
-        unsafe { path ptr::from_ref 87 syscall1 = remove_result }
+        unsafe { path ptr::from_ref SYS_UNLINK syscall1 = remove_result }
         if 0 remove_result > then
             remove_result errno_to_io_error std::Result::Error return
         fi
@@ -209,26 +256,26 @@ impl file {
     }
 
     pub fn exists path:$cstr -> bool {
-        144 std::RawBuffer::new = stat_buf
+        STAT_BUFFER_SIZE std::RawBuffer::new = stat_buf
         # SAFETY: stat_buf has the required size and path remains live.
-        unsafe { stat_buf.data path ptr::from_ref 4 syscall2 = stat_result }
+        unsafe { stat_buf.data path ptr::from_ref SYS_STAT syscall2 = stat_result }
         0 stat_result <=
     }
 
     pub fn stat path:$cstr -> std::Result[FileStat IoError] {
-        144 std::RawBuffer::new = stat_buf
+        STAT_BUFFER_SIZE std::RawBuffer::new = stat_buf
         # SAFETY: stat_buf has the required size and path remains live.
-        unsafe { stat_buf.data path ptr::from_ref 4 syscall2 = stat_result }
+        unsafe { stat_buf.data path ptr::from_ref SYS_STAT syscall2 = stat_result }
         if 0 stat_result > then
             stat_result errno_to_io_error std::Result::Error return
         fi
-        # SAFETY: A successful stat initialized every field read from the 144-byte buffer.
+        # SAFETY: A successful stat initialized every field read from the buffer.
         unsafe {
-            stat_buf.data 48 + load64 i64::wrapping_from = size
-            stat_buf.data 24 + load32 i64::from = mode
-            stat_buf.data 72 + load64 i64::wrapping_from = atime
-            stat_buf.data 88 + load64 i64::wrapping_from = mtime
-            stat_buf.data 104 + load64 i64::wrapping_from = ctime
+            stat_buf.data STAT_SIZE_OFFSET + load64 i64::wrapping_from = size
+            stat_buf.data STAT_MODE_OFFSET + load32 i64::from = mode
+            stat_buf.data STAT_ATIME_OFFSET + load64 i64::wrapping_from = atime
+            stat_buf.data STAT_MTIME_OFFSET + load64 i64::wrapping_from = mtime
+            stat_buf.data STAT_CTIME_OFFSET + load64 i64::wrapping_from = ctime
         }
         FileStat { size: size u64::try_from.unwrap mode: mode mtime: mtime atime: atime ctime: ctime } std::Result::Ok
     }
@@ -238,29 +285,29 @@ impl file {
 impl dir {
     fn is_dot_entry name:$std::Bytes -> bool {
         if 1 name.length == then
-            46 0 name.get.unwrap == return
+            DOT_BYTE 0 name.get.unwrap == return
         fi
         if 2 name.length == then
-            46 0 name.get.unwrap == 46 1 name.get.unwrap == && return
+            DOT_BYTE 0 name.get.unwrap == DOT_BYTE 1 name.get.unwrap == && return
         fi
         false
     }
 
     pub fn list path:$cstr -> std::Result[std::List[std::Bytes] IoError] {
         # SAFETY: path is a borrowed NUL-terminated byte string that remains live for the syscall.
-        unsafe { 0 0x10000 path ptr::from_ref 2 syscall3 = dir_fd }
+        unsafe { 0 O_DIRECTORY path ptr::from_ref SYS_OPEN syscall3 = dir_fd }
         if 0 dir_fd > then
             dir_fd errno_to_io_error std::Result::Error return
         fi
         std::List[std::Bytes]::new = entries
-        1024 std::RawBuffer::new = buf
+        DIRENT_BUFFER_SIZE std::RawBuffer::new = buf
         true = reading
         while reading do
-            # SAFETY: buf has 1024 writable bytes and dir_fd remains open.
-            unsafe { 1024 buf.data dir_fd 217 syscall3 = nread }
+            # SAFETY: buf has DIRENT_BUFFER_SIZE writable bytes and dir_fd remains open.
+            unsafe { DIRENT_BUFFER_SIZE buf.data dir_fd SYS_GETDENTS64 syscall3 = nread }
             if 0 nread > then
                 # SAFETY: dir_fd is an open descriptor owned by this function.
-                unsafe { dir_fd 3 syscall1 drop }
+                unsafe { dir_fd SYS_CLOSE syscall1 drop }
                 nread errno_to_io_error std::Result::Error return
             fi
             if 0 nread == then
@@ -269,11 +316,11 @@ impl dir {
                 0 = pos
                 while pos nread < do
                     # SAFETY: pos identifies an entry within the initialized getdents buffer.
-                    # Linux dirent64 stores reclen at byte offset 16 and NUL-terminated name at 19.
+                    # Linux dirent64 stores the record length and a NUL-terminated name.
                     unsafe {
                         buf.data pos u64::try_from.unwrap + = entry_ptr
-                        entry_ptr 16 + load16 = rec_len
-                        entry_ptr 19 + ptr::as_ref[cstr] cstr::to_bytes = name
+                        entry_ptr DIRENT_RECORD_LENGTH_OFFSET + load16 = rec_len
+                        entry_ptr DIRENT_NAME_OFFSET + ptr::as_ref[cstr] cstr::to_bytes = name
                     }
                     if name dir::is_dot_entry ! then
                         name entries.push
@@ -283,13 +330,13 @@ impl dir {
             fi
         done
         # SAFETY: dir_fd is an open descriptor owned by this function.
-        unsafe { dir_fd 3 syscall1 drop }
+        unsafe { dir_fd SYS_CLOSE syscall1 drop }
         entries std::Result::Ok
     }
 
     pub fn create path:$cstr mode:i64 -> std::Result[std::Unit IoError] {
         # SAFETY: path is a borrowed NUL-terminated byte string that remains live for the syscall.
-        unsafe { mode path ptr::from_ref 83 syscall2 = result }
+        unsafe { mode path ptr::from_ref SYS_MKDIR syscall2 = result }
         if 0 result > then
             result errno_to_io_error std::Result::Error return
         fi
@@ -298,7 +345,7 @@ impl dir {
 
     pub fn remove path:$cstr -> std::Result[std::Unit IoError] {
         # SAFETY: path is a borrowed NUL-terminated byte string that remains live for the syscall.
-        unsafe { path ptr::from_ref 84 syscall1 = result }
+        unsafe { path ptr::from_ref SYS_RMDIR syscall1 = result }
         if 0 result > then
             result errno_to_io_error std::Result::Error return
         fi
@@ -306,20 +353,20 @@ impl dir {
     }
 
     pub fn exists path:$cstr -> bool {
-        144 std::RawBuffer::new = stat_buf
+        STAT_BUFFER_SIZE std::RawBuffer::new = stat_buf
         # SAFETY: stat_buf has the required size and path remains live.
-        unsafe { stat_buf.data path ptr::from_ref 4 syscall2 = stat_result }
+        unsafe { stat_buf.data path ptr::from_ref SYS_STAT syscall2 = stat_result }
         if 0 stat_result > then
             false return
         fi
-        # SAFETY: A successful stat initialized the mode field at byte offset 24.
-        unsafe { stat_buf.data 24 + load32 0xF000 & 0x4000 == }
+        # SAFETY: A successful stat initialized the mode field.
+        unsafe { stat_buf.data STAT_MODE_OFFSET + load32 S_IFMT & S_IFDIR == }
     }
 
     pub fn current -> std::Result[std::Bytes IoError] {
-        4096 std::RawBuffer::new = buf
-        # SAFETY: buf has 4096 writable bytes for getcwd.
-        unsafe { 4096 buf.data 79 syscall2 = result }
+        CURRENT_DIRECTORY_BUFFER_SIZE std::RawBuffer::new = buf
+        # SAFETY: buf has CURRENT_DIRECTORY_BUFFER_SIZE writable bytes for getcwd.
+        unsafe { CURRENT_DIRECTORY_BUFFER_SIZE buf.data SYS_GETCWD syscall2 = result }
         if 0 result > then
             result errno_to_io_error std::Result::Error return
         fi
@@ -329,7 +376,7 @@ impl dir {
 
     pub fn change path:$cstr -> std::Result[std::Unit IoError] {
         # SAFETY: path is a borrowed NUL-terminated byte string that remains live for the syscall.
-        unsafe { path ptr::from_ref 80 syscall1 = result }
+        unsafe { path ptr::from_ref SYS_CHDIR syscall1 = result }
         if 0 result > then
             result errno_to_io_error std::Result::Error return
         fi

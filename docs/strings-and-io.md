@@ -122,10 +122,10 @@ fn eq b:$str a:$str -> bool
 ### str::find
 
 ```text
-fn find needle:$str s:$str -> i64
+fn find needle:$str s:$str -> Option[u64]
 ```
 
-`find` returns the first matching byte index, or `-1` when no match exists. An
+`find` returns the first matching byte index, or `None` when no match exists. An
 empty needle matches at byte index `0`. Call `text needle str::find`.
 
 ### str::is_empty
