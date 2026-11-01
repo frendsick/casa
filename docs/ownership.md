@@ -200,6 +200,15 @@ See [Custom destruction](structs-and-methods.md#custom-destruction) for the
 cleanup order and reserved `drop` method. `panic` and `std::process::exit` terminate
 without cleanup.
 
+Destroying a recursive struct or enum uses bounded call-stack space at any
+depth. This covers chains, trees, mutually recursive types, and recursive
+fields inside arrays. Pending levels use heap memory instead, so a failed
+allocation still terminates the process. A `drop` method that destroys values
+runs as an ordinary call. If a type keeps its recursive children in a
+collection such as `std::List`, the collection's `drop` method destroys them,
+and each level uses call-stack space. Destroying such a value at a large depth
+can exhaust the call stack, which terminates without cleanup.
+
 Structs and enums can retain borrows in their fields. Their loans last through
 any cleanup that can observe those borrows. See
 [Structs and Methods](structs-and-methods.md#receiver-access-and-stored-borrows) for the
