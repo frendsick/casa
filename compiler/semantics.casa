@@ -885,13 +885,11 @@ pub fn method_receiver_type effect:$common::StackEffect -> std::Option[common::T
 }
 
 pub fn capability_matches_receiver capability:$ValueCapability expected:$common::Type -> bool {
-    if capability ValueCapability::Shared is then
-        expected.is_shared_borrow return
-    fi
-    if capability ValueCapability::Exclusive is then
-        expected.is_shared_borrow expected.is_exclusive_borrow || return
-    fi
-    true
+    capability match
+        ValueCapability::Shared => expected.is_shared_borrow
+        ValueCapability::Exclusive => expected.is_shared_borrow expected.is_exclusive_borrow ||
+        ValueCapability::Owned => true
+    end
 }
 
 pub fn contains_literal literals:$std::List[LiteralRef] candidate:$LiteralRef -> bool {
@@ -7063,22 +7061,14 @@ impl TypeChecker {
 # Primitive comparisons are emitted as direct bytecode. `str` is handled
 # separately because it only supports `==`/`!=` and carries a type hint.
 pub fn comparison_op_str cmp_value:$common::OpValue -> str {
-    if cmp_value common::OpValue::Eq is then
-        "==" return
-    fi
-    if cmp_value common::OpValue::Ne is then
-        "!=" return
-    fi
-    if cmp_value common::OpValue::Lt is then
-        "<" return
-    fi
-    if cmp_value common::OpValue::Le is then
-        "<=" return
-    fi
-    if cmp_value common::OpValue::Gt is then
-        ">" return
-    fi
-    ">="
+    cmp_value match
+        common::OpValue::Eq => "=="
+        common::OpValue::Ne => "!="
+        common::OpValue::Lt => "<"
+        common::OpValue::Le => "<="
+        common::OpValue::Gt => ">"
+        _ => ">="
+    end
 }
 
 pub fn borrowed_comparison_effect type1:$common::Type type2:$common::Type -> common::StackEffect {
@@ -7651,20 +7641,23 @@ impl TypeChecker {
                 fi
             done
             for return_type in effect.return_types.iter do
-                if op.value common::OpValue::PtrAsRef is then
-                    false function_opt self.raw_borrow_input_origins = origins
-                    origins return_type self.stack_push_origins
-                elif op.value common::OpValue::PtrAsMut is then
-                    true function_opt self.raw_borrow_input_origins = origins
-                    origins return_type self.stack_push_origins
-                elif op.value common::OpValue::PtrRead is op.value common::OpValue::PtrFromRaw is || then
-                    function_opt self.raw_value_input_origins = cleanup_origins = origins
-                    cleanup_origins origins return_type self.classify_type_variable_return_origins
-                    = cleanup_origins = origins
-                    cleanup_origins origins return_type self.push_value_origins
-                else
-                    return_type self.stack_push_type
-                fi
+                op.value match
+                    common::OpValue::PtrAsRef => {
+                        false function_opt self.raw_borrow_input_origins = origins
+                        origins return_type self.stack_push_origins
+                    }
+                    common::OpValue::PtrAsMut => {
+                        true function_opt self.raw_borrow_input_origins = origins
+                        origins return_type self.stack_push_origins
+                    }
+                    common::OpValue::PtrRead | common::OpValue::PtrFromRaw => {
+                        function_opt self.raw_value_input_origins = cleanup_origins = origins
+                        cleanup_origins origins return_type self.classify_type_variable_return_origins
+                        = cleanup_origins = origins
+                        cleanup_origins origins return_type self.push_value_origins
+                    }
+                    _ => return_type self.stack_push_type
+                end
             done
         fi
     }
@@ -12051,16 +12044,7 @@ impl TypeChecker {
             for name in binding_names.iter do
                 op name.as_str self.record_implicit_binding
             done
-            typ.clone = pattern_subject_type
-            if pattern_subject_type.is_borrow ! then
-                if subject.capability ValueCapability::Shared is then
-                    common::SHARED_BORROW_TYPE pattern_subject_type common::apply_borrow_type
-                    = pattern_subject_type
-                elif subject.capability ValueCapability::Exclusive is then
-                    common::EXCLUSIVE_BORROW_TYPE pattern_subject_type common::apply_borrow_type
-                    = pattern_subject_type
-                fi
-            fi
+            subject.capability typ.access_type = pattern_subject_type
             std::Map[std::String common::Type]::new = binding_types
             function_opt op binding_types pattern_subject_type pattern_value self.collect_pattern_types
             for binding in binding_types.iter do
@@ -12891,12 +12875,8 @@ impl TypeChecker {
                     .unwrap
                     .clone = receiver_target
                 common::EXCLUSIVE_BORROW_TYPE receiver_target common::apply_borrow_type = lookup_receiver
-            elif receiver.is_borrow ! then
-                if receiver_capability ValueCapability::Shared is then
-                    common::SHARED_BORROW_TYPE receiver.clone common::apply_borrow_type = lookup_receiver
-                elif receiver_capability ValueCapability::Exclusive is then
-                    common::EXCLUSIVE_BORROW_TYPE receiver.clone common::apply_borrow_type = lookup_receiver
-                fi
+            else
+                receiver_capability receiver.access_type = lookup_receiver
             fi
             if "clone" method_name.as_str == then
                 self.checks op.location lookup_receiver self.store ensure_function_clone_method
@@ -13726,27 +13706,31 @@ impl TypeChecker {
             fi
             origin.clone resolved append_origin return
         fi
-        if dependency.kind OriginKind::InputCleanup is then
-            true dependency.exclusive value.cleanup_origins resolved TypeChecker::merge_dependency_origins return
-        fi
-        if dependency.kind OriginKind::InputPayload is then
-            value.place self.ownership.canonical_storage value.origins resolved merge_contained_origins return
-        fi
-        if dependency.kind OriginKind::InputOrigins is then
-            true dependency.exclusive value.origins resolved TypeChecker::merge_dependency_origins = resolved
-            if value needs_storage_origin then
-                value resolved dependency effect self.ownership.resolve_input_storage_origin return
-            fi
-            resolved return
-        fi
-        # Borrow the input storage without strengthening loans carried inside it.
-        dependency.exclusive false value.origins resolved TypeChecker::merge_dependency_origins = resolved
-        if
-            value.origins.is_some value.capability ValueCapability::Owned is ! && value needs_storage_origin ! &&
-        then
-            resolved return
-        fi
-        dependency.exclusive value.place resolved self.ownership.add_storage_origins
+        dependency.kind match
+            OriginKind::InputCleanup => {
+                true dependency.exclusive value.cleanup_origins resolved TypeChecker::merge_dependency_origins
+            }
+            OriginKind::InputPayload => {
+                value.place self.ownership.canonical_storage value.origins resolved merge_contained_origins
+            }
+            OriginKind::InputOrigins => {
+                true dependency.exclusive value.origins resolved TypeChecker::merge_dependency_origins = resolved
+                if value needs_storage_origin then
+                    value resolved dependency effect self.ownership.resolve_input_storage_origin return
+                fi
+                resolved
+            }
+            _ => {
+                # Borrow the input storage without strengthening loans carried inside it.
+                dependency.exclusive false value.origins resolved TypeChecker::merge_dependency_origins = resolved
+                if
+                    value.origins.is_some value.capability ValueCapability::Owned is ! && value needs_storage_origin ! &&
+                then
+                    resolved return
+                fi
+                dependency.exclusive value.place resolved self.ownership.add_storage_origins
+            }
+        end
     }
 
     fn resolve_origin_dependencies
@@ -14347,14 +14331,7 @@ impl TypeChecker {
             .stack
             .values
             .get = copied_value
-        copied_value.type_value.clone = copied_type
-        if copied_type.is_borrow ! then
-            if copied_value.capability ValueCapability::Shared is then
-                common::SHARED_BORROW_TYPE copied_type.clone common::apply_borrow_type = copied_type
-            elif copied_value.capability ValueCapability::Exclusive is then
-                common::EXCLUSIVE_BORROW_TYPE copied_type.clone common::apply_borrow_type = copied_type
-            fi
-        fi
+        copied_value value_access_type = copied_type
         copied_type.clone = copy_check_type
         if op.value common::OpValue::Copy is then
             if copy_check_type.borrow_target std::Option::Some(target) is then
