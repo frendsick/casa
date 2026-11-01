@@ -1816,6 +1816,96 @@ pub fn analyze_method_operation
     end
 }
 
+# Resolve a method that the source spells with its trait or receiver type.
+fn resolve_qualified_method_call
+    qualified:$common::QualifiedMethod
+    receiver_type:$common::Type
+    result:mut$SemanticFacts
+    function_opt:$std::Option[common::Function]
+    store:$common::SymbolStore
+-> std::Option[MethodSemantics] {
+    if qualified.type_qualified then
+        store function_opt qualified.qualifier_type qualified.method_name.as_str resolve_method_semantics
+    else
+        store function_opt qualified.qualifier_type receiver_type qualified.method_name.as_str
+        resolve_qualified_method_semantics_with_bounds
+    fi = method_opt
+    if method_opt std::Option::Some(method) is else
+        std::Option[MethodSemantics]::None return
+    fi
+    if qualified.type_qualified then
+        store qualified.qualifier_type method result add_method_dependencies
+    else
+        store receiver_type method result add_method_dependencies
+    fi
+    method std::Option::Some
+}
+
+fn resolve_trait_method_call
+    call:$common::DeferredTraitCall
+    result:mut$SemanticFacts
+    function_opt:$std::Option[common::Function]
+    store:$common::SymbolStore
+-> std::Option[MethodSemantics] {
+    std::Option[MethodSemantics]::None = method_opt
+    if function_opt std::Option::Some(function) is then
+        store function call.trait_type call.receiver call.method_name.as_str resolve_bound_method_semantics = method_opt
+    fi
+    if method_opt.is_none then
+        if call.trait_type std::Option::Some(trait_type) is then
+            store call.receiver trait_type call.method_name.as_str resolve_qualified_method_semantics = method_opt
+        else
+            store function_opt call.receiver call.method_name.as_str resolve_method_semantics = method_opt
+        fi
+    fi
+    if method_opt std::Option::Some(method) is else
+        std::Option[MethodSemantics]::None return
+    fi
+    store call.receiver method result add_method_dependencies
+    method std::Option::Some
+}
+
+impl SemanticFacts {
+    fn adopt_method self:mut$SemanticFacts method:MethodSemantics {
+        method.stack_effect.clone std::Option::Some = self.stack_effect
+        method std::Option::Some = self.method
+    }
+}
+
+# Text conversion dispatches through Display for a type without a primitive form.
+fn add_display_dependency
+    result:mut$SemanticFacts
+    receiver_type:$common::Type
+    function_opt:$std::Option[common::Function]
+    store:$common::SymbolStore
+{
+    common::STD_DISPLAY_TRAIT.to_str result.dependencies.push
+    if
+        store function_opt receiver_type "to_str" result analyze_method_operation std::Option::Some(method) is
+    then
+        method std::Option::Some = result.method
+    fi
+}
+
+fn add_comparison_dependency
+    result:mut$SemanticFacts
+    operation:$common::OpValue
+    receiver_type:$common::Type
+    function_opt:$std::Option[common::Function]
+    store:$common::SymbolStore
+{
+    if store receiver_type comparison_uses_method ! then
+        return
+    fi
+    operation comparison_trait_name result.dependencies.push_str
+    operation comparison_method_name = method_name
+    if
+        store function_opt receiver_type method_name result analyze_method_operation std::Option::Some(method) is
+    then
+        method std::Option::Some = result.method
+    fi
+}
+
 pub fn analyze_operation
     operation:$common::OpValue
     receiver:std::Option[common::Type]
@@ -1844,126 +1934,63 @@ pub fn analyze_operation
                 = result.stack_effect
             fi
         }
-        common::OpValue::FnExec => {
-            if receiver.clone std::Option::Some(receiver_type) is then
-                if receiver_type common::Type::Function(function_type) is then
-                    function_type.to_stack_effect std::Option::Some = result.stack_effect
-                fi
-            fi
-        }
-        common::OpValue::FnExecOwned => {
-            if receiver.clone std::Option::Some(receiver_type) is then
-                if receiver_type common::Type::Function(function_type) is then
-                    function_type.to_stack_effect std::Option::Some = result.stack_effect
-                fi
+        common::OpValue::FnExec | common::OpValue::FnExecOwned => {
+            if receiver.clone std::Option::Some(common::Type::Function(function_type)) is then
+                function_type.to_stack_effect std::Option::Some = result.stack_effect
             fi
         }
         common::OpValue::MethodCall(method_name) => {
             if receiver.clone std::Option::Some(receiver_type) is then
-                store function_opt receiver_type method_name.as_str result analyze_method_operation match
-                    std::Option::Some(method) => {
-                        method.stack_effect.clone std::Option::Some = result.stack_effect
-                        method std::Option::Some = result.method
-                    }
-                    std::Option::None => {}
-                end
+                if
+                    store function_opt receiver_type method_name.as_str result analyze_method_operation std::Option::Some(method) is
+                then
+                    method result.adopt_method
+                fi
             fi
         }
         common::OpValue::QualifiedMethodCall(qualified) => {
             if receiver.clone std::Option::Some(receiver_type) is then
-                std::Option[MethodSemantics]::None = method_opt
-                if qualified.type_qualified then
-                    store function_opt qualified.qualifier_type qualified.method_name.as_str resolve_method_semantics
-                    = method_opt
-                else
-                    store function_opt qualified.qualifier_type receiver_type qualified.method_name.as_str
-                    resolve_qualified_method_semantics_with_bounds
-                    = method_opt
+                if
+                    store function_opt result receiver_type qualified resolve_qualified_method_call std::Option::Some(method) is
+                then
+                    method result.adopt_method
                 fi
-                method_opt match
-                    std::Option::Some(method) => {
-                        method.stack_effect.clone std::Option::Some = result.stack_effect
-                        if qualified.type_qualified then
-                            store qualified.qualifier_type method result add_method_dependencies
-                        else
-                            store receiver_type method result add_method_dependencies
-                        fi
-                        method std::Option::Some = result.method
-                    }
-                    std::Option::None => {}
-                end
             fi
         }
         common::OpValue::TraitMethodCall(call) => {
-            std::Option[MethodSemantics]::None = method_opt
-            if function_opt std::Option::Some(function) is then
-                store function call.trait_type call.receiver call.method_name.as_str resolve_bound_method_semantics = method_opt
+            if store function_opt result call resolve_trait_method_call std::Option::Some(method) is then
+                method result.adopt_method
             fi
-            if method_opt.is_none then
-                if call.trait_type std::Option::Some(trait_type) is then
-                    store call.receiver trait_type call.method_name.as_str resolve_qualified_method_semantics = method_opt
-                else
-                    store function_opt call.receiver call.method_name.as_str resolve_method_semantics = method_opt
-                fi
-            fi
-            method_opt match
-                std::Option::Some(method) => {
-                    method.stack_effect.clone std::Option::Some = result.stack_effect
-                    store call.receiver method result add_method_dependencies
-                    method std::Option::Some = result.method
-                }
-                std::Option::None => {}
-            end
         }
         common::OpValue::TraitMethodRef(call) => {
-            store function_opt call.receiver call.method_name.as_str result analyze_method_operation match
-                std::Option::Some(method) => {
-                    method.stack_effect.clone make_function_reference_stack_effect std::Option::Some
-                    = result.stack_effect
-                    method std::Option::Some = result.method
-                }
-                std::Option::None => {}
-            end
+            if
+                store function_opt call.receiver call.method_name.as_str result analyze_method_operation std::Option::Some(method) is
+            then
+                method.stack_effect.clone make_function_reference_stack_effect std::Option::Some
+                = result.stack_effect
+                method std::Option::Some = result.method
+            fi
         }
         common::OpValue::Print => {
             if receiver.clone std::Option::Some(receiver_type) is then
                 receiver_type primitive_print_operation = result.resolved_operation
                 if result.resolved_operation.is_none receiver_type.is_unknown_placeholder ! && then
-                    common::STD_DISPLAY_TRAIT.to_str result.dependencies.push
-                    store function_opt receiver_type "to_str" result analyze_method_operation = method_opt
-                    method_opt match
-                        std::Option::Some(method) => method std::Option::Some = result.method
-                        std::Option::None => {}
-                    end
+                    store function_opt receiver_type result add_display_dependency
                 fi
             fi
         }
         common::OpValue::FstringToStr => {
             if receiver.clone std::Option::Some(receiver_type) is then
                 if common::make_str_type receiver_type.eq ! receiver_type.is_unknown_placeholder ! && then
-                    common::STD_DISPLAY_TRAIT.to_str result.dependencies.push
-                    store function_opt receiver_type "to_str" result analyze_method_operation = method_opt
-                    method_opt match
-                        std::Option::Some(method) => method std::Option::Some = result.method
-                        std::Option::None => {}
-                    end
+                    store function_opt receiver_type result add_display_dependency
                 fi
             fi
         }
-        common::OpValue::PrimitiveToStr => {}
         _ => {}
     end
     if operation operation_is_comparison then
-        if receiver.clone std::Option::Some(receiver_type) is then
-            if store receiver_type comparison_uses_method then
-                operation comparison_trait_name result.dependencies.push_str
-                operation comparison_method_name = method_name
-                store function_opt receiver_type method_name result analyze_method_operation = method_opt
-                method_opt match
-                    std::Option::Some(method) => method std::Option::Some = result.method
-                    std::Option::None => {}
-                end
-            fi
+        if receiver std::Option::Some(receiver_type) is then
+            store function_opt receiver_type operation result add_comparison_dependency
         fi
     fi
     result
