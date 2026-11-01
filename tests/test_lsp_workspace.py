@@ -288,7 +288,7 @@ def check_trait_rename(binary):
         (root / "user.casa").write_text('import "traits.casa" as traits\n'
                                         "struct Local { value: i64 }\n"
                                         "impl Local: traits::Tagged { fn tag self:Local -> i64 { self.value } }\n"
-                                        "fn show[T: traits::Tagged] value:T -> i64 { value.tag }\n"
+                                        "fn show[T: traits::Tagged] value:T -> i64 { value traits::Tagged::tag }\n"
                                         "1 Local traits::Tagged::tag drop\n")
         (root / "other.casa").write_text("trait Tagged { fn tag self:self -> i64 }\n"
                                          "struct Other { value: i64 }\n"
@@ -303,10 +303,12 @@ def check_trait_rename(binary):
             assert ranges == [
                 ("traits.casa", 0, 10, 16), ("traits.casa", 2, 11, 17),
                 ("user.casa", 2, 20, 26), ("user.casa", 3, 19, 25),
-                ("user.casa", 4, 16, 22),
+                ("user.casa", 3, 58, 64), ("user.casa", 4, 16, 22),
             ], ranges
             edits = rename_edits(server.query("rename", traits, 0, 11, newName="Marked"))
             assert edits == [(*item, "Marked") for item in ranges], edits
+            edits = rename_edits(server.query("rename", root / "user.casa", 3, 3, newName="display"))
+            assert edits == [("user.casa", 3, 3, 7, "display")], edits
         finally:
             server.close()
 
