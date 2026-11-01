@@ -258,24 +258,24 @@ import "std"
 import "io"
 
 io::StdinReader::new = reader
-reader io::stdin_read_line = line
+reader.read_line = line
 line.to_str.unwrap print
 ```
 
-| Function | Result |
+| Method | Result |
 |---|---|
-| `io::stdin_read_byte reader:mut$StdinReader -> Option[u8]` | Next byte, or `None` at end of input |
-| `io::stdin_read_exact reader:mut$StdinReader count:u64 -> Bytes` | Up to `count` bytes |
-| `io::stdin_read_line reader:mut$StdinReader -> Bytes` | Bytes before a newline or end of input |
+| `read_byte self:mut$StdinReader -> Option[u8]` | Next byte, or `None` at end of input |
+| `read_exact self:mut$StdinReader count:u64 -> Bytes` | Up to `count` bytes |
+| `read_line self:mut$StdinReader -> Bytes` | Bytes before a newline or end of input |
 
 The reader's buffer and counters are private. `reader.has_buffered_input`
 reports whether an unread byte is buffered. `reader.buffer` returns a shared
 RawBuffer borrow for low-level access, with no storage replacement or counter
 setters. Raw memory access still requires `unsafe`.
 
-Read errors are treated as end of input. `stdin_read_exact` can return fewer
+Read errors are treated as end of input. `read_exact` can return fewer
 bytes than requested. Check the returned length when the protocol requires an
-exact count. `stdin_read_line` consumes the newline without including it in the
+exact count. `read_line` consumes the newline without including it in the
 result.
 
 ## Advanced file descriptors

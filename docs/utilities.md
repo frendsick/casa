@@ -153,10 +153,10 @@ import "log"
 
 log::Logger::new = logger
 log::LogLevel::Info logger.configure
-logger "server started" log::log_info
+"server started" logger.info
 ```
 
-The program owns a `Logger` and passes a [shared borrow](ownership.md#borrow-for-a-call) to each log operation.
+The program owns a `Logger` and takes a [shared borrow](ownership.md#borrow-for-a-call) for each log operation.
 A selected level includes less verbose levels.
 
 `LogLevel` provides `Error`, `Warning`, `Info`, and `Debug`.
@@ -164,7 +164,12 @@ A selected level includes less verbose levels.
 | Method | Signature | Description |
 |---|---|---|
 | [configure](#loggerconfigure) | `fn configure self:mut$Logger level:LogLevel` | Change the owned level |
+| [debug](#logging-methods) | `fn debug self:$Logger message:str` | Log debugging detail |
+| [error](#logging-methods) | `fn error self:$Logger message:str` | Log an error |
+| [info](#logging-methods) | `fn info self:$Logger message:str` | Log information |
+| [info_string](#logging-methods) | `fn info_string self:$Logger message:String` | Log owned information text |
 | [new](#loggernew) | `fn new -> Logger` | Create logger state at `Warning` |
+| [warning](#logging-methods) | `fn warning self:$Logger message:str` | Log a warning |
 
 ### Logger::configure
 
@@ -182,14 +187,10 @@ fn new -> Logger
 
 `new` creates logger state with level `Warning`.
 
-### Logging functions
+### Logging methods
 
-| Function | Action |
-|---|---|
-| `log_debug message:str logger:$Logger` | Log debugging detail |
-| `log_error message:str logger:$Logger` | Log an error |
-| `log_info message:str logger:$Logger` | Log information |
-| `log_warning message:str logger:$Logger` | Log a warning |
+`debug`, `error`, `info`, `info_string`, and `warning` write a message to
+standard error when the logger's level includes that message's level.
 
 ## Parser building blocks
 
