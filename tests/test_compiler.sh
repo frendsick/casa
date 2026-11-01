@@ -8,6 +8,10 @@ TESTS_DIR=${CASA_COMPILER_TESTS_DIR:-"$ROOT_DIR/tests/compiler"}
 LIB_DIR="$ROOT_DIR/lib"
 TEST_TMP=$(mktemp -d "${TMPDIR:-/tmp}/casa_compiler_tests.XXXXXX")
 trap 'rm -rf "$TEST_TMP"' EXIT
+# Unit tests build real file paths from TMPDIR. The physical path keeps
+# symlink-identity tests independent of the caller's TMPDIR.
+TMPDIR=$(cd "$TEST_TMP" && pwd -P)
+export TMPDIR
 cd "$ROOT_DIR"
 TESTS_DIR=$(cd "$TESTS_DIR" && pwd)
 
