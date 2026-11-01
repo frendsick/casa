@@ -137,7 +137,7 @@ import "json"
 
 "{\"name\":\"Ada\"}" &json::deserialize[json::JsonValue] exec = parsed
 parsed.unwrap = value
-"name" value json::json_get_str.unwrap print
+"name" value.get_str.unwrap print
 ```
 
 Strings support UTF-8 and JSON Unicode escapes. Numeric conversions support

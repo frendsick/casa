@@ -14,7 +14,7 @@ struct User {
 
 impl User: json::Serialize + json::Deserialize {
     fn to_json self:$User -> std::Result[json::JsonValue json::Error] {
-        json::json_object = fields
+        json::make_object = fields
         self.name.to_json ? "name" fields.set_str
         fields json::JsonValue::JsonObject std::Result::Ok
     }
@@ -113,7 +113,7 @@ bits of finite values through a round trip, including negative zero.
 integers outside `i64`, and `-0`. Other parsed integers use `JsonInt`.
 `JsonNumber` keeps the exact number token, including trailing fractional zeros
 and exponent spelling. Its private storage prevents invalid number text from
-entering the tree through safe code. This lets `json_serialize` remain infallible.
+entering the tree through safe code. This lets `JsonValue.serialize` remain infallible.
 
 Use `JsonNumber::new` to validate a complete number token without whitespace.
 Its result is `Result[JsonNumber parser::ParseError]`. `JsonNumber.as_str` returns
@@ -172,29 +172,33 @@ import "json"
 
 "{\"name\":\"Ada\"}" &json::deserialize[json::JsonValue] exec = parsed
 parsed.unwrap = value
-"name" value json::json_get_str.unwrap print
-value json::json_serialize print
+"name" value.get_str.unwrap print
+value.serialize print
 ```
 
-The existing tree API remains available:
+The tree API provides these functions and methods:
 
 | Function | Result |
 |---|---|
-| `json_escape_string text:$str -> String` | Escape string contents without surrounding quotes. |
-| `json_get_array value:$JsonValue key:$str -> Option[List[JsonValue]]` | Clone an array member. |
-| `json_get_bool value:$JsonValue key:$str -> Option[bool]` | Read a boolean member. |
-| `json_get_int value:$JsonValue key:$str -> Option[i64]` | Read an integer member. |
-| `json_get_object value:$JsonValue key:$str -> Option[$JsonValue]` | Borrow an object member. |
-| `json_get_str value:$JsonValue key:$str -> Option[String]` | Clone a string member. |
-| `json_get_value value:$JsonValue key:$str -> Option[$JsonValue]` | Borrow any object member. |
-| `json_object -> Map[String JsonValue]` | Construct an empty object map. |
-| `json_parse cursor:mut$parser::Cursor -> Result[JsonValue parser::ParseError]` | Parse one value at the current cursor position. |
-| `json_parse_number cursor:mut$parser::Cursor -> Result[i64 parser::ParseError]` | Parse an integer within the `i64` range. |
-| `json_serialize value:$JsonValue -> String` | Serialize a tree. |
-| `json_set value:JsonValue key:String map:Map[String JsonValue] -> Map[String JsonValue]` | Add or replace a member and return the map. |
+| `escape_string text:$str -> String` | Escape string contents without surrounding quotes. |
+| `JsonValue.get_array self:$JsonValue key:$str -> Option[List[JsonValue]]` | Clone an array member. |
+| `JsonValue.get_bool self:$JsonValue key:$str -> Option[bool]` | Read a boolean member. |
+| `JsonValue.get_int self:$JsonValue key:$str -> Option[i64]` | Read an integer member. |
+| `JsonValue.get_object self:$JsonValue key:$str -> Option[$JsonValue]` | Borrow an object member. |
+| `JsonValue.get_str self:$JsonValue key:$str -> Option[String]` | Clone a string member. |
+| `JsonValue.get_value self:$JsonValue key:$str -> Option[$JsonValue]` | Borrow any object member. |
+| `make_object -> Map[String JsonValue]` | Construct an empty object map. |
+| `parse cursor:mut$parser::Cursor -> Result[JsonValue parser::ParseError]` | Parse one value at the current cursor position. |
+| `parse_number cursor:mut$parser::Cursor -> Result[i64 parser::ParseError]` | Parse an integer within the `i64` range. |
+| `JsonValue.serialize self:$JsonValue -> String` | Serialize a tree. |
+| `set value:JsonValue key:String map:Map[String JsonValue] -> Map[String JsonValue]` | Add or replace a member and return the map. |
 
-The `json_get_*` helpers return `None` for a missing member or the wrong value
+The `JsonValue.get_*` methods return `None` for a missing member or the wrong value
 kind. Borrowed results keep the input tree loaned until their last use.
-`json_parse` leaves trailing content for the caller. Use `deserialize` when
-reading a complete JSON document. `json_parse_number` retains its integer-only
-contract. Use `json_parse` to read any JSON number from a cursor.
+`parse` leaves trailing content for the caller. Use `deserialize` when
+reading a complete JSON document. `parse_number` retains its integer-only
+contract. Use `parse` to read any JSON number from a cursor.
+
+Parsing and escaping use module functions such as `json::parse` and
+`json::escape_string`. Tree operations use methods such as `value.serialize`
+and `"name" value.get_str`. These replace the former `json_*` functions.
