@@ -182,6 +182,39 @@ def check_symlink_imports(binary):
             server.close()
 
 
+def check_symlink_exclusions(binary):
+    """Excluded targets stay outside discovery and rename through file aliases."""
+    with tempfile.TemporaryDirectory(prefix="casa-symlink-exclusions-") as temporary:
+        root = Path(temporary)
+        excluded = root / "excluded"
+        excluded.mkdir()
+        shared = root / "shared.casa"
+        shared.write_text("pub fn greet { }\n")
+        target = excluded / "target.casa"
+        target.write_text('import "../shared.casa" as shared\nshared::greet\n'
+                          'fn local { }\nlocal\n')
+        alias = root / "alias.casa"
+        alias.symlink_to(target)
+        for exclusion in (excluded, target):
+            server = Server(binary, root, exclusions=[str(exclusion)])
+            try:
+                for opened in (False, True):
+                    if opened:
+                        server.open(alias, target.read_text())
+                    references = server.query("references", shared, 0, 7)["result"]
+                    assert {item["uri"] for item in references} == {shared.as_uri()}, references
+                    renamed = server.query("rename", alias, 2, 4, newName="renamed")
+                    assert "error" in renamed, renamed
+                # Required imports still participate, but excluded files cannot be edited.
+                importer = root / "importer.casa"
+                importer.write_text('import "excluded/target.casa" as target\n')
+                renamed = server.query("rename", shared, 0, 7, newName="hello")
+                assert "error" in renamed, renamed
+                importer.unlink()
+            finally:
+                server.close()
+
+
 def check_imported_diagnostics(binary):
     """Imported files publish their diagnostics until no open document imports them."""
     with tempfile.TemporaryDirectory(prefix="casa-imported-diagnostics-") as temporary:
@@ -678,6 +711,7 @@ def main(binary):
     check_malformed_messages(binary)
     check_query_reuse(binary)
     check_symlink_imports(binary)
+    check_symlink_exclusions(binary)
     check_imported_diagnostics(binary)
     check_type_references(binary)
     check_derived_trait_definition(binary)
