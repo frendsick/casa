@@ -143,9 +143,72 @@ pub fn normalize_path path:$str -> std::String {
         path_body
     fi
 }
+const O_PATH 0x200000
+const O_CLOEXEC 0x80000
+const READLINK_SYSCALL 89
+const PATH_BUFFER_SIZE 256
+
+# Ask Linux to resolve components before lexical normalization, so a symlink
+# followed by /.. uses the target's parent. O_PATH needs no file read access.
+fn resolve_file_path path:$str -> std::Option[std::String] {
+    if path.as_cstr std::Option::Some(path_cstr) is else
+        std::Option[std::String]::None return
+    fi
+    0 O_PATH O_CLOEXEC | path_cstr os::file::open = descriptor
+    if descriptor 0 < then
+        std::Option[std::String]::None return
+    fi
+    f"/proc/self/fd/{descriptor}" = link
+    PATH_BUFFER_SIZE u64::try_from.unwrap = capacity
+    capacity std::RawBuffer::new = buffer
+    0 = length: i64
+    while true do
+        # SAFETY: link stays NUL-terminated and buffer owns capacity writable bytes.
+        unsafe {
+            capacity buffer.data link
+                .as_str
+                .as_cstr
+                .unwrap ptr::from_ref READLINK_SYSCALL syscall3
+            = length
+        }
+        if length 0 < then
+            break
+        fi
+        if length u64::try_from.unwrap capacity < then
+            break
+        fi
+        capacity 2 * = capacity
+        capacity std::RawBuffer::new = buffer
+    done
+    descriptor os::file::close drop
+    if length 0 < then
+        std::Option[std::String]::None return
+    fi
+    std::Bytes::new = bytes
+    0 = index: u64
+    while index length u64::try_from.unwrap < do
+        # SAFETY: readlink initialized length bytes, and index is below length.
+        unsafe { buffer.data index + load8 } bytes.push
+        1 += index
+    done
+    bytes.to_str match
+        std::Result::Ok(resolved) => resolved std::Option::Some
+        std::Result::Error(_) => std::Option[std::String]::None
+    end
+}
+
+# Missing and in-memory sources keep lexical identities. If procfs is unavailable,
+# disk paths also fall back to lexical identities. Revisit with a component-wise
+# resolver if the compiler must run without /proc/self/fd.
+pub fn normalize_source_path path:$str -> std::String {
+    if path resolve_file_path std::Option::Some(resolved) is then
+        resolved return
+    fi
+    path normalize_path
+}
 
 pub fn absolute_normalize_path path:$str -> std::String {
-    path normalize_path = normalized
+    path normalize_source_path = normalized
     if normalized.as_str "/" str::starts_with then
         normalized return
     fi
@@ -184,7 +247,7 @@ impl SourceStore {
     }
 
     pub fn add self:mut$SourceStore path:$str source:$str {
-        path normalize_path = normalized
+        path normalize_source_path = normalized
         normalized self.rejected_sources.delete
         source.to_str normalized.clone self.sources.set
 
@@ -1239,10 +1302,10 @@ impl RejectedSource {
 }
 
 pub fn lex_file path:$str sources:mut$SourceStore -> std::Result[LexResult os::IoError] {
-    path normalize_path = normalized_path
+    path normalize_source_path = normalized_path
     normalized_path.clone sources.loaded_files.add
     if normalized_path.as_str sources.sources.get_str std::Option::Some(source) is then
-        path source.as_str lex_source std::Result::Ok return
+        normalized_path.as_str source.as_str lex_source std::Result::Ok return
     fi
     if normalized_path.as_str sources.rejected_sources.get_str std::Option::Some(source) is then
         normalized_path.as_str source.lex std::Result::Ok return
@@ -1269,7 +1332,7 @@ pub fn lex_file path:$str sources:mut$SourceStore -> std::Result[LexResult os::I
                 .sources
                 .get_str
                 .unwrap = cached_source
-            path cached_source.as_str lex_source std::Result::Ok
+            normalized_path.as_str cached_source.as_str lex_source std::Result::Ok
         }
         std::Result::Error(error) => error std::Result::Error
     end

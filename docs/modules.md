@@ -82,10 +82,15 @@ import "std"
 std::List[i64]::new = values
 ```
 
-The compiler identifies a module by its normalized absolute path. Repeated
-imports and different aliases for that path share declarations and types.
-Repeating an alias for the same module is allowed. Symlinks are not resolved
-when comparing module identities.
+The compiler identifies an existing module by its absolute path after resolving
+symlinks. Imports through a file symlink, a directory symlink, or another alias
+for that path share declarations and types. Repeating an alias for the same
+module is allowed. Relative imports inside a symlinked module use the resolved
+file's directory. Hard links with different paths remain separate modules.
+
+Missing files and in-memory sources without a disk file use normalized absolute
+paths. On Linux, symlink resolution uses `/proc/self/fd`. If it is unavailable,
+module identity falls back to normalized paths.
 
 ### Public declarations
 

@@ -123,6 +123,98 @@ def check_query_reuse(binary):
             server.close()
 
 
+def check_symlink_imports(binary):
+    """Aliases share editor overrides and invalidate analysis when retargeted."""
+    with tempfile.TemporaryDirectory(prefix="casa-symlink-lsp-") as temporary:
+        root = Path(temporary)
+        dependency = root / "dependency.casa"
+        alias = root / "alias.casa"
+        other = root / "other.casa"
+        document = root / "document.casa"
+        dependency.write_text("pub struct Point { pub x:i64 }\n"
+                              "pub fn value point:Point -> i64 { point.x }\n")
+        other.write_text(dependency.read_text())
+        alias.symlink_to("dependency.casa")
+        text = ('import "dependency.casa" as real\n'
+                'import "alias.casa" as linked\n'
+                '3 real::Point linked::value drop\n')
+        document.write_text(text)
+        server = Server(binary, root)
+
+        def diagnostics():
+            response = server.query("hover", document, 2, 23)
+            reports = [item["params"]["diagnostics"] for item in server.notifications
+                       if item.get("method") == "textDocument/publishDiagnostics"
+                       and item["params"]["uri"] == document.as_uri()]
+            return response, reports[-1]
+
+        try:
+            server.open(document, text)
+            response, errors = diagnostics()
+            assert not errors, errors
+            assert "i64" in response["result"]["contents"]["value"], response
+            definition = server.query("definition", document, 2, 23)["result"]
+            assert definition["uri"] == dependency.as_uri(), definition
+            references = server.query("references", dependency, 0, 11)["result"]
+            assert len(references) == 3, references
+
+            server.open(alias, "pub struct Point { pub x:i64 }\n"
+                               "pub fn value point:Point -> bool { true }\n")
+            response, errors = diagnostics()
+            assert not errors, errors
+            assert "bool" in response["result"]["contents"]["value"], response
+            renamed = server.query("rename", document, 2, 23, newName="read")
+            assert "error" not in renamed, renamed
+            changes = renamed["result"]["documentChanges"]
+            versions = {item["textDocument"]["uri"]: item["textDocument"]["version"] for item in changes}
+            assert versions == {dependency.as_uri(): 1, document.as_uri(): 1}, versions
+            server.send("textDocument/didClose", {"textDocument": {"uri": alias.as_uri()}})
+            response, errors = diagnostics()
+            assert not errors, errors
+            assert "i64" in response["result"]["contents"]["value"], response
+
+            # Equal file contents still define distinct types after retargeting.
+            alias.unlink()
+            alias.symlink_to("other.casa")
+            _, errors = diagnostics()
+            assert any("Type mismatch" in error["message"] for error in errors), errors
+        finally:
+            server.close()
+
+
+def check_symlink_exclusions(binary):
+    """Excluded targets stay outside discovery and rename through file aliases."""
+    with tempfile.TemporaryDirectory(prefix="casa-symlink-exclusions-") as temporary:
+        root = Path(temporary)
+        excluded = root / "excluded"
+        excluded.mkdir()
+        shared = root / "shared.casa"
+        shared.write_text("pub fn greet { }\n")
+        target = excluded / "target.casa"
+        target.write_text('import "../shared.casa" as shared\nshared::greet\n'
+                          'fn local { }\nlocal\n')
+        alias = root / "alias.casa"
+        alias.symlink_to(target)
+        for exclusion in (excluded, target):
+            server = Server(binary, root, exclusions=[str(exclusion)])
+            try:
+                for opened in (False, True):
+                    if opened:
+                        server.open(alias, target.read_text())
+                    references = server.query("references", shared, 0, 7)["result"]
+                    assert {item["uri"] for item in references} == {shared.as_uri()}, references
+                    renamed = server.query("rename", alias, 2, 4, newName="renamed")
+                    assert "error" in renamed, renamed
+                # Required imports still participate, but excluded files cannot be edited.
+                importer = root / "importer.casa"
+                importer.write_text('import "excluded/target.casa" as target\n')
+                renamed = server.query("rename", shared, 0, 7, newName="hello")
+                assert "error" in renamed, renamed
+                importer.unlink()
+            finally:
+                server.close()
+
+
 def check_imported_diagnostics(binary):
     """Imported files publish their diagnostics until no open document imports them."""
     with tempfile.TemporaryDirectory(prefix="casa-imported-diagnostics-") as temporary:
@@ -481,13 +573,20 @@ def main(binary):
             assert versions == {shared.as_uri(): 7, first.as_uri(): None, second.as_uri(): None}, versions
             with tempfile.TemporaryDirectory(prefix="casa-external-") as external:
                 target = Path(external) / "importer.casa"
-                target.write_text(f'import "{shared}" as shared\nshared::greet\n')
+                target.write_text(f'import "{shared}" as shared\nshared::greet\n'
+                                  'fn local { 1 = count count drop }\n')
                 link = root / "linked.casa"
                 link.symlink_to(target)
                 assert len(server.query("references", shared, 0, 7)["result"]) == 5
                 linked_rename = server.query("rename", shared, 0, 7, newName="hi")
                 assert "error" not in linked_rename, linked_rename
-                assert link.as_uri() in {item["textDocument"]["uri"] for item in linked_rename["result"]["documentChanges"]}
+                assert target.as_uri() in {item["textDocument"]["uri"] for item in linked_rename["result"]["documentChanges"]}
+                server.open(link, target.read_text(), 4)
+                local_rename = server.query("rename", link, 2, 15, newName="total")
+                assert "error" not in local_rename, local_rename
+                change = local_rename["result"]["documentChanges"][0]
+                assert change["textDocument"] == {"uri": target.as_uri(), "version": 4}, change
+                server.send("textDocument/didClose", {"textDocument": {"uri": link.as_uri()}})
                 target.chmod(0o444)
                 assert "error" in server.query("rename", shared, 0, 7, newName="hi")
                 target.chmod(0o644)
@@ -613,6 +712,8 @@ def main(binary):
             server.close()
     check_malformed_messages(binary)
     check_query_reuse(binary)
+    check_symlink_imports(binary)
+    check_symlink_exclusions(binary)
     check_imported_diagnostics(binary)
     check_type_references(binary)
     check_derived_trait_definition(binary)

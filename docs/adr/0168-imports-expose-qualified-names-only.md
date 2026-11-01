@@ -75,11 +75,14 @@ then `-L` / `--library-path` directories in CLI order. The first existing candid
 wins. Preserve the same-directory self-match exception and missing-module
 diagnostics that list the searched directories.
 
-Canonical module identity follows the resolved, normalized absolute path within
-one compilation, independently of the alias or path spelling. Relative and
-absolute spellings that normalize to that path share one module. This does not add
-filesystem identity through symlink or inode resolution. Matching in-memory source
-overrides take precedence over disk contents and can supply modules absent on disk.
+Canonical module identity follows the absolute path after resolving symlinks
+within one compilation, independently of the alias or path spelling. Relative
+and absolute spellings that resolve to that path share one module. Relative
+imports use the resolved file's directory. Hard links with different paths remain
+separate modules. Missing files use normalized absolute paths. Linux resolution
+uses `/proc/self/fd` and falls back to lexical normalization if it is unavailable.
+Matching in-memory source overrides take precedence over disk contents and can
+supply modules absent on disk.
 Retain the exact selected source text for diagnostics and editor facts, following
 [ADR-0167](0167-compiler-products-own-independent-snapshots.md).
 

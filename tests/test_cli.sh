@@ -284,6 +284,11 @@ if matches_filter run_failures "$@"; then
     grep -q '^error: cannot execute /nonexistent/program: errno 2$' "$CLI_TMP/run.out"
 fi
 
+if matches_filter symlink_imports "$@"; then
+    matched=true
+    python3 tests/test_symlink_imports.py "$COMPILER"
+fi
+
 if matches_filter source_traceability "$@"; then
     matched=true
     python3 tests/test_source_traceability.py "$COMPILER"
