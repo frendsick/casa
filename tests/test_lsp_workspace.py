@@ -405,6 +405,43 @@ def check_trait_rename(binary):
             server.close()
 
 
+def check_qualified_receiver_rename(binary):
+    with tempfile.TemporaryDirectory(prefix="casa-qualified-receiver-") as temporary:
+        root = Path(temporary)
+        source = root / "receivers.casa"
+        text = ("struct Plain { value: i64 }\n"
+                "trait Tagged { fn tag self:self -> i64 }\n"
+                "trait Convert[T] { fn convert self:self -> T }\n"
+                "impl Plain: Tagged + Convert[i64] { fn tag self:Plain -> i64 { self.value } "
+                "fn convert self:Plain -> i64 { self.value } }\n"
+                "1 Plain Plain::Tagged::tag drop\n"
+                "&Plain::Tagged::tag drop\n"
+                "2 Plain Convert[i64]::convert drop\n"
+                "&Plain::Convert[i64]::convert drop\n")
+        source.write_text(text)
+        expected = []
+        for line_number, line in enumerate(text.splitlines()):
+            start = 0
+            while (column := line.find("Plain", start)) != -1:
+                expected.append(("receivers.casa", line_number, column, column + 5))
+                start = column + 5
+        server = Server(binary, root)
+        try:
+            for _, line, column, _ in expected:
+                references = server.query("references", source, line, column,
+                                          context={"includeDeclaration": True})
+                ranges = sorted((item["uri"].rsplit("/", 1)[1],
+                                 item["range"]["start"]["line"],
+                                 item["range"]["start"]["character"],
+                                 item["range"]["end"]["character"])
+                                for item in references["result"])
+                assert ranges == expected, (line, column, ranges)
+                response = server.query("rename", source, line, column, newName="RenamedToken")
+                assert rename_edits(response) == [(*site, "RenamedToken") for site in expected], response
+        finally:
+            server.close()
+
+
 def check_trait_rename_collisions(binary):
     with tempfile.TemporaryDirectory(prefix="casa-trait-collisions-") as temporary:
         root = Path(temporary)
@@ -720,6 +757,7 @@ def main(binary):
     check_type_rename_collisions(binary)
     check_variant_pattern_rename(binary)
     check_trait_rename(binary)
+    check_qualified_receiver_rename(binary)
     check_trait_rename_collisions(binary)
     check_member_trivia_rename(binary)
     check_formatting(binary)
