@@ -1138,7 +1138,7 @@ impl FunctionPlanner {
         # Collect the reachable nodes that reach the root until none is added.
         std::Set[std::String]::new = cycle
         nodes.keys = names
-        &does_function_name_precede names.sort_by
+        &common::does_name_precede names.sort_by
         true = changed
         while changed do
             false = changed
@@ -3834,15 +3834,6 @@ impl FunctionWork {
     }
 }
 
-fn does_function_name_precede left:$std::String right:$std::String -> bool {
-    for pair in right.iter left.iter.zip do
-        if pair.first pair.second != then
-            pair.second pair.first > return
-        fi
-    done
-    right.length left.length >
-}
-
 impl FunctionPlanner {
     fn is_static_element self:$FunctionPlanner leaf:$semantic_body::Leaf -> bool {
         leaf.action match
@@ -3990,7 +3981,7 @@ pub fn compile_checked
     sources checked BackendPlanner::new = state
     error::Diagnostics::new = diagnostics
     checked.get_externs.keys = extern_names
-    &does_function_name_precede extern_names.sort_by
+    &common::does_name_precede extern_names.sort_by
     for name in extern_names.iter do
         name checked
             .get_externs
@@ -4018,7 +4009,7 @@ pub fn compile_checked
         diagnostics AssemblyError::Rejected std::Result::Error return
     fi
     checked.get_function_names = names
-    &does_function_name_precede names.sort_by
+    &common::does_name_precede names.sort_by
     for name in names.iter do
         name.as_str state.program.register_function
         name.as_str checked
@@ -6238,8 +6229,8 @@ impl Emitter {
         "call heap_free" self.indent
     }
 
-    fn emit_checked_range self:mut$Emitter builtin:mut$common::BuiltinType failure:$str {
-        0 self.stack_operand = top
+    # Load `top` truncated to `builtin` into rax. False means a full-width type.
+    fn emit_narrow_to_rax self:mut$Emitter builtin:mut$common::BuiltinType top:$str -> bool {
         builtin match
             common::BuiltinType::I8 => f"movsbq {top}, %rax" self.indent_string
             common::BuiltinType::I16 => f"movswq {top}, %rax" self.indent_string
@@ -6247,8 +6238,16 @@ impl Emitter {
             common::BuiltinType::U8 => f"movzbq {top}, %rax" self.indent_string
             common::BuiltinType::U16 => f"movzwq {top}, %rax" self.indent_string
             common::BuiltinType::U32 => f"movl {top}, %eax" self.indent_string
-            _ => return
+            _ => false return
         end
+        true
+    }
+
+    fn emit_checked_range self:mut$Emitter builtin:mut$common::BuiltinType failure:$str {
+        0 self.stack_operand = top
+        if top.as_str builtin self.emit_narrow_to_rax ! then
+            return
+        fi
         f"cmpq %rax, {top}" self.indent_string
         failure "jne" self.emit_failure_jump
     }
@@ -6336,15 +6335,9 @@ impl Emitter {
 
     fn emit_normalize_numeric self:mut$Emitter builtin:mut$common::BuiltinType {
         0 self.stack_operand = top
-        builtin match
-            common::BuiltinType::I8 => f"movsbq {top}, %rax" self.indent_string
-            common::BuiltinType::I16 => f"movswq {top}, %rax" self.indent_string
-            common::BuiltinType::I32 => f"movslq {top}, %rax" self.indent_string
-            common::BuiltinType::U8 => f"movzbq {top}, %rax" self.indent_string
-            common::BuiltinType::U16 => f"movzwq {top}, %rax" self.indent_string
-            common::BuiltinType::U32 => f"movl {top}, %eax" self.indent_string
-            _ => return
-        end
+        if top.as_str builtin self.emit_narrow_to_rax ! then
+            return
+        fi
         f"movq %rax, {top}" self.indent_string
     }
 
@@ -6924,18 +6917,7 @@ impl Emitter {
         "%rsi" self.emit_pop
         0 self.stack_operand = result
         f"movq {result}, %rdi" self.indent_string
-        "movq (%rdi), %rcx" self.indent
-        "cmpq (%rsi), %rcx" self.indent
-        f"jne .Lstreq_ne_{uid}" self.indent_string
-        "leaq 8(%rdi), %rdi" self.indent
-        "leaq 8(%rsi), %rsi" self.indent
-        self.emit_string_bytes_equal
-        f"jne .Lstreq_ne_{uid}" self.indent_string
-        f"movq $1, {result}" self.indent_string
-        f"jmp .Lstreq_done_{uid}" self.indent_string
-        f".Lstreq_ne_{uid}:" self.line_string
-        f"movq $0, {result}" self.indent_string
-        f".Lstreq_done_{uid}:" self.line_string
+        result.as_str uid self.emit_loaded_string_eq
     }
 
     fn emit_mixed_string_eq self:mut$Emitter owned_register:$str {
@@ -6944,6 +6926,11 @@ impl Emitter {
         0 self.stack_operand = result
         f"movq {result}, %rdi" self.indent_string
         f"movq ({owned_register}), {owned_register}" self.indent_string
+        result.as_str uid self.emit_loaded_string_eq
+    }
+
+    # Compare the str views in rdi and rsi and store the result in `result`.
+    fn emit_loaded_string_eq self:mut$Emitter uid:u64 result:$str {
         "movq (%rdi), %rcx" self.indent
         "cmpq (%rsi), %rcx" self.indent
         f"jne .Lstreq_ne_{uid}" self.indent_string
