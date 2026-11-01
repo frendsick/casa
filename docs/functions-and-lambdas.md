@@ -314,6 +314,9 @@ binding's type:
 count print
 ```
 
+A binding name cannot contain `::`. This rule applies to assignments, `for`
+variables, and function parameters.
+
 A binding inside a function is local. A top-level binding belongs to the root
 entry-point scope. Named functions cannot capture root locals. Pass mutable
 state as an exclusive parameter:
