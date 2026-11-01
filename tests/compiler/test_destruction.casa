@@ -7,6 +7,9 @@ pub const DESTRUCTION_LOG_SIZE 64
 pub const DESTRUCTION_INDEX_SIZE 8
 pub const RECURSIVE_OWNER_DEPTH 128
 
+# Exceeds the return-stack depth of call-recursive destruction.
+pub const DEEP_RECURSIVE_OWNER_DEPTH 1000000
+
 pub struct Resource {
     pub id:    i64
     pub log:   ptr
@@ -102,6 +105,78 @@ pub enum ResourceChoice {
 pub struct ResourceNode {
     pub item: Resource
     pub next: std::Option[ResourceNode]
+}
+
+pub struct ResourceLeft {
+    pub item: Resource
+    pub next: std::Option[ResourceRight]
+}
+
+pub struct ResourceRight {
+    pub next: std::Option[ResourceLeft]
+    pub item: Resource
+}
+
+pub struct ResourceFanout {
+    pub item:     Resource
+    pub children: array[std::Option[ResourceFanout] 2]
+}
+
+pub struct ResourceHolder {
+    pub item:  Resource
+    pub inner: ResourceInner
+}
+
+pub struct ResourceInner {
+    pub next: std::Option[ResourceHolder]
+    pub item: Resource
+}
+
+pub struct CleanupNode {
+    pub id:    i64
+    pub log:   ptr
+    pub index: ptr
+    pub next:  std::Option[CleanupNode]
+}
+
+impl CleanupNode {
+    pub fn drop self:mut$CleanupNode {
+        unsafe { self.id u64::try_from.unwrap self.log self.index load64 8 * + store64 }
+        unsafe { self.index load64 1 + self.index store64 }
+        self.index self.log self.id 100 + resource ResourceTree::Leaf drop
+    }
+}
+
+pub enum CountedChain {
+    End
+    Link(SpecializedResource[i64] CountedChain)
+}
+
+pub enum CountedTree {
+    Leaf(SpecializedResource[i64])
+    Branch(SpecializedResource[i64] CountedTree CountedTree)
+}
+
+pub enum ClosureChain {
+    End
+    Direct(ClosureChain)
+    Deferred(fn[->])
+}
+
+pub fn inspect_closure_chain chain:$ClosureChain {}
+
+pub fn wrap_closure_chain chain:ClosureChain count:ptr -> ClosureChain {
+    count 0 SpecializedResource = marker
+    move { marker.value drop chain inspect_closure_chain } ClosureChain::Deferred
+}
+
+pub struct ClosureNode {
+    pub callback: fn[->]
+}
+
+pub fn wrap_callback node:ClosureNode count:ptr -> ClosureNode {
+    count 0 SpecializedResource = marker
+    move { marker.value drop node.callback exec } ClosureNode
 }
 
 pub struct SpecializedResource[T] {
@@ -465,6 +540,151 @@ pub fn test_recursive_owner_cleanup {
     log last_position last_id assert_entry
 }
 
+pub fn fanout_leaf id:i64 log:ptr index:ptr -> std::Option[ResourceFanout] {
+    std::Option[ResourceFanout]::None = first
+    std::Option[ResourceFanout]::None = second
+    [first, second] index log id resource ResourceFanout std::Option::Some
+}
+
+pub fn test_recursive_layouts_keep_cleanup_order {
+    "recursive_layouts_keep_cleanup_order" test::test_start
+    unsafe { DESTRUCTION_LOG_SIZE alloc = log }
+    unsafe { DESTRUCTION_INDEX_SIZE alloc = index }
+
+    # Mutually recursive structs keep each struct's reverse field order.
+    index reset
+    std::Option[ResourceRight]::None = no_right
+    no_right index log 3 resource ResourceLeft std::Option::Some = left
+    index log 2 resource left ResourceRight std::Option::Some = right
+    right index log 1 resource ResourceLeft drop
+    unsafe { "mutual recursion count" 3 index load64 test::assert_eq }
+    log 0 2 assert_entry
+    log 1 3 assert_entry
+    log 2 1 assert_entry
+
+    # Array elements in a cycle are destroyed in reverse index order.
+    index reset
+    index log 5 fanout_leaf = fifth
+    index log 4 fanout_leaf = fourth
+    [fourth, fifth] index log 2 resource ResourceFanout std::Option::Some = second
+    index log 3 fanout_leaf = third
+    [second, third] index log 1 resource ResourceFanout drop
+    unsafe { "array cycle count" 5 index load64 test::assert_eq }
+    log 0 3 assert_entry
+    log 1 5 assert_entry
+    log 2 4 assert_entry
+    log 3 2 assert_entry
+    log 4 1 assert_entry
+
+    # An inline field can be a cycle member.
+    index reset
+    std::Option[ResourceHolder]::None = no_holder
+    index log 4 resource no_holder ResourceInner = deepest
+    deepest index log 3 resource ResourceHolder std::Option::Some = holder
+    index log 2 resource holder ResourceInner = inner
+    inner index log 1 resource ResourceHolder drop
+    unsafe { "inline cycle count" 4 index load64 test::assert_eq }
+    log 0 2 assert_entry
+    log 1 4 assert_entry
+    log 2 3 assert_entry
+    log 3 1 assert_entry
+
+    # Destruction that a cleanup method starts finishes before the method returns.
+    index reset
+    std::Option[CleanupNode]::None = no_node
+    no_node index log 2 CleanupNode std::Option::Some = node
+    node index log 1 CleanupNode drop
+    unsafe { "cleanup method count" 4 index load64 test::assert_eq }
+    log 0 1 assert_entry
+    log 1 101 assert_entry
+    log 2 2 assert_entry
+    log 3 102 assert_entry
+}
+
+pub fn deep_counted_chain count:ptr -> CountedChain {
+    CountedChain::End = chain
+    0 = depth
+    while depth DEEP_RECURSIVE_OWNER_DEPTH < do
+        chain count 7 SpecializedResource CountedChain::Link = chain
+        1 += depth
+    done
+    chain
+}
+
+pub fn deep_scope_cleanup count:ptr { count deep_counted_chain = chain }
+
+pub fn test_deep_recursive_owner_cleanup {
+    "deep_recursive_owner_cleanup" test::test_start
+    unsafe { DESTRUCTION_INDEX_SIZE alloc = count }
+
+    count reset
+    count deep_scope_cleanup
+    unsafe { "deep scope exit count" DEEP_RECURSIVE_OWNER_DEPTH count load64 test::assert_eq }
+
+    count reset
+    count deep_counted_chain drop
+    unsafe { "deep explicit drop count" DEEP_RECURSIVE_OWNER_DEPTH count load64 test::assert_eq }
+
+    # A deep left spine also destroys every right leaf.
+    count reset
+    count 0 SpecializedResource CountedTree::Leaf = tree
+    0 = depth
+    while depth DEEP_RECURSIVE_OWNER_DEPTH < do
+        count 0 SpecializedResource CountedTree::Leaf tree count 0 SpecializedResource CountedTree::Branch = tree
+        1 += depth
+    done
+    tree drop
+    DEEP_RECURSIVE_OWNER_DEPTH 2 * 1 + u64::try_from.unwrap = tree_count
+    unsafe { "deep branching count" tree_count count load64 test::assert_eq }
+}
+
+pub fn deep_closure_scope_cleanup count:ptr {
+    ClosureChain::End = chain
+    0 = depth
+    while depth DEEP_RECURSIVE_OWNER_DEPTH < do
+        count chain wrap_closure_chain = chain
+        1 += depth
+    done
+}
+
+pub fn test_deep_closure_cleanup {
+    "deep_closure_cleanup" test::test_start
+    DESTRUCTION_INDEX_SIZE std::RawBuffer::new = count
+    count.data reset
+    count.data deep_closure_scope_cleanup
+    unsafe { "closure enum scope count" DEEP_RECURSIVE_OWNER_DEPTH count.data load64 test::assert_eq }
+
+    count.data reset
+    {} ClosureNode = callback
+    0 = depth
+    while depth DEEP_RECURSIVE_OWNER_DEPTH < do
+        count.data callback wrap_callback = callback
+        1 += depth
+    done
+    callback drop
+    unsafe { "closure capture drop count" DEEP_RECURSIVE_OWNER_DEPTH count.data load64 test::assert_eq }
+}
+
+pub fn make_resetting_callback node:ClosureNode sentinel:i64 -> fn[-> i64] {
+    move {
+        node drop
+        {} ClosureNode = node
+        sentinel
+    }
+}
+
+pub fn test_closure_cleanup_preserves_calling_environment {
+    "closure_cleanup_preserves_calling_environment" test::test_start
+    DESTRUCTION_INDEX_SIZE std::RawBuffer::new = count
+    count.data reset
+    41 count.data {} ClosureNode wrap_callback make_resetting_callback = outer
+    "calling closure keeps its captures" 41 outer exec test::assert_eq
+    unsafe { "nested cleanup finishes during call" 1 count.data load64 test::assert_eq }
+    "calling closure remains repeatable" 41 outer exec test::assert_eq
+    outer drop
+    unsafe { "nested owner is destroyed once" 1 count.data load64 test::assert_eq }
+}
+
 pub fn array_literal_cleanup log:ptr index:ptr {
     index log 1 resource = first
     index log 2 resource = second
@@ -648,6 +868,10 @@ pub fn run_tests {
     test_inline_fields_preserve_cleanup_order
     test_plain_field_replacement_keeps_existing_behavior
     test_recursive_owner_cleanup
+    test_recursive_layouts_keep_cleanup_order
+    test_deep_recursive_owner_cleanup
+    test_deep_closure_cleanup
+    test_closure_cleanup_preserves_calling_environment
     test_array_literal_owns_its_elements
     test_generic_array_owns_its_elements
     test_borrowed_pattern_keeps_owner

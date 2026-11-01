@@ -235,7 +235,9 @@ destroyed. A type with this method cannot implement `Copy`.
 Casa destroys owners in reverse acquisition order on normal scope exits,
 returns, and loop exits. It calls a custom `drop` method first, then destroys
 the fields in reverse declaration order. The `drop` intrinsic starts the same
-process immediately.
+process immediately. Recursive values keep this order at any depth. See
+[Cleanup and captured values](ownership.md#cleanup-and-captured-values) for the
+call-stack limits.
 
 ## Alternative stack constructor
 

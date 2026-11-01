@@ -26,6 +26,12 @@ const ENUM_DISPATCH_MIN_ARMS 4
 const SHORT_COPY_LIMIT 64
 const AUTOMATIC_AGGREGATE_BYTES: u64 4096
 
+# A recursive destruction worker starts with a frame buffer for 16 two-word
+# continuations, so shallow values do not allocate. Growth moves them to a heap
+# buffer of twice the capacity. Only the frame buffer has this capacity.
+const CONTINUATION_BUFFER_BYTES: u64 256
+const CONTINUATION_GROWTH_FUNCTION "__destruction_continuations grow"
+
 enum StorageKind derives std::Copy {
     Heap
     Local
@@ -34,7 +40,41 @@ enum StorageKind derives std::Copy {
 enum FunctionWork {
     Checked(std::String)
     Destruction(std::String common::Type StorageKind)
+    RecursiveDestruction(std::String std::List[DestructionNode])
+    ContinuationGrowth(std::String)
     ClosureDestruction(std::String std::String)
+}
+
+# One generated destruction function, including a concrete closure record.
+enum DestructionNode derives std::Clone {
+    Value(common::Type StorageKind)
+    Closure(std::String)
+}
+
+impl DestructionNode {
+    fn get_name self:$DestructionNode -> std::String {
+        self match
+            DestructionNode::Value(typ storage) => storage copy typ destruction_function_name
+            DestructionNode::Closure(name) => f"__drop_closure_{name}"
+        end
+    }
+}
+
+# Frame slots of a recursive destruction worker's continuation buffer.
+struct ContinuationSlots derives std::Copy {
+    buffer:   u64
+    length:   u64
+    capacity: u64
+}
+
+# A worker destroys every member of one recursive destruction cycle in a
+# single frame. `starts` maps each member's destruction function name to its
+# body label, and `resumes` lists the label of each continuation by its id.
+struct RecursiveDestruction {
+    starts:   std::Map[std::String u64]
+    resumes:  std::List[u64]
+    slots:    ContinuationSlots
+    closures: std::List[std::String]
 }
 
 struct BackendPlanner {
@@ -45,6 +85,7 @@ struct BackendPlanner {
     failure:       std::Option[BytecodeFailure]
     label_counter: u64
     layouts:       common::LayoutPlanner
+    closures:      std::Map[std::String std::List[std::String]]
 }
 
 struct EnumDispatch {
@@ -60,14 +101,15 @@ struct LoopTargets {
 }
 
 struct FunctionPlanner {
-    loop_targets:  std::List[LoopTargets]
-    function:      std::Option[$common::Function]
-    local_slots:   std::Map[std::String u64]
-    capture_slots: std::Map[std::String u64]
-    locals_count:  u64
-    state:         mut$BackendPlanner
-    owner_flags:   std::Map[std::String u64]
-    result_slot:   std::Option[u64]
+    loop_targets:          std::List[LoopTargets]
+    function:              std::Option[$common::Function]
+    local_slots:           std::Map[std::String u64]
+    capture_slots:         std::Map[std::String u64]
+    locals_count:          u64
+    state:                 mut$BackendPlanner
+    owner_flags:           std::Map[std::String u64]
+    result_slot:           std::Option[u64]
+    recursive_destruction: std::Option[RecursiveDestruction]
 }
 
 struct ResolvedStructField {
@@ -103,6 +145,24 @@ fn resolve_struct_field
 impl BackendPlanner {
     fn new checked:$typechecker::CheckedProgram sources:$lexer::SourceStore -> BackendPlanner {
         checked.get_store = store
+        # Any capturing function with this checked stack effect can inhabit a
+        # function value. Index all of them before planning destruction cycles.
+        std::Map[std::String std::List[std::String]]::new = closures
+        for name in checked.get_function_names.iter do
+            name.as_str store.get_function.unwrap = function
+            if function.captures.is_empty then
+                continue
+            fi
+            function.stack_effect common::stack_effect_to_function_type.format = key
+            if key closures.get_mut std::Option::Some(names) is then
+                name.clone names.push
+            else
+                std::List[std::String]::new = names
+                name.clone names.push
+                names key closures.set
+            fi
+        done
+        closures
         store common::LayoutPlanner::new
         0
         std::Option[BytecodeFailure]::None
@@ -131,6 +191,7 @@ impl BackendPlanner {
 impl FunctionPlanner {
     fn new state:mut$BackendPlanner -> FunctionPlanner {
         state.layouts state.checked state.store.variables index_root_variable_map = locals_count = local_slots
+        std::Option[RecursiveDestruction]::None
         std::Option[u64]::None
         std::Map[std::String u64]::new
         state
@@ -144,6 +205,7 @@ impl FunctionPlanner {
 
     fn for_function state:mut$BackendPlanner function:$common::Function -> FunctionPlanner {
         state.layouts state.checked function.variables index_local_variable_list = locals_count = local_slots
+        std::Option[RecursiveDestruction]::None
         std::Option[u64]::None
         std::Map[std::String u64]::new
         state
@@ -234,8 +296,9 @@ impl FunctionPlanner {
         fi
     }
 
-    # Consume a field address. Inline bodies belong to the containing allocation,
-    # so they are destroyed in place. C-compatible bodies have no resources.
+    # Consume a field address above its owner. Inline bodies belong to the
+    # containing allocation, so they are destroyed in place. C-compatible
+    # bodies have no resources.
     fn compile_field_destruction
         compiler:mut$FunctionPlanner
         typ:$common::Type
@@ -261,7 +324,8 @@ impl FunctionPlanner {
         else
             StorageKind::Heap
         fi = storage
-        storage bytecode typ compiler.compile_destruction_in_storage
+        std::List[u64]::new = no_locals
+        bytecode no_locals true storage typ compiler.compile_child_destruction
     }
 
     fn get_struct_field_plan
@@ -559,6 +623,16 @@ impl FunctionPlanner {
     }
 }
 
+# A separator outside source identifiers keeps local_Value's heap destructor
+# distinct from Value's local destructor.
+fn destruction_function_name typ:$common::Type storage_kind:StorageKind -> std::String {
+    typ.format = type_name
+    storage_kind match
+        StorageKind::Heap => f"__drop_{type_name}"
+        StorageKind::Local => f"__drop_local {type_name}"
+    end
+}
+
 # Deterministic destruction
 impl FunctionPlanner {
     fn is_copy_aggregate self:$FunctionPlanner typ:$common::Type -> bool {
@@ -644,8 +718,17 @@ impl FunctionPlanner {
         bytecode element_type compiler.emit_inline_size
         InstValue::Mul bytecode.push
         InstValue::Add bytecode.push
-        bytecode element_type compiler.emit_typed_load
-        bytecode element_type compiler.compile_destruction
+        # Destroy an automatic-storage element in place. A copy would occupy
+        # frame storage that a recursive destruction worker reuses for nested
+        # elements while this element's continuation is pending.
+        if element_type compiler.uses_automatic_storage ! then
+            bytecode element_type compiler.emit_typed_load
+        fi
+        std::List[u64]::new = saved_locals
+        array_local saved_locals.push
+        index_local saved_locals.push
+        element_type compiler.value_storage = storage
+        bytecode saved_locals false storage element_type compiler.compile_child_destruction
         start_label InstValue::Jump bytecode.push
         end_label InstValue::Label bytecode.push
         array_local InstValue::LocalGet bytecode.push
@@ -778,7 +861,7 @@ impl FunctionPlanner {
             InstValue::Drop bytecode.push return
         fi
         if shape typechecker::CheckedShape::Closure is then
-            InstValue::ClosureDrop bytecode.push return
+            bytecode compiler.compile_closure_dispatch return
         fi
         if typ compiler.is_copy_aggregate then
             InstValue::Drop bytecode.push return
@@ -832,13 +915,7 @@ impl FunctionPlanner {
         typ:$common::Type
         storage_kind:StorageKind
     -> std::String {
-        typ.format = type_name
-        # A separator outside source identifiers keeps local_Value's heap
-        # destructor distinct from Value's local destructor.
-        storage_kind match
-            StorageKind::Heap => f"__drop_{type_name}"
-            StorageKind::Local => f"__drop_local {type_name}"
-        end = function_name
+        storage_kind typ destruction_function_name = function_name
         if
             function_name compiler
                 .state
@@ -889,6 +966,616 @@ impl FunctionPlanner {
         fi
         storage_kind typ compiler.ensure_destruction_function = function_name
         function_name InstValue::FnCall bytecode.push
+    }
+
+    # Record a call that `compile_destruction_in_storage` makes to destroy `typ`.
+    fn push_destruction_child
+        compiler:mut$FunctionPlanner
+        typ:$common::Type
+        storage_kind:StorageKind
+        children:mut$std::List[DestructionNode]
+    {
+        if typ compiler.destruction_needs_function ! then
+            return
+        fi
+        if
+            typ compiler
+                .state
+                .checked
+                .has_plain_storage
+        then
+            return
+        fi
+        storage_kind typ.clone DestructionNode::Value children.push
+    }
+
+    # Record a call that `compile_field_destruction` makes to destroy a field.
+    fn push_field_destruction_child
+        compiler:mut$FunctionPlanner
+        typ:$common::Type
+        plan:$common::FieldStoragePlan
+        children:mut$std::List[DestructionNode]
+    {
+        if typ compiler.is_copy_aggregate then
+            return
+        fi
+        if plan.stores_inline compiler.state.store typ common::type_has_trivial_c_field_layout && then
+            return
+        fi
+        if plan.stores_inline then
+            StorageKind::Local
+        else
+            StorageKind::Heap
+        fi = storage
+        children storage typ compiler.push_destruction_child
+    }
+
+    # List the destruction functions that `compile_destruction_body` calls for
+    # `typ`. Keep it in step with that body. A missing call keeps destruction
+    # correct but lets that call nest on the return stack.
+    fn destruction_children
+        compiler:mut$FunctionPlanner
+        typ:$common::Type
+    -> std::List[DestructionNode] {
+        std::List[DestructionNode]::new = children
+        if
+            typ compiler
+                .state
+                .checked
+                .has_plain_storage typ compiler.is_copy_aggregate ||
+        then
+            children return
+        fi
+        typ compiler
+            .state
+            .checked
+            .get_shape match
+            typechecker::CheckedShape::Closure => {
+                typ.format = key
+                if
+                    key compiler
+                        .state
+                        .closures
+                        .get std::Option::Some(names) is
+                then
+                    for name in names.iter do
+                        name.clone DestructionNode::Closure children.push
+                    done
+                fi
+            }
+            typechecker::CheckedShape::Array => {
+                typ.array_element_type.unwrap = element_type
+                element_type compiler.value_storage = storage
+                children storage element_type compiler.push_destruction_child
+            }
+            typechecker::CheckedShape::Struct => {
+                typ.match_base = name
+                name compiler
+                    .state
+                    .store
+                    .structs
+                    .get
+                    .unwrap = casa_struct
+                casa_struct.type_vars typ common::aggregate_type_bindings = substitutions
+                for member_index in casa_struct.members.length 0 std::Range::new do
+                    member_index casa_struct.members.get = member
+                    substitutions member.typ.substitute_t = member_type
+                    member_index casa_struct compiler.get_struct_field_plan = plan
+                    children plan member_type compiler.push_field_destruction_child
+                done
+            }
+            typechecker::CheckedShape::Enum => {
+                typ.match_base = name
+                name compiler
+                    .state
+                    .store
+                    .enums
+                    .get
+                    .unwrap = casa_enum
+                casa_enum.type_vars typ common::aggregate_type_bindings = substitutions
+                for variant_name in casa_enum.variants.iter do
+                    if variant_name.as_str casa_enum.variant_types.get_str std::Option::Some(payload_types) is then
+                        for payload_index in payload_types.length 0 std::Range::new do
+                            substitutions payload_index payload_types.get.substitute_t = payload_type
+                            payload_index variant_name.as_str casa_enum compiler.get_enum_field_plan = plan
+                            children plan payload_type compiler.push_field_destruction_child
+                        done
+                    fi
+                done
+            }
+            _ => {}
+        end
+        children
+    }
+
+    fn destruction_node_children
+        compiler:mut$FunctionPlanner
+        node:$DestructionNode
+    -> std::List[DestructionNode] {
+        node match
+            DestructionNode::Value(typ _) => typ compiler.destruction_children
+            DestructionNode::Closure(name) => {
+                std::List[DestructionNode]::new = children
+                name.as_str compiler
+                    .state
+                    .store
+                    .get_function
+                    .unwrap = lambda
+                for capture in lambda.captures.iter do
+                    if capture.name.as_str lambda.owned_captures common::string_list_contains then
+                        # Copy captures only release their backing allocation.
+                        if capture.typ compiler.is_copy_aggregate ! then
+                            children StorageKind::Heap capture.typ compiler.push_destruction_child
+                        fi
+                    fi
+                done
+                children
+            }
+        end
+    }
+
+    # Return the destruction cycle that contains `root`, ordered by function
+    # name, or no nodes when destroying `root` never destroys another `root`.
+    fn recursive_destruction_nodes
+        compiler:mut$FunctionPlanner
+        root:$DestructionNode
+    -> std::List[DestructionNode] {
+        root.get_name = root_name
+        std::Map[std::String DestructionNode]::new = nodes
+        std::Map[std::String std::List[std::String]]::new = edges
+        std::List[DestructionNode]::new = pending
+        root.clone pending.push
+        while pending.is_empty ! do
+            pending.pop = node
+            node.get_name = name
+            if name nodes.has then
+                continue
+            fi
+            std::List[std::String]::new = child_names
+            for child in node compiler.destruction_node_children.iter do
+                child.get_name child_names.push
+                child.clone pending.push
+            done
+            child_names name.clone edges.set
+            node name nodes.set
+        done
+
+        # Collect the reachable nodes that reach the root until none is added.
+        std::Set[std::String]::new = cycle
+        nodes.keys = names
+        &does_function_name_precede names.sort_by
+        true = changed
+        while changed do
+            false = changed
+            for name in names.iter do
+                if name cycle.has then
+                    continue
+                fi
+                for
+                    child_name in name edges
+                        .get
+                        .unwrap
+                        .iter
+                do
+                    if child_name root_name == child_name cycle.has || then
+                        name.clone cycle.add
+                        true = changed
+                        break
+                    fi
+                done
+            done
+        done
+
+        std::List[DestructionNode]::new = members
+        if root_name cycle.has then
+            for name in names.iter do
+                if name cycle.has then
+                    name nodes
+                        .get
+                        .unwrap
+                        .clone members.push
+                fi
+            done
+        fi
+        members
+    }
+
+    # Compile a destruction function body. A member of a recursive destruction
+    # cycle enters the cycle's shared worker, so its depth does not consume the
+    # return stack. Other types keep the direct body.
+    fn compile_destruction_entry
+        compiler:mut$FunctionPlanner
+        root:$DestructionNode
+        bytecode:mut$std::List[InstValue]
+    {
+        root compiler.recursive_destruction_nodes = nodes
+        if nodes.is_empty then
+            bytecode root compiler.compile_destruction_node
+            return
+        fi
+        root.get_name = root_name
+        0 = entry: u64
+        for node in nodes.iter do
+            if node.get_name root_name == then
+                break
+            fi
+            1 += entry
+        done
+        0 nodes.get = first
+        first.get_name = first_name
+        f"__drop_recursive {first_name}" = worker
+        if
+            worker compiler
+                .state
+                .program
+                .functions
+                .has !
+        then
+            worker.as_str compiler
+                .state
+                .program
+                .register_function
+            nodes worker.clone FunctionWork::RecursiveDestruction compiler
+                .state
+                .pending
+                .push
+        fi
+        entry i64::try_from.unwrap InstValue::Push bytecode.push
+        worker InstValue::FnCall bytecode.push
+    }
+
+    fn compile_destruction_node
+        compiler:mut$FunctionPlanner
+        node:$DestructionNode
+        bytecode:mut$std::List[InstValue]
+    {
+        node match
+            DestructionNode::Value(typ storage) => storage copy bytecode typ compiler.compile_destruction_body
+            DestructionNode::Closure(name) => {
+                name.as_str compiler
+                    .state
+                    .store
+                    .get_function
+                    .unwrap = lambda
+                bytecode lambda compiler.compile_closure_destruction
+            }
+        end
+    }
+
+    # The record itself supplies captures and active flags. No destruction body
+    # needs current_env, so a worker can resume another record in the same frame.
+    fn compile_closure_destruction
+        compiler:mut$FunctionPlanner
+        lambda:$common::Function
+        bytecode:mut$std::List[InstValue]
+    {
+        for capture_index in lambda.captures.length 0 std::Range::new do
+            capture_index lambda.captures.get = capture
+            if capture.name.as_str lambda.owned_captures common::string_list_contains ! then
+                continue
+            fi
+            compiler.new_label = end_label
+            # Two header words, then a value and an active flag per capture.
+            capture_index 2 * 2 + common::WORD_SIZE * = value_offset
+            InstValue::Dup bytecode.push
+            value_offset common::WORD_SIZE + i64::try_from.unwrap InstValue::Push bytecode.push
+            InstValue::Add bytecode.push
+            InstValue::Load64 bytecode.push
+            end_label InstValue::JumpNe bytecode.push
+            InstValue::Dup bytecode.push
+            value_offset i64::try_from.unwrap InstValue::Push bytecode.push
+            InstValue::Add bytecode.push
+            InstValue::Load64 bytecode.push
+            if capture.typ compiler.is_copy_aggregate then
+                InstValue::HeapFree bytecode.push
+            else
+                std::List[u64]::new = no_locals
+                bytecode no_locals true StorageKind::Heap capture.typ compiler.compile_child_destruction
+            fi
+            end_label InstValue::Label bytecode.push
+        done
+        InstValue::HeapFree bytecode.push
+    }
+
+    # A function value's record selects a concrete capture layout at runtime.
+    # Cycle members jump to that layout's body. Other records retain direct cleanup.
+    fn compile_closure_dispatch compiler:mut$FunctionPlanner bytecode:mut$std::List[InstValue] {
+        std::List[std::String]::new = closures
+        if compiler.recursive_destruction std::Option::Some(context) is then
+            context.closures.clone = closures
+        fi
+        for name in closures.iter do
+            name.as_str compiler
+                .state
+                .store
+                .get_function
+                .unwrap = lambda
+            lambda compiler.ensure_closure_destruction_function = destructor
+            compiler.new_label = next_label
+            InstValue::Dup bytecode.push
+            common::WORD_SIZE InstValue::Push bytecode.push
+            InstValue::Add bytecode.push
+            InstValue::Load64 bytecode.push
+            destructor.clone InstValue::DropFn bytecode.push
+            InstValue::Eq bytecode.push
+            next_label InstValue::JumpNe bytecode.push
+            if compiler.recursive_destruction std::Option::Some(context) is then
+                destructor context
+                    .starts
+                    .get_copy
+                    .unwrap InstValue::Jump bytecode.push
+            fi
+            next_label InstValue::Label bytecode.push
+        done
+        InstValue::ClosureDrop bytecode.push
+    }
+
+    fn emit_continuation_address
+        compiler:mut$FunctionPlanner
+        slots:ContinuationSlots
+        offset:u64
+        bytecode:mut$std::List[InstValue]
+    {
+        slots.buffer InstValue::LocalGet bytecode.push
+        slots.length InstValue::LocalGet bytecode.push
+        InstValue::Add bytecode.push
+        if 0 offset != then
+            offset i64::try_from.unwrap InstValue::Push bytecode.push
+            InstValue::Add bytecode.push
+        fi
+    }
+
+    fn emit_continuation_length_change
+        compiler:mut$FunctionPlanner
+        slots:ContinuationSlots
+        bytes:u64
+        instruction:InstValue
+        bytecode:mut$std::List[InstValue]
+    {
+        slots.length InstValue::LocalGet bytecode.push
+        bytes i64::try_from.unwrap InstValue::Push bytecode.push
+        instruction bytecode.push
+        slots.length InstValue::LocalSet bytecode.push
+    }
+
+    # Consume a child value and destroy it. Inside a recursive destruction
+    # worker, a call to a cycle member becomes a continuation: the owner below
+    # the child when `owner_below` is set, then `saved_locals`, then the resume
+    # id. The worker restores them after the child is destroyed.
+    fn compile_child_destruction
+        compiler:mut$FunctionPlanner
+        typ:$common::Type
+        storage_kind:StorageKind
+        owner_below:bool
+        saved_locals:$std::List[u64]
+        bytecode:mut$std::List[InstValue]
+    {
+        storage_kind typ destruction_function_name = name
+        std::Option[u64]::None = start
+        0 0 0 ContinuationSlots = slots
+        if compiler.recursive_destruction std::Option::Some(context) is then
+            name context.starts.get_copy = start
+            context.slots copy = slots
+        fi
+        if start std::Option::Some(start_label) is else
+            storage_kind bytecode typ compiler.compile_destruction_in_storage
+            return
+        fi
+        compiler.ensure_continuation_growth_function = growth
+        compiler.new_label = store_label
+        compiler.new_label = resume_label
+        0 = resume_id: u64
+        if compiler.recursive_destruction std::Option::Some(context) is then
+            context.resumes.length = resume_id
+            resume_label context.resumes.push
+        fi
+        common::WORD_SIZE u64::try_from.unwrap = word
+        saved_locals.length 1 + word * = saved_bytes
+        if owner_below then
+            word += saved_bytes
+        fi
+
+        # Grow the buffer when the continuation does not fit.
+        slots.length InstValue::LocalGet bytecode.push
+        saved_bytes i64::try_from.unwrap InstValue::Push bytecode.push
+        InstValue::Add bytecode.push
+        slots.capacity InstValue::LocalGet bytecode.push
+        InstValue::Ugt bytecode.push
+        store_label InstValue::JumpNe bytecode.push
+        slots.buffer InstValue::LocalGet bytecode.push
+        slots.length InstValue::LocalGet bytecode.push
+        slots.capacity InstValue::LocalGet bytecode.push
+        growth InstValue::FnCall bytecode.push
+        slots.capacity InstValue::LocalSet bytecode.push
+        slots.buffer InstValue::LocalSet bytecode.push
+        store_label InstValue::Label bytecode.push
+
+        0 = offset: u64
+        if owner_below then
+            InstValue::Swap bytecode.push
+            bytecode offset slots compiler.emit_continuation_address
+            InstValue::Store64 bytecode.push
+            word += offset
+        fi
+        for local in saved_locals.iter do
+            local copy InstValue::LocalGet bytecode.push
+            bytecode offset slots compiler.emit_continuation_address
+            InstValue::Store64 bytecode.push
+            word += offset
+        done
+        resume_id i64::try_from.unwrap InstValue::Push bytecode.push
+        bytecode offset slots compiler.emit_continuation_address
+        InstValue::Store64 bytecode.push
+        bytecode InstValue::Add saved_bytes slots compiler.emit_continuation_length_change
+        start_label InstValue::Jump bytecode.push
+
+        # The dispatch has removed the resume id.
+        resume_label InstValue::Label bytecode.push
+        saved_bytes word - = restored_bytes
+        bytecode InstValue::Sub restored_bytes slots compiler.emit_continuation_length_change
+        0 = restore_offset: u64
+        if owner_below then
+            word += restore_offset
+        fi
+        for local in saved_locals.iter do
+            bytecode restore_offset slots compiler.emit_continuation_address
+            InstValue::Load64 bytecode.push
+            local copy InstValue::LocalSet bytecode.push
+            word += restore_offset
+        done
+        if owner_below then
+            bytecode 0 slots compiler.emit_continuation_address
+            InstValue::Load64 bytecode.push
+        fi
+    }
+
+    fn ensure_continuation_growth_function compiler:mut$FunctionPlanner -> std::String {
+        CONTINUATION_GROWTH_FUNCTION.to_str = name
+        if
+            name compiler
+                .state
+                .program
+                .functions
+                .has !
+        then
+            name.as_str compiler
+                .state
+                .program
+                .register_function
+            name.clone FunctionWork::ContinuationGrowth compiler
+                .state
+                .pending
+                .push
+        fi
+        name
+    }
+
+    # Destroy the members of one recursive destruction cycle in one frame.
+    # Consumes the value and its entry index in `nodes`. Each member body jumps
+    # to the dispatch after it releases its storage. The dispatch resumes the
+    # latest continuation, or releases the buffer and returns when none is left.
+    fn compile_recursive_destruction
+        compiler:mut$FunctionPlanner
+        nodes:$std::List[DestructionNode]
+        bytecode:mut$std::List[InstValue]
+    {
+        compiler.allocate_local = buffer
+        compiler.allocate_local = length
+        compiler.allocate_local = capacity
+        capacity length buffer ContinuationSlots = slots
+        CONTINUATION_BUFFER_BYTES compiler.allocate_value_storage = frame_buffer
+        frame_buffer InstValue::LocalAddress bytecode.push
+        buffer InstValue::LocalSet bytecode.push
+        0 InstValue::Push bytecode.push
+        length InstValue::LocalSet bytecode.push
+        CONTINUATION_BUFFER_BYTES i64::try_from.unwrap InstValue::Push bytecode.push
+        capacity InstValue::LocalSet bytecode.push
+        std::Map[std::String u64]::new = starts
+        std::List[u64]::new = start_labels
+        std::List[std::String]::new = closures
+        for node in nodes.iter do
+            compiler.new_label = label
+            label node.get_name starts.set
+            label start_labels.push
+            if node DestructionNode::Closure(name) is then
+                name.clone closures.push
+            fi
+        done
+        compiler.new_label = dispatch_label
+        compiler.new_label = finish_label
+        closures slots std::List[u64]::new starts RecursiveDestruction std::Option::Some = compiler.recursive_destruction
+
+        0 start_labels.get copy start_labels.clone InstValue::JumpTable bytecode.push
+        0 = index: u64
+        for node in nodes.iter do
+            index start_labels.get copy InstValue::Label bytecode.push
+            bytecode node compiler.compile_destruction_node
+            dispatch_label InstValue::Jump bytecode.push
+            1 += index
+        done
+
+        dispatch_label InstValue::Label bytecode.push
+        length InstValue::LocalGet bytecode.push
+        0 InstValue::Push bytecode.push
+        InstValue::Ne bytecode.push
+        finish_label InstValue::JumpNe bytecode.push
+        bytecode InstValue::Sub common::WORD_SIZE u64::try_from.unwrap slots compiler.emit_continuation_length_change
+        bytecode 0 slots compiler.emit_continuation_address
+        InstValue::Load64 bytecode.push
+        std::List[u64]::new = resumes
+        if compiler.recursive_destruction std::Option::Some(context) is then
+            context.resumes.clone = resumes
+        fi
+        std::Option[RecursiveDestruction]::None = compiler.recursive_destruction
+        finish_label resumes InstValue::JumpTable bytecode.push
+
+        finish_label InstValue::Label bytecode.push
+        bytecode slots compiler.emit_continuation_buffer_release
+    }
+
+    # Release a continuation buffer unless it is the worker's frame buffer.
+    fn emit_continuation_buffer_release
+        compiler:mut$FunctionPlanner
+        slots:ContinuationSlots
+        bytecode:mut$std::List[InstValue]
+    {
+        compiler.new_label = end_label
+        slots.capacity InstValue::LocalGet bytecode.push
+        CONTINUATION_BUFFER_BYTES i64::try_from.unwrap InstValue::Push bytecode.push
+        InstValue::Ne bytecode.push
+        end_label InstValue::JumpNe bytecode.push
+        slots.buffer InstValue::LocalGet bytecode.push
+        InstValue::HeapFree bytecode.push
+        end_label InstValue::Label bytecode.push
+    }
+
+    # Move continuations to a larger buffer. Consumes the buffer, its used
+    # bytes, and its capacity, and returns the new buffer and capacity.
+    fn compile_continuation_growth compiler:mut$FunctionPlanner bytecode:mut$std::List[InstValue] {
+        compiler.allocate_local = buffer
+        compiler.allocate_local = length
+        compiler.allocate_local = capacity
+        compiler.allocate_local = grown
+        compiler.allocate_local = offset
+        capacity length buffer ContinuationSlots = slots
+        capacity InstValue::LocalSet bytecode.push
+        length InstValue::LocalSet bytecode.push
+        buffer InstValue::LocalSet bytecode.push
+        capacity InstValue::LocalGet bytecode.push
+        2 InstValue::Push bytecode.push
+        InstValue::Mul bytecode.push
+        InstValue::HeapAlloc bytecode.push
+        grown InstValue::LocalSet bytecode.push
+
+        compiler.new_label = loop_label
+        compiler.new_label = end_label
+        0 InstValue::Push bytecode.push
+        offset InstValue::LocalSet bytecode.push
+        loop_label InstValue::Label bytecode.push
+        offset InstValue::LocalGet bytecode.push
+        length InstValue::LocalGet bytecode.push
+        InstValue::Ult bytecode.push
+        end_label InstValue::JumpNe bytecode.push
+        buffer InstValue::LocalGet bytecode.push
+        offset InstValue::LocalGet bytecode.push
+        InstValue::Add bytecode.push
+        InstValue::Load64 bytecode.push
+        grown InstValue::LocalGet bytecode.push
+        offset InstValue::LocalGet bytecode.push
+        InstValue::Add bytecode.push
+        InstValue::Store64 bytecode.push
+        offset InstValue::LocalGet bytecode.push
+        common::WORD_SIZE InstValue::Push bytecode.push
+        InstValue::Add bytecode.push
+        offset InstValue::LocalSet bytecode.push
+        loop_label InstValue::Jump bytecode.push
+        end_label InstValue::Label bytecode.push
+
+        bytecode slots compiler.emit_continuation_buffer_release
+        grown InstValue::LocalGet bytecode.push
+        capacity InstValue::LocalGet bytecode.push
+        2 InstValue::Push bytecode.push
+        InstValue::Mul bytecode.push
     }
 
     fn owner_flag compiler:mut$FunctionPlanner name:$str -> u64 {
@@ -3121,35 +3808,28 @@ fn plan_function
         FunctionWork::Destruction(name typ storage_kind) => {
             common::empty_location name.clone common::Function::new = function
             function state FunctionPlanner::for_function = compiler
-            storage_kind copy output typ compiler.compile_destruction_body
+            storage_kind copy typ.clone DestructionNode::Value = node
+            output node compiler.compile_destruction_entry
+            0 false compiler.owner_flags compiler.locals_count output finalize_frame FunctionPlan::new
+        }
+        FunctionWork::RecursiveDestruction(name nodes) => {
+            common::empty_location name.clone common::Function::new = function
+            function state FunctionPlanner::for_function = compiler
+            output nodes compiler.compile_recursive_destruction
+            0 false compiler.owner_flags compiler.locals_count output finalize_frame FunctionPlan::new
+        }
+        FunctionWork::ContinuationGrowth(name) => {
+            common::empty_location name.clone common::Function::new = function
+            function state FunctionPlanner::for_function = compiler
+            output compiler.compile_continuation_growth
             0 false compiler.owner_flags compiler.locals_count output finalize_frame FunctionPlan::new
         }
         FunctionWork::ClosureDestruction(name lambda_name) => {
-            lambda_name.as_str checked
-                .get_store
-                .get_function
-                .unwrap = lambda
-            lambda state FunctionPlanner::for_function = compiler
-            lambda.location.clone InstValue::Source output.push
-            for capture_index in lambda.captures.length 0 std::Range::new do
-                capture_index lambda.captures.get = capture
-                if capture.name.as_str lambda.owned_captures common::string_list_contains then
-                    compiler.new_label = end_label
-                    capture_index InstValue::CaptureFlagLoad output.push
-                    0 InstValue::Push output.push
-                    InstValue::Ne output.push
-                    end_label InstValue::JumpNe output.push
-                    capture_index InstValue::CaptureLoad output.push
-                    if capture.typ compiler.is_copy_aggregate then
-                        InstValue::HeapFree output.push
-                    else
-                        StorageKind::Heap output capture.typ compiler.compile_destruction_in_storage
-                    fi
-                    end_label InstValue::Label output.push
-                fi
-            done
-            InstValue::HeapFree output.push
-            lambda.captures.length false compiler.owner_flags compiler.locals_count output finalize_frame FunctionPlan::new
+            common::empty_location name.clone common::Function::new = function
+            function state FunctionPlanner::for_function = compiler
+            lambda_name.clone DestructionNode::Closure = node
+            output node compiler.compile_destruction_entry
+            0 false compiler.owner_flags compiler.locals_count output finalize_frame FunctionPlan::new
         }
     end
 }
@@ -3159,6 +3839,8 @@ impl FunctionWork {
         self match
             FunctionWork::Checked(name) => name.clone
             FunctionWork::Destruction(name) => name.clone
+            FunctionWork::RecursiveDestruction(name) => name.clone
+            FunctionWork::ContinuationGrowth(name) => name.clone
             FunctionWork::ClosureDestruction(name _) => name.clone
         end
     }
@@ -3435,6 +4117,8 @@ pub fn compile_checked
         index state.pending.get match
             FunctionWork::Checked(value) => value.clone FunctionWork::Checked
             FunctionWork::Destruction(value typ storage_kind) => storage_kind copy typ.clone value.clone FunctionWork::Destruction
+            FunctionWork::RecursiveDestruction(value nodes) => nodes.clone value.clone FunctionWork::RecursiveDestruction
+            FunctionWork::ContinuationGrowth(value) => value.clone FunctionWork::ContinuationGrowth
             FunctionWork::ClosureDestruction(value lambda) => lambda.clone value.clone FunctionWork::ClosureDestruction
         end = current
         current state checked plan_function = body
@@ -6464,23 +7148,10 @@ impl Emitter {
                 "movq 8(%rax), %rdx" self.indent
                 "testq %rdx, %rdx" self.indent
                 f"jz .Lclosure_drop_done_{uid}" self.indent_string
-                "movq current_env(%rip), %rsi" self.indent
-                "movq env_sp(%rip), %rcx" self.indent
-                f"cmpq ${RETURN_STACK_SIZE}, %rcx" self.indent_string
-                "env_stack_overflow" "jge" self.emit_failure_jump
-                "movq %rsi, env_stack(%rcx)" self.indent
-                "addq $8, %rcx" self.indent
-                "movq %rcx, env_sp(%rip)" self.indent
-                "movq %rax, current_env(%rip)" self.indent
                 # The destructor consumes the record, so both paths rejoin at the same rbx.
                 "%rax" self.emit_push
                 self.sync_value_stack
                 "callq *%rdx" self.indent
-                "movq env_sp(%rip), %rcx" self.indent
-                "subq $8, %rcx" self.indent
-                "movq %rcx, env_sp(%rip)" self.indent
-                "movq env_stack(%rcx), %rax" self.indent
-                "movq %rax, current_env(%rip)" self.indent
                 f".Lclosure_drop_done_{uid}:" self.line_string
             }
             InstValue::ClosureRecord(capture_count) => {

@@ -6,4 +6,4 @@ The same ordering applies on ordinary fallthrough and early `return`. A value th
 
 LIFO follows Casa's value stack, makes custom cleanup order deterministic, and needs no dependency graph or user-facing cleanup-order syntax.
 
-ADR-0095 initially applies the same order through call-stack-recursive destruction of recursive owned values. Any later iterative lowering must preserve these observable cleanup-method and field-order semantics.
+[ADR-0185](0185-recursive-destruction-uses-a-continuation-buffer.md) applies the same order to recursive owned values with bounded return-stack use.

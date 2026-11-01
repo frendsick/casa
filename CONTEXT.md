@@ -363,7 +363,7 @@ _Avoid_: Release lint, tag lint
 - Map and Set preserve correctness under hash collisions by comparing keys with Eq. Their traversal order is unspecified, and the unkeyed standard hashes do not provide adversarial collision resistance.
 - Finite recursive owned types may derive Clone. Trait implementation checking resolves recursive obligations as one dependency cycle. Runtime cloning traverses and may allocate for the complete structure.
 - Finite recursive owned types may also derive Eq, Ord, and Hashable through cycle-aware trait implementation checking. Generated operations recursively traverse finite payloads.
-- Recursive destruction uses call-stack recursion and preserves the order of the **Compiler-called cleanup method** and reverse-field destruction.
+- Recursive destruction, including ownership through closure captures, uses bounded return-stack space at any depth and preserves the order of the **Compiler-called cleanup method** and reverse-field destruction. Recursion through a user-written cleanup method, including a standard collection that holds the children, stays on the return stack.
 - `Ordering` is the ordinary standard enum `Less`, `Equal`, `Greater`. It is compiler-validated only when generated Ord behavior needs it. Option remains ordinary library code.
 - Standard Ordering initially derives Eq and Copy, but not Ord or Hashable.
 - A subtrait may provide a matching default body for an inherited bodyless requirement. Ord uses this to adapt `cmp` into PartialOrd's `partial_cmp` without compiler knowledge of Option.
