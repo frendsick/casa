@@ -2239,6 +2239,7 @@ struct TypeChecker {
     seen_dependencies:          std::Set[std::String]
     diagnostics:                mut$error::Diagnostics
     facts_available:            bool
+    errors_before_check:        u64
     has_pending_execution:      bool
     checked_guards:             std::List[body_builder::Builder]
 }
@@ -3163,6 +3164,7 @@ impl TypeChecker {
     -> TypeChecker {
         std::List[body_builder::Builder]::new # checked_guards
         false # has_pending_execution
+        diagnostics.error_count # errors_before_check
         true # facts_available
         diagnostics # diagnostics
         std::Set[std::String]::new # seen_dependencies
@@ -3282,6 +3284,11 @@ pub fn pattern_binding_type
 }
 
 impl TypeChecker {
+    # A body is valid until it records an error or loses facts to a failed callee.
+    fn body_is_valid self:$TypeChecker -> bool {
+        self.errors_before_check self.diagnostics.error_count == self.facts_available &&
+    }
+
     pub fn within_param_cap tc:mut$TypeChecker -> bool {
         if tc.param_cap std::Option::Some(cap) is then
             cap tc.parameters.length > return
@@ -10097,6 +10104,11 @@ impl TypeChecker {
         lambda_name:std::String
         expected:std::Option[common::Type]
     {
+        # A failed call leaves its lambda arguments without an expected function
+        # type. Checking them then would repeat that failure as an inference error.
+        if expected.is_none self.body_is_valid ! && then
+            return
+        fi
         if lambda_name.as_str self.store.get_function std::Option::Some(lambda) is then
             lambda.clone = owned_lambda
             false = completed
@@ -15172,6 +15184,29 @@ struct CheckedOperations {
     has_pending_execution:   bool
 }
 
+# A lambda input without an annotation, an expected function type, or a typing
+# use keeps the unknown placeholder. Reject it because no later phase can type it.
+fn report_uninferred_lambda_parameter
+    diagnostics:mut$error::Diagnostics
+    location:$common::Location
+    inferred:$common::StackEffect
+{
+    for parameter in inferred.parameters.iter do
+        if parameter.typ.is_unknown_placeholder then
+            # Suggest no type. Inputs are not tracked through uses, so any
+            # suggested type could be impossible for this input.
+            if parameter.name.is_empty then
+                location "Cannot infer lambda parameter type. Bind the input with a type annotation."
+                common::ErrorKind::TypeMismatch diagnostics.record_error
+            else
+                location f"Cannot infer lambda parameter type for `{parameter.name}`. Annotate its binding with a type."
+                common::ErrorKind::TypeMismatch diagnostics.record_error_string
+            fi
+            return
+        fi
+    done
+}
+
 fn analyze_ops
     source:source_body::SourceBody
     ops:mut$body_builder::Builder
@@ -15184,7 +15219,6 @@ fn analyze_ops
     checks:mut$SemanticChecks
     infer_parameters:bool
 -> CheckedOperations {
-    diagnostics.error_count = errors_before_check
     infer_parameters checks active_calls diagnostics store TypeChecker::new = checker
     argument_callables.clone = checker.callable_bindings
     std::Option[u64]::None = budget
@@ -15399,6 +15433,8 @@ fn analyze_ops
                 if 0 declared common::StackEffect::type_vars.length != then
                     declared.clone = inferred
                 fi
+            else
+                inferred declared_function.location checker.diagnostics report_uninferred_lambda_parameter
             fi
         fi
     fi
@@ -15422,7 +15458,7 @@ fn analyze_ops
     checker.has_raw_storage checker.mutation_summaries.clone
     checker.return_origin_summaries.clone checker.return_callables.clone
     checker.ordered_facts.clone inferred
-    errors_before_check checker.diagnostics.error_count == checker.facts_available && CheckedOperations
+    checker.body_is_valid CheckedOperations
 }
 
 pub fn check_ops

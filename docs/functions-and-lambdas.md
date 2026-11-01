@@ -392,7 +392,14 @@ import "std"
 
 An explicit parameter annotation takes priority and must match the expected
 function type. A lambda that is bound before use has no expected function type,
-so its body alone determines its stack effect.
+so its body alone determines its stack effect. If the body does not determine an
+input type, the compiler reports `Cannot infer lambda parameter type`. Annotate
+the input where the body binds it:
+
+```casa
+{ = limit: i64 = value: i64 value limit > } = exceeds
+5 3 exceeds exec print # true
+```
 
 A lambda can capture bindings from its enclosing scope. Copy values are copied.
 An ordinary lambda [borrows](ownership.md#cleanup-and-captured-values) a non-Copy owner for the lifetime of the closure:
