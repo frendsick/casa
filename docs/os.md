@@ -97,17 +97,17 @@ close errors are ignored, and a write error can leave a partial file.
 
 `FileStat` has `size`, `mode`, `mtime`, `atime`, and `ctime` fields. It also
 provides these checks. `os::file::stat` follows symbolic links, so its result describes
-the target rather than the link. Permission helpers inspect owner mode bits.
+the target rather than the link. The `is_owner_*` helpers inspect owner mode bits.
 They do not check effective access for the current process:
 
 | Method | Signature | Description |
 |---|---|---|
 | [is_dir](#filestatis_dir) | `fn is_dir self:$FileStat -> bool` | Directory |
-| [is_executable](#filestatis_executable) | `fn is_executable self:$FileStat -> bool` | Owner-executable mode bit |
 | [is_file](#filestatis_file) | `fn is_file self:$FileStat -> bool` | Regular file |
-| [is_readable](#filestatis_readable) | `fn is_readable self:$FileStat -> bool` | Owner-readable mode bit |
+| [is_owner_executable](#filestatis_owner_executable) | `fn is_owner_executable self:$FileStat -> bool` | Owner-executable mode bit |
+| [is_owner_readable](#filestatis_owner_readable) | `fn is_owner_readable self:$FileStat -> bool` | Owner-readable mode bit |
+| [is_owner_writable](#filestatis_owner_writable) | `fn is_owner_writable self:$FileStat -> bool` | Owner-writable mode bit |
 | [is_symlink](#filestatis_symlink) | `fn is_symlink self:$FileStat -> bool` | Symbolic link |
-| [is_writable](#filestatis_writable) | `fn is_writable self:$FileStat -> bool` | Owner-writable mode bit |
 
 ### FileStat::is_dir
 
@@ -117,14 +117,6 @@ fn is_dir self:$FileStat -> bool
 
 `is_dir` returns whether the entry is a directory.
 
-### FileStat::is_executable
-
-```text
-fn is_executable self:$FileStat -> bool
-```
-
-`is_executable` returns whether the owner-executable mode bit is set.
-
 ### FileStat::is_file
 
 ```text
@@ -133,13 +125,29 @@ fn is_file self:$FileStat -> bool
 
 `is_file` returns whether the entry is a regular file.
 
-### FileStat::is_readable
+### FileStat::is_owner_executable
 
 ```text
-fn is_readable self:$FileStat -> bool
+fn is_owner_executable self:$FileStat -> bool
 ```
 
-`is_readable` returns whether the owner-readable mode bit is set.
+`is_owner_executable` returns whether the owner-executable mode bit is set.
+
+### FileStat::is_owner_readable
+
+```text
+fn is_owner_readable self:$FileStat -> bool
+```
+
+`is_owner_readable` returns whether the owner-readable mode bit is set.
+
+### FileStat::is_owner_writable
+
+```text
+fn is_owner_writable self:$FileStat -> bool
+```
+
+`is_owner_writable` returns whether the owner-writable mode bit is set.
 
 ### FileStat::is_symlink
 
@@ -148,15 +156,6 @@ fn is_symlink self:$FileStat -> bool
 ```
 
 `is_symlink` returns whether the entry is a symbolic link.
-
-### FileStat::is_writable
-
-```text
-fn is_writable self:$FileStat -> bool
-```
-
-`is_writable` returns whether the owner-writable mode bit is set.
-
 
 The complete [OS example](../examples/os_interaction.casa) creates, inspects,
 and removes a file and directory.

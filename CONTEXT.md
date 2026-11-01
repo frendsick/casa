@@ -47,7 +47,7 @@ The standard-library module (`lib/os.casa`) for file I/O, directory operations, 
 _Avoid_: assuming every OS wrapper belongs to this module
 
 **FileStat**:
-A struct returned by `os::file::stat` containing file metadata fields (`size`, `mode`, `mtime`, `atime`, `ctime` as raw integers) with helper methods for type checks (`is_dir`, `is_file`, `is_symlink`) and permission checks (`is_readable`, `is_writable`, `is_executable`).
+A struct returned by `os::file::stat` containing file metadata fields (`size`, `mode`, `mtime`, `atime`, `ctime` as raw integers) with helper methods for type checks (`is_dir`, `is_file`, `is_symlink`) and owner mode-bit checks (`is_owner_readable`, `is_owner_writable`, `is_owner_executable`). The owner checks do not report whether the current process has access.
 _Avoid_: stat buffer, metadata tuple
 
 ## Language
