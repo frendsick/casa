@@ -672,20 +672,7 @@ fn type_contains_borrow
     fi
     if shape BorrowShape::MutablePayload is then
         if typ.borrow_target std::Option::Some(target) is then
-            if typ.is_exclusive_borrow then
-                std::List[std::String]::new = shared_visiting
-                std::List[std::String]::new = exclusive_visiting
-                std::List[std::String]::new = captured_visiting
-                if
-                    target.has_unresolved_type_var
-                    shared_visiting store BorrowShape::Shared target type_contains_borrow ||
-                    exclusive_visiting store BorrowShape::Exclusive target type_contains_borrow ||
-                    captured_visiting store BorrowShape::Captured target type_contains_borrow ||
-                then
-                    true return
-                fi
-            fi
-            visiting store shape target type_contains_borrow return
+            visiting store target typ does_mutable_target_contain_borrow return
         fi
     fi
     if shape BorrowShape::RawStorage is common::make_ptr_type typ.eq && then
@@ -721,12 +708,9 @@ fn type_contains_borrow
             do
                 pair.second.clone pair.first.clone bindings.set
             done
-            for member in casa_struct.members.iter do
-                bindings member.typ.substitute = member_type
-                if visiting store shape member_type type_contains_borrow then
-                    true return
-                fi
-            done
+            if visiting store shape bindings casa_struct do_struct_fields_contain_borrow then
+                true return
+            fi
         elif generic.base store.enums.get std::Option::Some(casa_enum) is then
             for
                 pair in generic.params.iter casa_enum
@@ -736,14 +720,9 @@ fn type_contains_borrow
             do
                 pair.second.clone pair.first.clone bindings.set
             done
-            for pair in casa_enum.variant_types.iter do
-                for payload_type in pair.second.iter do
-                    bindings payload_type.substitute = resolved
-                    if visiting store shape resolved type_contains_borrow then
-                        true return
-                    fi
-                done
-            done
+            if visiting store shape bindings casa_enum do_enum_payloads_contain_borrow then
+                true return
+            fi
         fi
     fi
     false
@@ -2568,13 +2547,8 @@ impl SemanticChecks {
             self.settle_return_callables
             # Execution can expose a recursive edge that was not known in the
             # first pass. Check its entire component before accepting callers.
-            if function_name self.recursive_groups.get_str std::Option::Some(group) is then
-                for member in group.iter do
-                    if member recursive.has ! then
-                        member.clone recursive.add
-                        true = changed
-                    fi
-                done
+            if recursive function_name self.include_recursive_group then
+                true = changed
             fi
             std::List[std::String]::new = names
             for name in recursive.iter do
@@ -2590,13 +2564,14 @@ impl SemanticChecks {
                 then
                     true = changed
                 fi
-                if name previous.get std::Option::Some(before) is then
-                    if name self.return_summaries.get std::Option::Some(after) is then
-                        if before after call_return_summaries_equal ! then
-                            true = changed
-                        fi
-                    fi
-                else
+                if name previous.get std::Option::Some(before) is else
+                    true = changed
+                    continue
+                fi
+                if name self.return_summaries.get std::Option::Some(after) is else
+                    continue
+                fi
+                if before after call_return_summaries_equal ! then
                     true = changed
                 fi
             done
@@ -3539,26 +3514,18 @@ impl TypeChecker {
         source:$std::Option[std::List[Origin]]
     -> std::Option[std::List[Origin]] {
         std::Option[std::List[Origin]]::None = retained
-        if source std::Option::Some(origins) is then
-            for origin in origins.iter do
-                if origin.kind OriginKind::Place is ! then
-                    continue
-                fi
-                if origin.place.binding self.initialized_parameters.has then
-                    if
-                        origin
-                            .place
-                            .binding
-                            .as_str self.scope.lookup std::Option::Some(typ) is
-                    then
-                        if typ.is_shared_borrow then
-                            continue
-                        fi
-                    fi
-                fi
-                origin.clone retained append_origin = retained
-            done
+        if source std::Option::Some(origins) is else
+            retained return
         fi
+        for origin in origins.iter do
+            if origin.kind OriginKind::Place is ! then
+                continue
+            fi
+            if origin self.is_shared_parameter_origin then
+                continue
+            fi
+            origin.clone retained append_origin = retained
+        done
         retained
     }
 
@@ -4831,11 +4798,7 @@ impl TypeChecker {
                     true return
                 fi
                 for bind_index in expected_params.length 0 std::Range::new do
-                    if bind_index expected_params.get.type_var_name std::Option::Some(bind_name) is then
-                        if bind_name.as_str effect.type_vars.has_str then
-                            bind_index actual_g.params.get bind_name.as_str bindings self.bind_type_var
-                        fi
-                    fi
+                    effect bindings bind_index actual_g.params.get bind_index expected_params.get self.bind_parameter_type_variable
                     bind_index actual_g.params.get bind_index expected_params.get self.validate_const_arguments
                 done
                 bindings expected.typ.substitute = final_expected
@@ -4891,41 +4854,44 @@ impl TypeChecker {
                 actual expected_const self.validate_const_argument
             }
             common::Type::Generic(expected_generic) => {
-                if actual common::Type::Generic(actual_generic) is then
-                    if
-                        expected_generic.base actual_generic.base ==
-                        expected_generic.params.length actual_generic.params.length == &&
-                    then
-                        for
-                            pair in actual_generic.params.iter expected_generic
-                                .params
-                                .list_iter
-                                .zip
-                        do
-                            pair.second pair.first self.validate_const_arguments
-                        done
-                    fi
+                if actual common::Type::Generic(actual_generic) is else
+                    return
                 fi
+                if
+                    expected_generic.base actual_generic.base ==
+                    expected_generic.params.length actual_generic.params.length == &&
+                else
+                    return
+                fi
+                for
+                    pair in actual_generic.params.iter expected_generic
+                        .params
+                        .list_iter
+                        .zip
+                do
+                    pair.second pair.first self.validate_const_arguments
+                done
             }
             common::Type::Function(expected_function) => {
-                if actual common::Type::Function(actual_function) is then
-                    for
-                        pair in actual_function.parameters.iter expected_function
-                            .parameters
-                            .list_iter
-                            .zip
-                    do
-                        pair.second pair.first self.validate_const_arguments
-                    done
-                    for
-                        pair in actual_function.return_types.iter expected_function
-                            .return_types
-                            .list_iter
-                            .zip
-                    do
-                        pair.second pair.first self.validate_const_arguments
-                    done
+                if actual common::Type::Function(actual_function) is else
+                    return
                 fi
+                for
+                    pair in actual_function.parameters.iter expected_function
+                        .parameters
+                        .list_iter
+                        .zip
+                do
+                    pair.second pair.first self.validate_const_arguments
+                done
+                for
+                    pair in actual_function.return_types.iter expected_function
+                        .return_types
+                        .list_iter
+                        .zip
+                do
+                    pair.second pair.first self.validate_const_arguments
+                done
             }
             _ => {}
         end
@@ -5095,31 +5061,7 @@ impl TypeChecker {
                 .stack
                 .values
                 .get = argument: $TypedValue
-            argument.origins match
-                std::Option::Some(argument_origins) => {
-                    for origin in argument_origins.iter do
-                        if
-                            exclusive !
-                            origin.exclusive ||
-                            parameter_type.is_exclusive_borrow argument.capability ValueCapability::Exclusive is && ||
-                        then
-                            exclusive origin.with_capability = adjusted
-                            adjusted origins append_origin = origins
-                        fi
-                    done
-                }
-                std::Option::None => {}
-            end
-            if
-                parameter_type.is_borrow
-                prefer_contained_origins ! argument.origins.is_none || exclusive || &&
-            then
-                if argument.place std::Option::Some(place) is then
-                    if exclusive ! parameter_type.is_exclusive_borrow || then
-                        exclusive place origins add_origin = origins
-                    fi
-                fi
-            fi
+            prefer_contained_origins exclusive origins parameter_type argument.collect_call_origins = origins
             1 += index
         done
         origins
@@ -5335,16 +5277,7 @@ impl TypeChecker {
                     .get
                     .place
                     .clone = argument_place
-                if argument_place std::Option::Some(place) is then
-                    if
-                        parameter_type.is_exclusive_borrow before_arguments place
-                        self.find_conflicting_loan std::Option::Some(conflict) is
-                    then
-                        if parameter_type.is_exclusive_borrow then " exclusively" else "" fi = qualifier
-                        conflict f"Cannot borrow `{place.format}`{qualifier} while it is borrowed"
-                        self.current_location self.diagnostics self.ownership.report_loan_conflict
-                    fi
-                fi
+                before_arguments argument_place parameter_type self.report_argument_loan_conflict
             fi
             1 += index
         done
@@ -6398,16 +6331,7 @@ impl TypeChecker {
         fi
         if external then
             if function_opt std::Option::Some(function) is then
-                cleanup_origins origins.clone merge_origins = retained_sources
-                if retained_sources std::Option::Some(items) is then
-                    for origin in items.iter do
-                        if origin function self.is_return_origin_valid ! then
-                            self.current_location
-                            f"Stored borrow escapes local owner `{origin.place.format}` through `{name}`"
-                            common::ErrorKind::InvalidVariable self.diagnostics.record_error_string
-                        fi
-                    done
-                fi
+                function name cleanup_origins origins self.validate_stored_return_origins
             fi
             origins.clone = stored
             cleanup_origins.clone = stored_cleanup
@@ -9254,18 +9178,7 @@ impl TypeChecker {
                 if top_frame BranchFrame::BranchWhile is then
                     top_frame.into_while = while_ctx
                     true = found_while
-                    if self.path_continues then
-                        if while_value common::OpValue::WhileBreak is then
-                            while_ctx.before self.materialize_branch_results
-                            names op self.attach_owner_cleanups
-                            op while_ctx self.merge_loop_exit
-                        else
-                            while_ctx.before self.materialize_branch_results
-                            op while_ctx.before self.validate_loop_stack
-                            op names while_ctx.flow_before self.report_loop_flow_difference
-                            names op self.attach_owner_cleanups
-                        fi
-                    fi
+                    op names while_ctx self.check_loop_transfer
                     while_ctx BranchFrame::BranchWhile = top_frame
                 fi
                 frame_index top_frame self
@@ -9509,18 +9422,19 @@ pub fn trait_method_effects_match
 -> bool {
     actual expected bind_stack_effect_pattern = expected_match
     if generic_declaration then
-        if expected_match std::Option::Some(expected_bindings) is then
-            expected stack_effect_type_variables = expected_type_variables
-            for type_variable in expected_type_variables.iter do
-                if type_variable expected_bindings.get std::Option::Some(bound) is then
-                    if bound common::Type::TypeVar(_) is ! then
-                        false return
-                    fi
-                fi
-            done
-            true return
+        if expected_match std::Option::Some(expected_bindings) is else
+            false return
         fi
-        false return
+        expected stack_effect_type_variables = expected_type_variables
+        for type_variable in expected_type_variables.iter do
+            if type_variable expected_bindings.get std::Option::Some(bound) is else
+                continue
+            fi
+            if bound common::Type::TypeVar(_) is ! then
+                false return
+            fi
+        done
+        true return
     fi
     if expected_match.is_some then
         true return
@@ -9946,15 +9860,7 @@ impl TypeChecker {
                 .stack
                 .values
                 .get = value
-            if value.place std::Option::Some(place) is then
-                if place.fields.is_empty then
-                    if place.binding.as_str self.scope.lookup std::Option::Some(declared) is then
-                        if declared.is_borrow then
-                            declared.clone = actual
-                        fi
-                    fi
-                fi
-            fi
+            value self.resolve_parameter_value_type = actual
         else
             if actual.borrow_target std::Option::Some(target) is then
                 target.clone = actual
@@ -9966,15 +9872,8 @@ impl TypeChecker {
         fi
         if pattern.type_var_name std::Option::Some(type_variable) is then
             if type_variable.as_str effect.type_vars.has_str then
-                type_variable.as_str bindings.get_str = existing_option
-                if existing_option std::Option::Some(existing) is then
-                    existing.is_borrow = keep_binding
-                    if actual.borrow_target std::Option::Some(target) is then
-                        existing target.eq keep_binding || = keep_binding
-                    fi
-                    if keep_binding then
-                        bindings return
-                    fi
+                if actual type_variable.as_str bindings keeps_existing_type_binding then
+                    bindings return
                 fi
                 location bindings actual type_variable.as_str self.bind_concrete_type_variable return
             fi
@@ -10554,25 +10453,7 @@ impl TypeChecker {
                 continue
             fi
             if self.store return_type.has_borrow value.origins.is_some || then
-                if value.origins std::Option::Some(origins) is then
-                    for origin in origins.iter do
-                        origin.clone = checked_origin
-                        if function checked_origin is_exclusive_capture_reborrow then
-                            self.current_location
-                            f"Repeatable closure cannot return a borrow through exclusive capture `{origin.place.binding}`"
-                            common::ErrorKind::InvalidVariable self.diagnostics.record_error_string
-                        elif checked_origin function self.is_return_origin_valid ! then
-                            origin.place.format = place
-                            self.current_location f"Borrowed return escapes local owner `{place}`"
-                            common::ErrorKind::InvalidVariable self.diagnostics.record_error_string
-                        fi
-                    done
-                else
-                    if function self.generated_return_has_implicit_borrow_origin ! then
-                        self.current_location "Borrowed return has no live input origin"
-                        common::ErrorKind::InvalidVariable self.diagnostics.record_error
-                    fi
-                fi
+                function value self.validate_return_value_origins
             fi
             1 += index
         done
@@ -10597,34 +10478,36 @@ impl TypeChecker {
                 .values
                 .get
                 .clone = first_value
-            if first_declared.is_exclusive_borrow then
-                first_index 1 + = second_index
-                while
-                    second_index self
-                        .stack
-                        .values
-                        .length <
-                    second_index function
-                        .stack_effect
-                        .return_types
-                        .length < &&
-                do
-                    second_index function
-                        .stack_effect
-                        .return_types
-                        .get
-                        .clone = second_declared
-                    second_index self
-                        .stack
-                        .values
-                        .get
-                        .clone = second_value
-                    if second_declared.is_exclusive_borrow then
-                        second_value first_value self.report_overlapping_return_origins
-                    fi
-                    1 += second_index
-                done
+            if first_declared.is_exclusive_borrow ! then
+                1 += first_index
+                continue
             fi
+            first_index 1 + = second_index
+            while
+                second_index self
+                    .stack
+                    .values
+                    .length <
+                second_index function
+                    .stack_effect
+                    .return_types
+                    .length < &&
+            do
+                second_index function
+                    .stack_effect
+                    .return_types
+                    .get
+                    .clone = second_declared
+                second_index self
+                    .stack
+                    .values
+                    .get
+                    .clone = second_value
+                if second_declared.is_exclusive_borrow then
+                    second_value first_value self.report_overlapping_return_origins
+                fi
+                1 += second_index
+            done
             1 += first_index
         done
     }
@@ -11750,48 +11633,8 @@ impl TypeChecker {
                     function op bindings child_type pair.first self.collect_pattern_types
                 done
             }
-            common::PatternValue::Struct(struct_pattern) => {
-                if owner.is_unknown_placeholder ! owner.match_base struct_pattern.struct_name != && then
-                    op.location f"Cannot match struct `{struct_pattern.struct_name.as_str self.format_source_name}` on `{owner self.format_source_type}`" common::ErrorKind::TypeMismatch self.diagnostics.record_error_string
-                    return
-                fi
-                self.store struct_pattern.struct_name.as_str owner resolve_struct_pattern_field_types match
-                    std::Option::Some(types) => types
-                    std::Option::None => return
-                end = types
-                for field in struct_pattern.bindings.iter do
-                    f"{struct_pattern.struct_name}::{field.first}" = accessor
-                    if
-                        op
-                            .location
-                            .file
-                            .as_str accessor.as_str self.store.is_private_from
-                    then
-                        op.location "Cannot bind a private struct field outside its module" common::ErrorKind::InvalidScope self.diagnostics.record_error
-                    fi
-                    if field.first types.get std::Option::Some(typ) is then
-                        function typ self.type_is_duplicable typ.clone subject rules::pattern_binding_type = child_type
-                        function op bindings child_type field.second self.collect_pattern_types
-                    else
-                        op.location f"Unknown pattern field `{field.first}`" common::ErrorKind::UndefinedName self.diagnostics.record_error_string
-                    fi
-                done
-            }
-            common::PatternValue::Alternatives(alternatives) => {
-                false = seen_first
-                for alternative in alternatives.iter do
-                    std::Map[std::String common::Type]::new = current
-                    function op current subject alternative self.collect_pattern_types
-                    if seen_first ! then
-                        for binding in current.iter do
-                            binding.second.clone binding.first.clone bindings.set
-                        done
-                        true = seen_first
-                    elif current bindings have_same_pattern_bindings ! then
-                        op.location "Pattern alternatives must bind the same names with the same types and capabilities" common::ErrorKind::TypeMismatch self.diagnostics.record_error
-                    fi
-                done
-            }
+            common::PatternValue::Struct(struct_pattern) => function op bindings subject struct_pattern self.collect_struct_pattern_types
+            common::PatternValue::Alternatives(alternatives) => function op bindings subject alternatives self.collect_alternative_pattern_types
         end
     }
 
@@ -12003,17 +11846,7 @@ impl TypeChecker {
                 if guard_continues then
                     guard_checker.diagnostics op.location self.ownership
                     guard_checker.ownership.validate_guard_moves
-                    guard_checker.stack.get_types = guard_stack
-                    false = guard_ok
-                    if 1 guard_stack.length == then
-                        0 guard_stack.get.format = guard_type
-                        if "bool" guard_type.as_str == then
-                            true = guard_ok
-                        fi
-                    fi
-                    if guard_ok ! then
-                        op.location "Guard expression must leave a single `bool` on the stack" common::ErrorKind::TypeMismatch guard_checker.diagnostics.record_error
-                    fi
+                    op.location guard_checker.validate_match_guard_stack
                 fi
                 guard_ops guard_checker.ownership.attach_body_moves
                 if op.value common::OpValue::MatchArm(arm) is then
@@ -12272,14 +12105,7 @@ impl TypeChecker {
                     .values
                     .length ==
             then
-                self.within_param_cap = inferring_stack_effect
-                if function_opt std::Option::Some(function) is then
-                    if function.name.as_str "lambda__" str::starts_with ! then
-                        false = inferring_stack_effect
-                    fi
-                else
-                    false = inferring_stack_effect
-                fi
+                function_opt self.is_inferring_match_subject = inferring_stack_effect
                 if inferring_stack_effect ! then
                     op.location "`match` requires a subject value on the stack" common::ErrorKind::StackUnderflow self.diagnostics.record_error
                     true = self.underflow_reported_this_op
@@ -12305,16 +12131,7 @@ impl TypeChecker {
                     place.clone std::Option::Some = match_place
                 fi
                 match_subject self.finish_value_use
-                if match_subject.capability ValueCapability::Owned is ! then
-                    if match_type.is_borrow ! then
-                        if match_subject.capability ValueCapability::Shared is then
-                            common::SHARED_BORROW_TYPE
-                        else
-                            common::EXCLUSIVE_BORROW_TYPE
-                        fi
-                        match_type common::apply_borrow_type = match_type
-                    fi
-                fi
+                match_type match_subject resolve_match_subject_type = match_type
             fi
         fi
         match_type.clone std::Option::Some = op.type_hint
@@ -12617,38 +12434,7 @@ pub fn instantiate_default_trait_method
         fi
     fi
     if fn_base_opt.is_none then
-        # Infer trait type params from concrete method stack effects
-        std::Set[std::String]::new = type_param_set
-        for type_param in type_params.iter do
-            type_param.clone type_param_set.add
-        done
-        for infer_method in declared_methods.iter do
-            if infer_method.has_default_body ! then
-                store std::Option[common::Function]::None receiver infer_method.name.as_str
-                rules::resolve_method_semantics = infer_method_opt
-                std::Option[CheckedFunction]::None = infer_fn_opt
-                if infer_method_opt std::Option::Some(infer_semantics) is then
-                    false checks diagnostics store infer_semantics.function_name.as_str
-                    ensure_checked_function = infer_fn_opt
-                fi
-                if infer_fn_opt std::Option::Some(infer_fn) is then
-                    receiver infer_method.stack_effect common::resolve_trait_stack_effect = infer_trait_resolved
-                    0 = ret_index: u64
-                    while
-                        ret_index infer_trait_resolved.return_types.length < ret_index infer_fn
-                            .stack_effect
-                            .return_types
-                            .length < &&
-                    do
-                        type_param_set ret_index infer_fn
-                            .stack_effect
-                            .return_types
-                            .get ret_index infer_trait_resolved.return_types.get trait_subs bind_generic_params_standalone = trait_subs
-                        1 += ret_index
-                    done
-                fi
-            fi
-        done
+        trait_subs diagnostics store receiver type_params declared_methods checks.infer_default_trait_arguments = trait_subs
     fi
     trait_subs receiver default_method.stack_effect common::resolve_trait_stack_effect common::apply_type_subs_to_stack_effect = resolved_stack_effect
 
@@ -13274,17 +13060,7 @@ fn ensure_checked_function
                 common::ErrorKind::TypeMismatch diagnostics.record_error_string
                 std::Option[CheckedFunction]::None return
             fi
-            std::Option[std::String]::None = cycle_start
-            if status FunctionWork::Reserved is then
-                function_name.to_str std::Option::Some = cycle_start
-            elif function_name checks.recursive_groups.get_str std::Option::Some(group) is then
-                for active in checks.checking_functions.iter do
-                    if active group.has then
-                        active.clone std::Option::Some = cycle_start
-                        break
-                    fi
-                done
-            fi
+            status function_name checks.find_recursive_cycle_start = cycle_start
             if cycle_start std::Option::Some(start) is then
                 start.as_str checks.recursive_groups checks.recursive_functions checks.checking_functions mark_recursive_cycle
             fi
@@ -13354,71 +13130,7 @@ impl ActiveFunction {
         infer_parameters:bool
     -> CheckedOperations {
         self match
-            ActiveFunction { declaration: declaration source: source } => {
-                if declaration.name checks.recheck_inputs.has ! then
-                    FunctionCheckInput {
-                        declaration: declaration.clone
-                        source: source.clone
-                        argument_callables: argument_callables.clone
-                        active_calls: active_calls.clone
-                        infer_parameters: infer_parameters
-                    } declaration.name.clone checks.recheck_inputs.set
-                fi
-                declaration std::Option::Some = function_opt
-                body_builder::Builder::new = operations
-                infer_parameters checks active_calls argument_callables
-                error::Diagnostics::new = body_diagnostics
-                false body_diagnostics store function_opt operations source analyze_ops = checked
-                checks.checking_functions.pop drop
-                function_opt.unwrap = function
-                if
-                    function.name.as_str "lambda__" str::starts_with
-                    function
-                        .stack_effect
-                        .to_str
-                        .as_str "None -> None" == ||
-                then
-                    checked.inferred_effect.clone = function.stack_effect
-                fi
-                function.name.clone = name
-                if checked.is_valid then
-                    store function.stack_effect checked.return_origin_summaries format_borrow_sources
-                    = function.borrow_sources
-                fi
-                if name checks.recursive_functions.has then
-                    if function.borrow_sources.is_some then
-                        "Borrow sources: conservative (recursive call cycle)".to_str std::Option::Some
-                        = function.borrow_sources
-                    fi
-                fi
-                function checked_function_summary = signature
-                function store.set_function
-                if checked.has_pending_execution then
-                    signature FunctionWork::Provisional name.clone checks.functions.set
-                    true = checked.is_valid
-                else
-                    body_diagnostics name.clone checks.body_diagnostics.set
-                    if checked.is_valid then
-                        store operations.into_body.unwrap = body
-                        body signature CompletedFunction FunctionWork::Completed name.clone checks.functions.set
-                    else
-                        operations RejectedBody::Partial FunctionWork::Rejected name.clone checks.functions.set
-                    fi
-                fi
-                if checked.is_valid then
-                    checked.has_raw_storage checked.mutation_summaries.clone
-                    checked.return_origin_summaries.clone checked.return_callables.clone CallReturnSummary
-                    = summary
-                    if checks.settling_summaries then
-                        if name checks.return_summaries.get std::Option::Some(previous) is then
-                            previous summary TypeChecker::merge_call_return_summaries
-                        fi
-                    fi
-                    summary name checks.return_summaries.set
-                    checks.settle_return_callables
-                fi
-                checked
-            }
+            ActiveFunction { declaration: declaration source: source } => infer_parameters checks active_calls argument_callables store source declaration check_function_body
         end
     }
 }
@@ -13918,83 +13630,7 @@ impl TypeChecker {
         done
         std::Map[Origin ReturnOriginSummary]::new = mutations
         for mutation in symbolic.mutations.iter do
-            if mutation.first.mutable_payload ! then
-                continue
-            fi
-            layout mutation
-                .first
-                .place
-                .binding
-                .as_str effect self.find_call_argument
-            = destination_argument
-            std::Option[std::List[Origin]]::None = destinations
-            if destination_argument std::Option::Some(argument) is then
-                argument.type_value.clone = payload_type
-                if payload_type.borrow_target std::Option::Some(target) is then
-                    target.clone = payload_type
-                fi
-                if
-                    payload_type.has_unresolved_type_var payload_type.is_unknown_placeholder || self.store payload_type get_borrow_shape 0 != || !
-                then
-                    continue
-                fi
-                if
-                    mutation.first.kind OriginKind::Place is argument.capability ValueCapability::Exclusive is &&
-                then
-                    if argument.place self.ownership.canonical_storage std::Option::Some(place) is then
-                        true true OriginKind::Place place Origin destinations append_origin = destinations
-                    fi
-                fi
-            fi
-            false = deferred_captures
-            if mutation.first.kind OriginKind::CallableCaptures is then
-                layout mutation
-                    .first
-                    .place
-                    .binding
-                    .as_str effect self.find_call_argument
-                = callback_argument
-                if callback_argument std::Option::Some(callback) is then
-                    if callback self.callable_preserves_capture_loans then
-                        continue
-                    fi
-                    callback.callables.is_empty ! = deferred_captures
-                    for target in callback.callables.iter do
-                        if target.as_str CALLABLE_PARAMETER_PREFIX str::starts_with then
-                            CALLABLE_PARAMETER_PREFIX.length = prefix_length
-                            target.as_str prefix_length target.length prefix_length - str::substring
-                            = parameter_name
-                            true false OriginKind::CallableCaptures parameter_name.as_str Place::new Origin
-                            destinations append_origin = destinations
-                        else
-                            false = deferred_captures
-                        fi
-                    done
-                fi
-            fi
-            if deferred_captures ! then
-                mutation.first.clone = dependency
-                if dependency.kind OriginKind::CallableCaptures is then
-                    OriginKind::InputPayload = dependency.kind
-                fi
-                layout destinations dependency effect self.resolve_origin_dependency = destinations
-            fi
-            layout mutation.second.origins effect self.resolve_origin_dependencies = stored
-            layout mutation.second.cleanup_origins effect self.resolve_origin_dependencies = cleanup
-            if destinations std::Option::Some(items) is then
-                for destination in items.iter do
-                    if destination.kind OriginKind::Place is destination.exclusive ! && then
-                        continue
-                    fi
-                    stored.clone = merged
-                    cleanup.clone = merged_cleanup
-                    if destination mutations.get std::Option::Some(previous) is then
-                        previous.origins merged merge_origins = merged
-                        previous.cleanup_origins merged_cleanup merge_origins = merged_cleanup
-                    fi
-                    merged_cleanup merged ReturnOriginSummary destination.clone mutations.set
-                done
-            fi
+            mutations layout effect mutation.first mutation.second self.resolve_call_mutation
         done
         symbolic.has_raw_storage = has_raw_storage
         for parameter in effect.parameters.iter do
@@ -15810,58 +15446,22 @@ fn hides_callable_storage_borrow
 -> bool {
     if declared common::Type::Function(contract) is then
         if resolved common::Type::Function(actual) is then
-            for parameter in contract.parameters.iter do
-                if parameter.is_borrow ! then
-                    continue
-                fi
-                for
-                    pair in actual.return_types.iter contract
-                        .return_types
-                        .list_iter
-                        .zip
-                do
-                    store pair.second get_borrow_shape = actual_shape
-                    actual_shape EXCLUSIVE_BORROW_SHAPE CAPTURED_BORROW_SHAPE | & 0 !=
-                    parameter.is_exclusive_borrow && = exclusive
-                    if actual_shape 0 != store exclusive pair.first allows_storage_borrow ! && then
-                        true return
-                    fi
-                done
-            done
-            for
-                pair in actual.parameters.iter contract
-                    .parameters
-                    .list_iter
-                    .zip
-            do
-                if store pair.second pair.first hides_callable_storage_borrow then
-                    true return
-                fi
-            done
-            for
-                pair in actual.return_types.iter contract
-                    .return_types
-                    .list_iter
-                    .zip
-            do
-                if store pair.second pair.first hides_callable_storage_borrow then
-                    true return
-                fi
-            done
+            store actual contract does_function_hide_storage_borrow return
         fi
     elif declared common::Type::Generic(contract) is then
-        if resolved common::Type::Generic(actual) is then
-            for
-                pair in actual.params.iter contract
-                    .params
-                    .list_iter
-                    .zip
-            do
-                if store pair.second pair.first hides_callable_storage_borrow then
-                    true return
-                fi
-            done
+        if resolved common::Type::Generic(actual) is else
+            false return
         fi
+        for
+            pair in actual.params.iter contract
+                .params
+                .list_iter
+                .zip
+        do
+            if store pair.second pair.first hides_callable_storage_borrow then
+                true return
+            fi
+        done
     fi
     false
 }
@@ -15907,28 +15507,8 @@ fn trait_return_borrows_match
         fi
         index contract.return_types.get = declared
         returned.cleanup_origins returned.origins.clone merge_origins = origins
-        if origins std::Option::Some(items) is then
-            for origin in items.iter do
-                if origin.kind OriginKind::Place is ! then
-                    continue
-                fi
-                for
-                    pair in implementation.parameters.iter contract
-                        .parameters
-                        .list_iter
-                        .zip
-                do
-                    if
-                        pair
-                            .first
-                            .typ
-                            .is_borrow origin.place.binding pair.second.name == &&
-                        store origin.exclusive declared allows_storage_borrow ! &&
-                    then
-                        false return
-                    fi
-                done
-            done
+        if store implementation contract declared origins do_return_origins_match_contract ! then
+            false return
         fi
         1 += index
     done
@@ -16392,31 +15972,8 @@ fn resolve_pattern_payload_type
                 subject_type.clone std::Option::Some return
             fi
         }
-        common::PatternValue::Struct(struct_pattern) => {
-            store struct_pattern.struct_name.as_str subject_type resolve_struct_pattern_field_types match
-                std::Option::Some(types) => types
-                std::Option::None => std::Option[common::Type]::None return
-            end = types
-            for field in struct_pattern.bindings.iter do
-                if field.first types.get std::Option::Some(typ) is then
-                    if store typ name field.second resolve_pattern_payload_type std::Option::Some(found) is then
-                        found std::Option::Some return
-                    fi
-                fi
-            done
-        }
-        common::PatternValue::EnumVariant(variant) => {
-            store variant subject_type pattern::enum_payload_types = types
-            0 = index: u64
-            for child in variant.bindings.iter do
-                if index types.length < then
-                    if store index types.get name child resolve_pattern_payload_type std::Option::Some(found) is then
-                        found std::Option::Some return
-                    fi
-                fi
-                1 += index
-            done
-        }
+        common::PatternValue::Struct(struct_pattern) => store subject_type name struct_pattern resolve_struct_pattern_payload_type return
+        common::PatternValue::EnumVariant(variant) => store subject_type name variant resolve_enum_pattern_payload_type return
         common::PatternValue::Alternatives(alternatives) => {
             if alternatives.is_empty ! then
                 store subject_type name 0 alternatives.get resolve_pattern_payload_type return
@@ -16513,4 +16070,736 @@ impl SemanticChecks {
             FunctionWork::Completed declaration.name.clone self.functions.set
         fi
     }
+}
+
+fn does_mutable_target_contain_borrow
+    typ:$common::Type
+    target:$common::Type
+    store:$common::SymbolStore
+    visiting:mut$std::List[std::String]
+-> bool {
+    if typ.is_exclusive_borrow then
+        std::List[std::String]::new = shared_visiting
+        std::List[std::String]::new = exclusive_visiting
+        std::List[std::String]::new = captured_visiting
+        if
+            target.has_unresolved_type_var
+            shared_visiting store BorrowShape::Shared target type_contains_borrow ||
+            exclusive_visiting store BorrowShape::Exclusive target type_contains_borrow ||
+            captured_visiting store BorrowShape::Captured target type_contains_borrow ||
+        then
+            true return
+        fi
+    fi
+    visiting store BorrowShape::MutablePayload target type_contains_borrow return
+}
+
+fn do_struct_fields_contain_borrow
+    casa_struct:$common::CasaStruct
+    bindings:mut$std::Map[std::String common::Type]
+    shape:$BorrowShape
+    store:$common::SymbolStore
+    visiting:mut$std::List[std::String]
+-> bool {
+    for member in casa_struct.members.iter do
+        bindings member.typ.substitute = member_type
+        if visiting store shape member_type type_contains_borrow then
+            true return
+        fi
+    done
+    false
+}
+
+fn do_enum_payloads_contain_borrow
+    casa_enum:$common::CasaEnum
+    bindings:mut$std::Map[std::String common::Type]
+    shape:$BorrowShape
+    store:$common::SymbolStore
+    visiting:mut$std::List[std::String]
+-> bool {
+    for pair in casa_enum.variant_types.iter do
+        for payload_type in pair.second.iter do
+            bindings payload_type.substitute = resolved
+            if visiting store shape resolved type_contains_borrow then
+                true return
+            fi
+        done
+    done
+    false
+}
+
+impl SemanticChecks {
+    fn include_recursive_group
+        self:$SemanticChecks
+        function_name:$str
+        recursive:mut$std::Set[std::String]
+    -> bool {
+        false = changed
+        if function_name self.recursive_groups.get_str std::Option::Some(group) is then
+            for member in group.iter do
+                if member recursive.has ! then
+                    member.clone recursive.add
+                    true = changed
+                fi
+            done
+        fi
+        changed
+    }
+}
+
+impl TypeChecker {
+    fn is_shared_parameter_origin self:$TypeChecker origin:$Origin -> bool {
+        if origin.place.binding self.initialized_parameters.has ! then
+            false return
+        fi
+        if
+            origin
+                .place
+                .binding
+                .as_str self.scope.lookup std::Option::Some(typ) is
+        else
+            false return
+        fi
+        typ.is_shared_borrow
+    }
+}
+
+impl TypeChecker {
+    fn bind_parameter_type_variable
+        self:mut$TypeChecker
+        expected:$common::Type
+        actual:$common::Type
+        bindings:mut$std::Map[std::String common::Type]
+        effect:$common::StackEffect
+    {
+        if expected.type_var_name std::Option::Some(bind_name) is else
+            return
+        fi
+        if bind_name.as_str effect.type_vars.has_str then
+            actual bind_name.as_str bindings self.bind_type_var
+        fi
+    }
+}
+
+impl TypedValue {
+    fn collect_call_origins
+        self:$TypedValue
+        parameter_type:$common::Type
+        origins:std::Option[std::List[Origin]]
+        exclusive:bool
+        prefer_contained_origins:bool
+    -> std::Option[std::List[Origin]] {
+        if self.origins std::Option::Some(argument_origins) is then
+            for origin in argument_origins.iter do
+                if
+                    exclusive !
+                    origin.exclusive ||
+                    parameter_type.is_exclusive_borrow self.capability ValueCapability::Exclusive is && ||
+                then
+                    exclusive origin.with_capability = adjusted
+                    adjusted origins append_origin = origins
+                fi
+            done
+        fi
+        if
+            parameter_type.is_borrow
+            prefer_contained_origins ! self.origins.is_none || exclusive || &&
+        then
+            if self.place std::Option::Some(place) is then
+                if exclusive ! parameter_type.is_exclusive_borrow || then
+                    exclusive place origins add_origin = origins
+                fi
+            fi
+        fi
+        origins
+    }
+}
+
+impl TypeChecker {
+    fn report_argument_loan_conflict
+        self:mut$TypeChecker
+        parameter_type:$common::Type
+        argument_place:$std::Option[Place]
+        before_arguments:u64
+    {
+        if argument_place std::Option::Some(place) is then
+            if
+                parameter_type.is_exclusive_borrow before_arguments place
+                self.find_conflicting_loan std::Option::Some(conflict) is
+            then
+                if parameter_type.is_exclusive_borrow then " exclusively" else "" fi = qualifier
+                conflict f"Cannot borrow `{place.format}`{qualifier} while it is borrowed"
+                self.current_location self.diagnostics self.ownership.report_loan_conflict
+            fi
+        fi
+    }
+}
+
+impl TypeChecker {
+    fn validate_stored_return_origins
+        self:mut$TypeChecker
+        origins:$std::Option[std::List[Origin]]
+        cleanup_origins:$std::Option[std::List[Origin]]
+        name:$str
+        function:$common::Function
+    {
+        cleanup_origins origins.clone merge_origins = retained_sources
+        if retained_sources std::Option::Some(items) is else
+            return
+        fi
+        for origin in items.iter do
+            if origin function self.is_return_origin_valid ! then
+                self.current_location
+                f"Stored borrow escapes local owner `{origin.place.format}` through `{name}`"
+                common::ErrorKind::InvalidVariable self.diagnostics.record_error_string
+            fi
+        done
+    }
+}
+
+impl TypeChecker {
+    fn resolve_parameter_value_type self:$TypeChecker value:$TypedValue -> common::Type {
+        if value.place std::Option::Some(place) is else
+            value.type_value.clone return
+        fi
+        if place.fields.is_empty ! then
+            value.type_value.clone return
+        fi
+        if place.binding.as_str self.scope.lookup std::Option::Some(declared) is then
+            if declared.is_borrow then
+                declared.clone return
+            fi
+        fi
+        value.type_value.clone
+    }
+}
+
+fn keeps_existing_type_binding
+    bindings:$std::Map[std::String common::Type]
+    type_variable:$str
+    actual:$common::Type
+-> bool {
+    if type_variable bindings.get_str std::Option::Some(existing) is else
+        false return
+    fi
+    existing.is_borrow = keep_binding
+    if actual.borrow_target std::Option::Some(target) is then
+        existing target.eq keep_binding || = keep_binding
+    fi
+    keep_binding
+}
+
+impl TypeChecker {
+    fn validate_return_value_origins
+        self:mut$TypeChecker
+        value:$TypedValue
+        function:$common::Function
+    {
+        if value.origins std::Option::Some(origins) is then
+            for origin in origins.iter do
+                origin.clone = checked_origin
+                if function checked_origin is_exclusive_capture_reborrow then
+                    self.current_location
+                    f"Repeatable closure cannot return a borrow through exclusive capture `{origin.place.binding}`"
+                    common::ErrorKind::InvalidVariable self.diagnostics.record_error_string
+                elif checked_origin function self.is_return_origin_valid ! then
+                    origin.place.format = place
+                    self.current_location f"Borrowed return escapes local owner `{place}`"
+                    common::ErrorKind::InvalidVariable self.diagnostics.record_error_string
+                fi
+            done
+        else
+            if function self.generated_return_has_implicit_borrow_origin ! then
+                self.current_location "Borrowed return has no live input origin"
+                common::ErrorKind::InvalidVariable self.diagnostics.record_error
+            fi
+        fi
+    }
+}
+
+impl TypeChecker {
+    fn check_loop_transfer
+        self:mut$TypeChecker
+        while_ctx:mut$WhileContext
+        names:mut$std::List[std::String]
+        op:mut$common::Op
+    {
+        if self.path_continues then
+            if op.value common::OpValue::WhileBreak is then
+                while_ctx.before self.materialize_branch_results
+                names op self.attach_owner_cleanups
+                op while_ctx self.merge_loop_exit
+            else
+                while_ctx.before self.materialize_branch_results
+                op while_ctx.before self.validate_loop_stack
+                op names while_ctx.flow_before self.report_loop_flow_difference
+                names op self.attach_owner_cleanups
+            fi
+        fi
+    }
+}
+
+impl TypeChecker {
+    fn collect_struct_pattern_types
+        self:mut$TypeChecker
+        struct_pattern:$common::StructPattern
+        subject:$common::Type
+        bindings:mut$std::Map[std::String common::Type]
+        op:mut$common::Op
+        function:mut$std::Option[common::Function]
+    {
+        subject pattern::owned_type = owner
+        if owner.is_unknown_placeholder ! owner.match_base struct_pattern.struct_name != && then
+            op.location f"Cannot match struct `{struct_pattern.struct_name.as_str self.format_source_name}` on `{owner self.format_source_type}`" common::ErrorKind::TypeMismatch self.diagnostics.record_error_string
+            return
+        fi
+        self.store struct_pattern.struct_name.as_str owner resolve_struct_pattern_field_types match
+            std::Option::Some(types) => types
+            std::Option::None => return
+        end = types
+        for field in struct_pattern.bindings.iter do
+            f"{struct_pattern.struct_name}::{field.first}" = accessor
+            if
+                op
+                    .location
+                    .file
+                    .as_str accessor.as_str self.store.is_private_from
+            then
+                op.location "Cannot bind a private struct field outside its module" common::ErrorKind::InvalidScope self.diagnostics.record_error
+            fi
+            if field.first types.get std::Option::Some(typ) is then
+                function typ self.type_is_duplicable typ.clone subject rules::pattern_binding_type = child_type
+                function op bindings child_type field.second self.collect_pattern_types
+            else
+                op.location f"Unknown pattern field `{field.first}`" common::ErrorKind::UndefinedName self.diagnostics.record_error_string
+            fi
+        done
+    }
+}
+
+impl TypeChecker {
+    fn collect_alternative_pattern_types
+        self:mut$TypeChecker
+        alternatives:$std::List[common::PatternValue]
+        subject:$common::Type
+        bindings:mut$std::Map[std::String common::Type]
+        op:mut$common::Op
+        function:mut$std::Option[common::Function]
+    {
+        false = seen_first
+        for alternative in alternatives.iter do
+            std::Map[std::String common::Type]::new = current
+            function op current subject alternative self.collect_pattern_types
+            if seen_first ! then
+                for binding in current.iter do
+                    binding.second.clone binding.first.clone bindings.set
+                done
+                true = seen_first
+            elif current bindings have_same_pattern_bindings ! then
+                op.location "Pattern alternatives must bind the same names with the same types and capabilities" common::ErrorKind::TypeMismatch self.diagnostics.record_error
+            fi
+        done
+    }
+}
+
+impl TypeChecker {
+    fn validate_match_guard_stack self:mut$TypeChecker location:$common::Location {
+        self.stack.get_types = guard_stack
+        false = guard_ok
+        if 1 guard_stack.length == then
+            0 guard_stack.get.format = guard_type
+            if "bool" guard_type.as_str == then
+                true = guard_ok
+            fi
+        fi
+        if guard_ok ! then
+            location "Guard expression must leave a single `bool` on the stack" common::ErrorKind::TypeMismatch self.diagnostics.record_error
+        fi
+    }
+}
+
+impl TypeChecker {
+    fn is_inferring_match_subject
+        self:mut$TypeChecker
+        function_opt:$std::Option[common::Function]
+    -> bool {
+        if self.within_param_cap ! then
+            false return
+        fi
+        if function_opt std::Option::Some(function) is else
+            false return
+        fi
+        function.name.as_str "lambda__" str::starts_with
+    }
+}
+
+fn resolve_match_subject_type value:$TypedValue typ:common::Type -> common::Type {
+    if value.capability ValueCapability::Owned is ! typ.is_borrow ! && then
+        if value.capability ValueCapability::Shared is then
+            common::SHARED_BORROW_TYPE
+        else
+            common::EXCLUSIVE_BORROW_TYPE
+        fi
+        typ common::apply_borrow_type = typ
+    fi
+    typ
+}
+
+impl SemanticChecks {
+    fn infer_default_trait_arguments
+        self:mut$SemanticChecks
+        declared_methods:$std::List[common::TraitMethod]
+        type_params:$std::List[std::String]
+        receiver:$common::Type
+        store:mut$common::SymbolStore
+        diagnostics:mut$error::Diagnostics
+        trait_subs:std::Map[std::String common::Type]
+    -> std::Map[std::String common::Type] {
+        # Infer trait type params from concrete method stack effects
+        std::Set[std::String]::new = type_param_set
+        for type_param in type_params.iter do
+            type_param.clone type_param_set.add
+        done
+        for infer_method in declared_methods.iter do
+            if infer_method.has_default_body then
+                continue
+            fi
+            store std::Option[common::Function]::None receiver infer_method.name.as_str
+            rules::resolve_method_semantics = infer_method_opt
+            std::Option[CheckedFunction]::None = infer_fn_opt
+            if infer_method_opt std::Option::Some(infer_semantics) is then
+                false self diagnostics store infer_semantics.function_name.as_str
+                ensure_checked_function = infer_fn_opt
+            fi
+            if infer_fn_opt std::Option::Some(infer_fn) is else
+                continue
+            fi
+            receiver infer_method.stack_effect common::resolve_trait_stack_effect = infer_trait_resolved
+            0 = ret_index: u64
+            while
+                ret_index infer_trait_resolved.return_types.length < ret_index infer_fn
+                    .stack_effect
+                    .return_types
+                    .length < &&
+            do
+                type_param_set ret_index infer_fn
+                    .stack_effect
+                    .return_types
+                    .get ret_index infer_trait_resolved.return_types.get trait_subs bind_generic_params_standalone = trait_subs
+                1 += ret_index
+            done
+        done
+        trait_subs
+    }
+}
+
+impl SemanticChecks {
+    fn find_recursive_cycle_start
+        self:$SemanticChecks
+        function_name:$str
+        status:$FunctionWork
+    -> std::Option[std::String] {
+        std::Option[std::String]::None = cycle_start
+        if status FunctionWork::Reserved is then
+            function_name.to_str std::Option::Some = cycle_start
+        elif function_name self.recursive_groups.get_str std::Option::Some(group) is then
+            for active in self.checking_functions.iter do
+                if active group.has then
+                    active.clone std::Option::Some = cycle_start
+                    break
+                fi
+            done
+        fi
+        cycle_start
+    }
+}
+
+fn check_function_body
+    declaration:common::Function
+    source:source_body::SourceBody
+    store:mut$common::SymbolStore
+    argument_callables:$std::Map[std::String std::Set[std::String]]
+    active_calls:std::Set[std::String]
+    checks:mut$SemanticChecks
+    infer_parameters:bool
+-> CheckedOperations {
+    if declaration.name checks.recheck_inputs.has ! then
+        FunctionCheckInput {
+            declaration: declaration.clone
+            source: source.clone
+            argument_callables: argument_callables.clone
+            active_calls: active_calls.clone
+            infer_parameters: infer_parameters
+        } declaration.name.clone checks.recheck_inputs.set
+    fi
+    declaration std::Option::Some = function_opt
+    body_builder::Builder::new = operations
+    infer_parameters checks active_calls argument_callables
+    error::Diagnostics::new = body_diagnostics
+    false body_diagnostics store function_opt operations source analyze_ops = checked
+    checks.checking_functions.pop drop
+    function_opt.unwrap = function
+    if
+        function.name.as_str "lambda__" str::starts_with
+        function
+            .stack_effect
+            .to_str
+            .as_str "None -> None" == ||
+    then
+        checked.inferred_effect.clone = function.stack_effect
+    fi
+    function.name.clone = name
+    if checked.is_valid then
+        store function.stack_effect checked.return_origin_summaries format_borrow_sources
+        = function.borrow_sources
+    fi
+    if name checks.recursive_functions.has then
+        if function.borrow_sources.is_some then
+            "Borrow sources: conservative (recursive call cycle)".to_str std::Option::Some
+            = function.borrow_sources
+        fi
+    fi
+    function checked_function_summary = signature
+    function store.set_function
+    if checked.has_pending_execution then
+        signature FunctionWork::Provisional name.clone checks.functions.set
+        true = checked.is_valid
+    else
+        body_diagnostics name.clone checks.body_diagnostics.set
+        if checked.is_valid then
+            store operations.into_body.unwrap = body
+            body signature CompletedFunction FunctionWork::Completed name.clone checks.functions.set
+        else
+            operations RejectedBody::Partial FunctionWork::Rejected name.clone checks.functions.set
+        fi
+    fi
+    if checked.is_valid then
+        checked.has_raw_storage checked.mutation_summaries.clone
+        checked.return_origin_summaries.clone checked.return_callables.clone CallReturnSummary
+        = summary
+        if checks.settling_summaries then
+            if name checks.return_summaries.get std::Option::Some(previous) is then
+                previous summary TypeChecker::merge_call_return_summaries
+            fi
+        fi
+        summary name checks.return_summaries.set
+        checks.settle_return_callables
+    fi
+    checked
+}
+
+impl TypedValue {
+    fn append_callable_capture_destinations
+        self:$TypedValue
+        destinations:std::Option[std::List[Origin]]
+    -> bool std::Option[std::List[Origin]] {
+        self.callables.is_empty ! = deferred_captures
+        for target in self.callables.iter do
+            if target.as_str CALLABLE_PARAMETER_PREFIX str::starts_with then
+                CALLABLE_PARAMETER_PREFIX.length = prefix_length
+                target.as_str prefix_length target.length prefix_length - str::substring
+                = parameter_name
+                true false OriginKind::CallableCaptures parameter_name.as_str Place::new Origin
+                destinations append_origin = destinations
+            else
+                false = deferred_captures
+            fi
+        done
+        deferred_captures destinations
+    }
+}
+
+impl TypeChecker {
+    fn resolve_call_mutation
+        self:mut$TypeChecker
+        stored_summary:$ReturnOriginSummary
+        mutation_origin:$Origin
+        effect:$common::StackEffect
+        layout:$CallStackLayout
+        mutations:mut$std::Map[Origin ReturnOriginSummary]
+    {
+        if mutation_origin.mutable_payload ! then
+            return
+        fi
+        layout mutation_origin
+            .place
+            .binding
+            .as_str effect self.find_call_argument
+        = destination_argument
+        std::Option[std::List[Origin]]::None = destinations
+        if destination_argument std::Option::Some(argument) is then
+            argument.type_value.clone = payload_type
+            if payload_type.borrow_target std::Option::Some(target) is then
+                target.clone = payload_type
+            fi
+            if
+                payload_type.has_unresolved_type_var payload_type.is_unknown_placeholder || self.store payload_type get_borrow_shape 0 != || !
+            then
+                return
+            fi
+            if
+                mutation_origin.kind OriginKind::Place is argument.capability ValueCapability::Exclusive is &&
+            then
+                if argument.place self.ownership.canonical_storage std::Option::Some(place) is then
+                    true true OriginKind::Place place Origin destinations append_origin = destinations
+                fi
+            fi
+        fi
+        false = deferred_captures
+        if mutation_origin.kind OriginKind::CallableCaptures is then
+            layout mutation_origin
+                .place
+                .binding
+                .as_str effect self.find_call_argument
+            = callback_argument
+            if callback_argument std::Option::Some(callback) is then
+                if callback self.callable_preserves_capture_loans then
+                    return
+                fi
+                destinations callback.append_callable_capture_destinations = destinations = deferred_captures
+            fi
+        fi
+        if deferred_captures ! then
+            mutation_origin.clone = dependency
+            if dependency.kind OriginKind::CallableCaptures is then
+                OriginKind::InputPayload = dependency.kind
+            fi
+            layout destinations dependency effect self.resolve_origin_dependency = destinations
+        fi
+        layout stored_summary.origins effect self.resolve_origin_dependencies = stored
+        layout stored_summary.cleanup_origins effect self.resolve_origin_dependencies = cleanup
+        if destinations std::Option::Some(items) is then
+            for destination in items.iter do
+                if destination.kind OriginKind::Place is destination.exclusive ! && then
+                    continue
+                fi
+                stored.clone = merged
+                cleanup.clone = merged_cleanup
+                if destination mutations.get std::Option::Some(previous) is then
+                    previous.origins merged merge_origins = merged
+                    previous.cleanup_origins merged_cleanup merge_origins = merged_cleanup
+                fi
+                merged_cleanup merged ReturnOriginSummary destination.clone mutations.set
+            done
+        fi
+    }
+}
+
+fn does_function_hide_storage_borrow
+    contract:$common::FunctionType
+    actual:$common::FunctionType
+    store:mut$common::SymbolStore
+-> bool {
+    for parameter in contract.parameters.iter do
+        if parameter.is_borrow ! then
+            continue
+        fi
+        for
+            pair in actual.return_types.iter contract
+                .return_types
+                .list_iter
+                .zip
+        do
+            store pair.second get_borrow_shape = actual_shape
+            actual_shape EXCLUSIVE_BORROW_SHAPE CAPTURED_BORROW_SHAPE | & 0 !=
+            parameter.is_exclusive_borrow && = exclusive
+            if actual_shape 0 != store exclusive pair.first allows_storage_borrow ! && then
+                true return
+            fi
+        done
+    done
+    for
+        pair in actual.parameters.iter contract
+            .parameters
+            .list_iter
+            .zip
+    do
+        if store pair.second pair.first hides_callable_storage_borrow then
+            true return
+        fi
+    done
+    for
+        pair in actual.return_types.iter contract
+            .return_types
+            .list_iter
+            .zip
+    do
+        if store pair.second pair.first hides_callable_storage_borrow then
+            true return
+        fi
+    done
+    false
+}
+
+fn do_return_origins_match_contract
+    origins:$std::Option[std::List[Origin]]
+    declared:$common::Type
+    contract:$common::StackEffect
+    implementation:$common::StackEffect
+    store:mut$common::SymbolStore
+-> bool {
+    if origins std::Option::Some(items) is else
+        true return
+    fi
+    for origin in items.iter do
+        if origin.kind OriginKind::Place is ! then
+            continue
+        fi
+        for
+            pair in implementation.parameters.iter contract
+                .parameters
+                .list_iter
+                .zip
+        do
+            if
+                pair
+                    .first
+                    .typ
+                    .is_borrow origin.place.binding pair.second.name == &&
+                store origin.exclusive declared allows_storage_borrow ! &&
+            then
+                false return
+            fi
+        done
+    done
+    true
+}
+
+fn resolve_struct_pattern_payload_type
+    struct_pattern:$common::StructPattern
+    name:$str
+    subject_type:$common::Type
+    store:$common::SymbolStore
+-> std::Option[common::Type] {
+    store struct_pattern.struct_name.as_str subject_type resolve_struct_pattern_field_types match
+        std::Option::Some(types) => types
+        std::Option::None => std::Option[common::Type]::None return
+    end = types
+    for field in struct_pattern.bindings.iter do
+        if field.first types.get std::Option::Some(typ) is then
+            if store typ name field.second resolve_pattern_payload_type std::Option::Some(found) is then
+                found std::Option::Some return
+            fi
+        fi
+    done
+    std::Option[common::Type]::None
+}
+
+fn resolve_enum_pattern_payload_type
+    variant:$common::EnumVariant
+    name:$str
+    subject_type:$common::Type
+    store:$common::SymbolStore
+-> std::Option[common::Type] {
+    store variant subject_type pattern::enum_payload_types = types
+    0 = index: u64
+    for child in variant.bindings.iter do
+        if index types.length < then
+            if store index types.get name child resolve_pattern_payload_type std::Option::Some(found) is then
+                found std::Option::Some return
+            fi
+        fi
+        1 += index
+    done
+    std::Option[common::Type]::None
 }
