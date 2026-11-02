@@ -80,6 +80,11 @@ impl ValueOrigins {
             cleanup: std::Option[std::List[Origin]]::None
         }
     }
+
+    fn merge self:mut$ValueOrigins other:$ValueOrigins {
+        other.live self.live.clone merge_origins = self.live
+        other.cleanup self.cleanup.clone merge_origins = self.cleanup
+    }
 }
 const CALLABLE_PARAMETER_PREFIX "parameter "
 const CALLABLE_RETURN_PREFIX "return "
@@ -115,8 +120,7 @@ impl CallReturnSummary {
 struct ReturnOriginSources {
     shared:                $std::Option[std::List[Origin]]
     exclusive:             $std::Option[std::List[Origin]]
-    callable:              $std::Option[std::List[Origin]]
-    callable_cleanup:      $std::Option[std::List[Origin]]
+    callable:              $ValueOrigins
     type_variables:        $std::Map[std::String std::List[Origin]]
     type_variable_cleanup: $std::Map[std::String std::List[Origin]]
 }
@@ -865,14 +869,13 @@ fn does_cleanup_observe_borrow
 
 fn resolve_cleanup_origins
     typ:$common::Type
-    origins:$std::Option[std::List[Origin]]
-    nested_origins:std::Option[std::List[Origin]]
+    origins:ValueOrigins
     store:$common::SymbolStore
--> std::Option[std::List[Origin]] {
+-> ValueOrigins {
     if store typ common::find_drop_function_name.is_some then
-        origins.clone return
+        origins.live.clone = origins.cleanup
     fi
-    nested_origins
+    origins
 }
 
 pub fn method_receiver_type effect:$common::StackEffect -> std::Option[common::Type] {
@@ -1013,18 +1016,19 @@ fn loan_spans_equal left:$LoanSpan right:$LoanSpan -> bool {
 impl TypedValue {
     fn apply_return_origins
         self:mut$TypedValue
-        origins:std::Option[std::List[Origin]]
-        cleanup_origins:std::Option[std::List[Origin]]
+        origins:ValueOrigins
         cleanup_mode:$ReturnCleanupMode
     {
-        origins.clone = self.origins.live
         cleanup_mode match
-            ReturnCleanupMode::NoCleanup => {}
+            ReturnCleanupMode::NoCleanup => {
+                origins.live.clone = self.origins.live
+            }
             ReturnCleanupMode::Exact => {
-                cleanup_origins = self.origins.cleanup
+                origins = self.origins
             }
             ReturnCleanupMode::AllOrigins => {
-                origins = self.origins.cleanup
+                origins.live.clone = self.origins.live
+                origins.live.clone = self.origins.cleanup
             }
         end
     }
@@ -1388,14 +1392,7 @@ impl BindingLoans {
         if other.capability ValueCapability::Owned is ! then
             other.capability = self.capability
         fi
-        other.origins.live self
-            .origins
-            .live
-            .clone merge_origins = self.origins.live
-        other.origins.cleanup self
-            .origins
-            .cleanup
-            .clone merge_origins = self.origins.cleanup
+        other.origins self.origins.merge
     }
 }
 
@@ -1935,22 +1932,16 @@ impl OwnershipChecker {
         self:mut$OwnershipChecker
         current_location:$common::Location
         name:$str
-        origins:mut$std::Option[std::List[Origin]]
-        cleanup_origins:mut$std::Option[std::List[Origin]]
+        origins:ValueOrigins
         capability:$ValueCapability
         storage:$std::Option[Place]
     {
-        if origins.is_some cleanup_origins.is_some || then
+        if origins.live.is_some origins.cleanup.is_some || then
             std::Option[common::Location]::None = location
-            if origins.is_some then
+            if origins.live.is_some then
                 current_location.clone std::Option::Some = location
             fi
-            storage.clone location
-            ValueOrigins {
-                live: origins.clone
-                cleanup: cleanup_origins.clone
-            }
-            capability copy BindingLoans
+            storage.clone location origins capability copy BindingLoans
             name.to_str self.binding_loans.set
         elif name self.binding_loans.has_str then
             name self.binding_loans.delete_str
@@ -3784,7 +3775,7 @@ impl TypeChecker {
             if visiting self.store typ does_cleanup_observe_borrow then
                 origins cleanup_origins merge_origins = cleanup_origins
             fi
-            std::Option[Place]::None typ.capability cleanup_origins origins name.as_str self.current_location self.ownership.record_binding_origins
+            std::Option[Place]::None typ.capability ValueOrigins { live: origins cleanup: cleanup_origins } name.as_str self.current_location self.ownership.record_binding_origins
         done
     }
 
@@ -5170,12 +5161,7 @@ impl TypeChecker {
         fi
     }
 
-    fn push_value_origins
-        self:mut$TypeChecker
-        typ:$common::Type
-        origins:std::Option[std::List[Origin]]
-        cleanup_origins:std::Option[std::List[Origin]]
-    {
+    fn push_value_origins self:mut$TypeChecker typ:$common::Type origins:ValueOrigins {
         typ self.stack_push_type
         self
             .stack
@@ -5185,8 +5171,7 @@ impl TypeChecker {
             .values
             .get_mut
             .unwrap = value
-        origins = value.origins.live
-        cleanup_origins = value.origins.cleanup
+        origins = value.origins
     }
 
     fn collect_call_origins
@@ -5281,7 +5266,7 @@ impl TypeChecker {
         self:$TypeChecker
         effect:$common::StackEffect
         bindings:$std::Map[std::String common::Type]
-    -> std::Option[std::List[Origin]] std::Option[std::List[Origin]] {
+    -> ValueOrigins {
         std::Option[std::List[Origin]]::None = origins
         std::Option[std::List[Origin]]::None = cleanup_origins
         self
@@ -5315,7 +5300,7 @@ impl TypeChecker {
             fi
             1 += index
         done
-        origins cleanup_origins
+        ValueOrigins { live: origins cleanup: cleanup_origins }
     }
 
     fn check_call_borrow_pair
@@ -6285,24 +6270,22 @@ impl TypeChecker {
     fn classify_type_variable_return_origins
         self:mut$TypeChecker
         resolved_return:$common::Type
-        origins:std::Option[std::List[Origin]]
-        cleanup_origins:std::Option[std::List[Origin]]
-    -> std::Option[std::List[Origin]] std::Option[std::List[Origin]] {
+        origins:ValueOrigins
+    -> ValueOrigins {
         if
             resolved_return.has_unresolved_type_var
             self.store resolved_return get_borrow_shape CAPTURED_BORROW_SHAPE & 0 != ||
         then
-            origins cleanup_origins return
+            origins return
         fi
         if self.store resolved_return.has_borrow ! then
-            std::Option[std::List[Origin]]::None
-            std::Option[std::List[Origin]]::None return
+            ValueOrigins::new return
         fi
         std::List[std::String]::new = visiting
         if visiting self.store resolved_return does_cleanup_observe_borrow ! then
-            std::Option[std::List[Origin]]::None = cleanup_origins
+            std::Option[std::List[Origin]]::None = origins.cleanup
         fi
-        origins cleanup_origins
+        origins
     }
 
     fn select_generic_return_origins
@@ -6310,7 +6293,7 @@ impl TypeChecker {
         sources:$ReturnOriginSources
         resolved_return:$common::Type
         return_type_variable:$std::Option[std::String]
-    -> std::Option[std::List[Origin]] std::Option[std::List[Origin]] ReturnCleanupMode {
+    -> ValueOrigins ReturnCleanupMode {
         if return_type_variable.clone std::Option::Some(type_variable) is then
             if
                 type_variable.as_str sources.type_variables.has_str
@@ -6319,16 +6302,15 @@ impl TypeChecker {
                 type_variable.as_str sources.type_variables clone_nonempty_origins = origins
                 type_variable.as_str sources.type_variable_cleanup clone_nonempty_origins
                 = cleanup_origins
-                cleanup_origins origins resolved_return self.classify_type_variable_return_origins
-                = cleanup_origins = origins
-                origins cleanup_origins ReturnCleanupMode::Exact return
+                ValueOrigins { live: origins cleanup: cleanup_origins } resolved_return self.classify_type_variable_return_origins
+                ReturnCleanupMode::Exact return
             fi
         fi
 
         # Recursive calls have no saved summary yet. Keep all input origins for
         # callable results, including function types with symbolic return parameters.
         if self.store resolved_return get_borrow_shape CAPTURED_BORROW_SHAPE & 0 != then
-            sources.callable.clone sources.callable_cleanup.clone ReturnCleanupMode::Exact return
+            sources.callable.clone ReturnCleanupMode::Exact return
         fi
 
         if resolved_return.has_unresolved_type_var then
@@ -6353,7 +6335,7 @@ impl TypeChecker {
             if visiting self.store resolved_return does_cleanup_observe_borrow then
                 origins cleanup_origins merge_origins = cleanup_origins
             fi
-            origins cleanup_origins ReturnCleanupMode::Exact return
+            ValueOrigins { live: origins cleanup: cleanup_origins } ReturnCleanupMode::Exact return
         fi
 
         std::Option[std::List[Origin]]::None = origins
@@ -6365,9 +6347,9 @@ impl TypeChecker {
         fi
         std::List[std::String]::new = visiting
         if visiting self.store resolved_return does_cleanup_observe_borrow then
-            origins std::Option[std::List[Origin]]::None ReturnCleanupMode::AllOrigins return
+            ValueOrigins { live: origins cleanup: std::Option[std::List[Origin]]::None } ReturnCleanupMode::AllOrigins return
         fi
-        origins std::Option[std::List[Origin]]::None ReturnCleanupMode::NoCleanup
+        ValueOrigins { live: origins cleanup: std::Option[std::List[Origin]]::None } ReturnCleanupMode::NoCleanup
     }
 
     # Abstract calls and generated setters can retain other input borrows.
@@ -6377,11 +6359,10 @@ impl TypeChecker {
         effect:$common::StackEffect
         bindings:$std::Map[std::String common::Type]
         destination:u64
-        extra_origins:$std::Option[std::List[Origin]]
-        extra_cleanup:$std::Option[std::List[Origin]]
-    -> std::Option[std::List[Origin]] std::Option[std::List[Origin]] {
-        extra_origins.clone = origins
-        extra_cleanup.clone = cleanup_origins
+        extra:$ValueOrigins
+    -> ValueOrigins {
+        extra.live.clone = origins
+        extra.cleanup.clone = cleanup_origins
         self
             .stack
             .values
@@ -6404,7 +6385,7 @@ impl TypeChecker {
             parameter_type value origins self.ownership.merge_destination_origins = origins
             value.origins.cleanup cleanup_origins merge_origins = cleanup_origins
         done
-        origins cleanup_origins
+        ValueOrigins { live: origins cleanup: cleanup_origins }
     }
 
     # Callable input loans end with the invocation unless returned or stored
@@ -6412,15 +6393,14 @@ impl TypeChecker {
     fn check_capture_store
         self:mut$TypeChecker
         destination:$str
-        origins:$std::Option[std::List[Origin]]
-        cleanup_origins:$std::Option[std::List[Origin]]
+        origins:$ValueOrigins
         function_opt:$std::Option[common::Function]
     {
         if function_opt std::Option::Some(function) is then
             if destination function.captures common::variable_list_contains ! then
                 return
             fi
-            cleanup_origins origins.clone merge_origins = retained
+            origins.cleanup origins.live.clone merge_origins = retained
             if retained std::Option::Some(items) is then
                 for origin in items.iter do
                     if origin function self.is_return_origin_valid ! then
@@ -6445,12 +6425,7 @@ impl TypeChecker {
 
     # A pending stack read and a borrowed alias still access the mutated storage.
     # Preserve their new payload loans before a later move or return copies them.
-    fn retain_live_storage_origins
-        self:mut$TypeChecker
-        storage:$Place
-        origins:$std::Option[std::List[Origin]]
-        cleanup_origins:$std::Option[std::List[Origin]]
-    {
+    fn retain_live_storage_origins self:mut$TypeChecker storage:$Place origins:$ValueOrigins {
         std::List[std::String]::new = aliases
         for
             entry in self
@@ -6470,7 +6445,7 @@ impl TypeChecker {
                 .binding_loans
                 .get_mut
                 .unwrap = alias
-            origins alias
+            origins.live alias
                 .origins
                 .live
                 .clone merge_origins = alias.origins.live
@@ -6498,32 +6473,23 @@ impl TypeChecker {
                 continue
             fi
             value.type_value.clone = typ
-            cleanup_origins.clone origins.clone typ self.classify_type_variable_return_origins
-            = stored_cleanup = stored
+            origins.clone typ self.classify_type_variable_return_origins = stored
             index self
                 .stack
                 .values
                 .get_mut
                 .unwrap = pending
-            stored pending
-                .origins
-                .live
-                .clone merge_origins = pending.origins.live
-            stored_cleanup pending
-                .origins
-                .cleanup
-                .clone merge_origins = pending.origins.cleanup
+            stored pending.origins.merge
         done
     }
 
     fn retain_stored_origins
         self:mut$TypeChecker
         destination:$Origin
-        origins:$std::Option[std::List[Origin]]
-        cleanup_origins:$std::Option[std::List[Origin]]
+        origins:$ValueOrigins
         function_opt:mut$std::Option[common::Function]
     {
-        if origins.is_none cleanup_origins.is_none && destination.mutable_payload ! || then
+        if origins.live.is_none origins.cleanup.is_none && destination.mutable_payload ! || then
             return
         fi
         destination
@@ -6553,7 +6519,7 @@ impl TypeChecker {
                 fi
             fi
         fi
-        function_opt cleanup_origins origins name self.check_capture_store
+        function_opt origins name self.check_capture_store
         function_opt name is_function_parameter = external
         if function_opt std::Option::Some(function) is then
             name function.captures common::variable_list_contains external || = external
@@ -6563,22 +6529,16 @@ impl TypeChecker {
         fi
         if external then
             if function_opt std::Option::Some(function) is then
-                function name cleanup_origins origins self.validate_stored_return_origins
+                function name origins self.validate_stored_return_origins
             fi
             origins.clone = stored
-            cleanup_origins.clone = stored_cleanup
             if destination self.mutation_summaries.get std::Option::Some(previous) is then
-                previous.live stored merge_origins = stored
-                previous.cleanup stored_cleanup merge_origins = stored_cleanup
+                previous stored.merge
             fi
-            ValueOrigins {
-                live: stored
-                cleanup: stored_cleanup
-            }
-            destination.clone self.mutation_summaries.set
+            stored destination.clone self.mutation_summaries.set
         fi
-        origins.clone = retained
-        cleanup_origins.clone = retained_cleanup
+        origins.live.clone = retained
+        origins.cleanup.clone = retained_cleanup
         typ.capability = capability
         std::Option[Place]::None = storage
         if name self.ownership.find_binding_loans std::Option::Some(previous) is then
@@ -6591,24 +6551,24 @@ impl TypeChecker {
         if typ.is_borrow then
             std::Option[std::List[Origin]]::None = retained_cleanup
         elif typ.has_unresolved_type_var visiting self.store typ does_cleanup_observe_borrow || then
-            origins retained_cleanup merge_origins = retained_cleanup
+            origins.live retained_cleanup merge_origins = retained_cleanup
         fi
-        storage capability retained_cleanup retained name self.current_location
+        storage capability ValueOrigins { live: retained cleanup: retained_cleanup.clone } name self.current_location
         self.ownership.record_binding_origins
-        retained_cleanup origins destination.place self.retain_live_storage_origins
+        ValueOrigins { live: origins.live.clone cleanup: retained_cleanup } destination.place
+        self.retain_live_storage_origins
     }
 
     fn retain_mutable_argument_origins
         self:mut$TypeChecker
         value:$TypedValue
-        origins:$std::Option[std::List[Origin]]
-        cleanup_origins:$std::Option[std::List[Origin]]
+        origins:$ValueOrigins
         function_opt:mut$std::Option[common::Function]
     {
         if value needs_storage_origin value.capability ValueCapability::Exclusive is || then
             if value.place self.ownership.canonical_storage std::Option::Some(place) is then
                 true true OriginKind::Place place.clone Origin = destination
-                function_opt cleanup_origins origins destination self.retain_stored_origins
+                function_opt origins destination self.retain_stored_origins
             fi
         fi
         if value.origins.live std::Option::Some(destinations) is then
@@ -6619,7 +6579,7 @@ impl TypeChecker {
                 if destination.kind OriginKind::InputCleanup is then
                     continue
                 fi
-                function_opt cleanup_origins origins destination self.retain_stored_origins
+                function_opt origins destination self.retain_stored_origins
             done
         fi
     }
@@ -6676,28 +6636,28 @@ impl TypeChecker {
             return
         fi
         value.place self.ownership.canonical_storage = storage
-        storage value.origins.live callable_capture_origins = captured_origins
-        storage value.origins.cleanup callable_capture_origins = captured_cleanup
+        ValueOrigins {
+            live: storage value.origins.live callable_capture_origins
+            cleanup: storage value.origins.cleanup callable_capture_origins
+        } = captured
         if value.place std::Option::Some(place) is then
             if place.fields.is_empty function_opt place.binding.as_str is_function_parameter && then
                 true false OriginKind::CallableCaptures place.clone Origin = destination
-                function_opt captured_cleanup captured_origins destination self.retain_stored_origins
+                function_opt captured destination self.retain_stored_origins
                 return
             fi
         fi
         value.clone = captured_value
-        captured_origins.clone = captured_value.origins.live
+        captured.live.clone = captured_value.origins.live
         std::Option[Place]::None = captured_value.place
-        function_opt captured_cleanup captured_origins captured_value
-        self.retain_mutable_argument_origins
+        function_opt captured captured_value self.retain_mutable_argument_origins
     }
 
     fn retain_mutable_call_origins
         self:mut$TypeChecker
         effect:$common::StackEffect
         bindings:$std::Map[std::String common::Type]
-        extra_origins:$std::Option[std::List[Origin]]
-        extra_cleanup:$std::Option[std::List[Origin]]
+        extra:$ValueOrigins
         function_opt:mut$std::Option[common::Function]
     {
         self
@@ -6721,9 +6681,8 @@ impl TypeChecker {
             if target.has_unresolved_type_var self.store target get_borrow_shape 0 != || ! then
                 continue
             fi
-            extra_cleanup extra_origins index bindings effect self.collect_stored_call_origins
-            = cleanup_origins = origins
-            if origins.is_none cleanup_origins.is_none && then
+            extra index bindings effect self.collect_stored_call_origins = origins
+            if origins.live.is_none origins.cleanup.is_none && then
                 continue
             fi
             depth 1 - index - self
@@ -6732,7 +6691,7 @@ impl TypeChecker {
                 .get
                 .unwrap
                 .clone = value
-            function_opt cleanup_origins origins value self.retain_mutable_argument_origins
+            function_opt origins value self.retain_mutable_argument_origins
         done
     }
 
@@ -6800,8 +6759,7 @@ impl TypeChecker {
         done
         std::Option[std::List[Origin]]::None = shared_origins
         std::Option[std::List[Origin]]::None = exclusive_origins
-        std::Option[std::List[Origin]]::None = callable_origins
-        std::Option[std::List[Origin]]::None = callable_cleanup_origins
+        ValueOrigins::new = callable_origins
         std::Map[std::String std::List[Origin]]::new = type_variable_origins
         std::Map[std::String std::List[Origin]]::new = type_variable_cleanup_origins
         0 effect.type_vars.length !=
@@ -6850,18 +6808,16 @@ impl TypeChecker {
             = type_variable_cleanup_origins = type_variable_origins
         fi
         if returns_callable then
-            bindings effect self.collect_argument_origins
-            = callable_cleanup_origins = callable_origins
+            bindings effect self.collect_argument_origins = callable_origins
         fi
         ReturnOriginSources {
             shared: shared_origins
             exclusive: exclusive_origins
             callable: callable_origins
-            callable_cleanup: callable_cleanup_origins
             type_variables: type_variable_origins
             type_variable_cleanup: type_variable_cleanup_origins
         } = return_origin_sources
-        std::Option[std::List[Origin]]::None = no_extra_origins
+        ValueOrigins::new = no_extra_origins
         false = recursive_call
         if
             name self
@@ -6877,7 +6833,7 @@ impl TypeChecker {
                 .return_summaries
                 .has_str ! recursive_call ! && name "exec" != &&
         then
-            function_opt no_extra_origins no_extra_origins bindings effect self.retain_mutable_call_origins
+            function_opt no_extra_origins bindings effect self.retain_mutable_call_origins
         fi
         # Simple case: no type or constant parameters
         if has_generic_parameters ! then
@@ -6892,14 +6848,13 @@ impl TypeChecker {
             ExpectationContext::None = self.current_expect_ctx
             for return_type in effect.return_types.iter do
                 if self.store return_type get_borrow_shape CAPTURED_BORROW_SHAPE & 0 != then
-                    callable_cleanup_origins.clone callable_origins.clone return_type
-                    self.push_value_origins
+                    callable_origins.clone return_type self.push_value_origins
                 elif return_type.has_unresolved_type_var then
                     return_type self.stack_push_type
                     return_type.type_var_name = return_type_variable
                     return_type_variable return_type return_origin_sources
                     self.select_generic_return_origins
-                    = cleanup_mode = cleanup_origins = origins
+                    = cleanup_mode = origins
                     self
                         .stack
                         .values
@@ -6908,7 +6863,7 @@ impl TypeChecker {
                         .values
                         .get_mut
                         .unwrap = value
-                    cleanup_mode cleanup_origins origins value.apply_return_origins
+                    cleanup_mode origins value.apply_return_origins
                 elif self.store return_type.has_borrow then
                     std::Option[std::List[Origin]]::None = origins
                     if self.store return_type.has_shared_borrow then
@@ -6985,7 +6940,7 @@ impl TypeChecker {
             then
                 return_type_variable resolved_return return_origin_sources
                 self.select_generic_return_origins
-                = cleanup_mode = cleanup_origins = origins
+                = cleanup_mode = origins
                 self
                     .stack
                     .values
@@ -6994,7 +6949,7 @@ impl TypeChecker {
                     .values
                     .get_mut
                     .unwrap = value
-                cleanup_mode cleanup_origins origins value.apply_return_origins
+                cleanup_mode origins value.apply_return_origins
             fi
         done
         function_opt shared_origins receiver_capability projected_place field
@@ -7751,7 +7706,7 @@ impl TypeChecker {
         fi
         for destination in destinations.iter do
             true true OriginKind::Place destination.clone Origin = storage
-            function_opt value.origins.cleanup value.origins.live storage self.retain_stored_origins
+            function_opt value.origins storage self.retain_stored_origins
         done
     }
 
@@ -7908,10 +7863,9 @@ impl TypeChecker {
                         origins return_type self.stack_push_origins
                     }
                     common::OpValue::PtrRead | common::OpValue::PtrFromRaw => {
-                        function_opt self.raw_value_input_origins = cleanup_origins = origins
-                        cleanup_origins origins return_type self.classify_type_variable_return_origins
-                        = cleanup_origins = origins
-                        cleanup_origins origins return_type self.push_value_origins
+                        function_opt self.raw_value_input_origins = origins
+                        origins return_type self.classify_type_variable_return_origins = origins
+                        origins return_type self.push_value_origins
                     }
                     _ => return_type self.stack_push_type
                 end
@@ -8183,6 +8137,19 @@ impl TypeChecker {
             dependency std::Option[std::List[Origin]]::None append_origin return
         fi
         std::Option[std::List[Origin]]::None
+    }
+
+    fn collect_assignment_origins
+        self:mut$TypeChecker
+        name:$str
+        typ:$common::Type
+        function_opt:mut$std::Option[common::Function]
+        is_parameter_initialization:bool
+    -> ValueOrigins {
+        ValueOrigins {
+            live: is_parameter_initialization function_opt typ name self.assignment_origins
+            cleanup: is_parameter_initialization function_opt typ name self.get_assignment_cleanup_origins
+        }
     }
 
     pub fn assignment_origins
@@ -8689,12 +8656,9 @@ impl TypeChecker {
                     unified_scoped.clone = variable.typ
                 fi
                 is_parameter_initialization function_opt effective_type var_name.as_str
-                self.assignment_origins = origins
-                is_parameter_initialization function_opt effective_type var_name.as_str
-                self.get_assignment_cleanup_origins
-                = cleanup_origins
+                self.collect_assignment_origins = origins
                 effective_type self.expect_type
-                assigned_storage assigned_capability cleanup_origins origins var_name.as_str self.current_location self.ownership.record_binding_origins
+                assigned_storage assigned_capability origins var_name.as_str self.current_location self.ownership.record_binding_origins
                 if is_global ! then
                     var_name.as_str self.ownership.mark_owner_available
                     is_global function_opt unified_scoped var_name.as_str op self.record_owner_assignment
@@ -8726,12 +8690,9 @@ impl TypeChecker {
                 unified_local.clone std::Option::Some = op.type_hint
                 unified_local.clone var_name.as_str self.scope.set_type drop
                 is_parameter_initialization function_opt effective_type var_name.as_str
-                self.assignment_origins = origins
-                is_parameter_initialization function_opt effective_type var_name.as_str
-                self.get_assignment_cleanup_origins
-                = cleanup_origins
+                self.collect_assignment_origins = origins
                 effective_type self.expect_type
-                assigned_storage assigned_capability cleanup_origins origins var_name.as_str self.current_location self.ownership.record_binding_origins
+                assigned_storage assigned_capability origins var_name.as_str self.current_location self.ownership.record_binding_origins
                 if is_global ! then
                     var_name.as_str self.ownership.mark_owner_available
                     is_global function_opt unified_local var_name.as_str op self.record_owner_assignment
@@ -8758,13 +8719,10 @@ impl TypeChecker {
                 = unified_capture
                 unified_capture.clone std::Option::Some = op.type_hint
                 is_parameter_initialization function_opt effective_type var_name.as_str
-                self.assignment_origins = origins
-                is_parameter_initialization function_opt effective_type var_name.as_str
-                self.get_assignment_cleanup_origins
-                = cleanup_origins
-                function_opt cleanup_origins origins var_name.as_str self.check_capture_store
+                self.collect_assignment_origins = origins
+                function_opt origins var_name.as_str self.check_capture_store
                 effective_type self.expect_type
-                assigned_storage assigned_capability cleanup_origins origins var_name.as_str self.current_location self.ownership.record_binding_origins
+                assigned_storage assigned_capability origins var_name.as_str self.current_location self.ownership.record_binding_origins
                 var_name.as_str self.ownership.mark_owner_available
                 unified_capture drop
                 return
@@ -8778,12 +8736,9 @@ impl TypeChecker {
             if global_opt std::Option::Some(global_var) is then
                 "global" effective_type global_var op self.unify_variable_assignment
                 is_parameter_initialization function_opt effective_type var_name.as_str
-                self.assignment_origins = origins
-                is_parameter_initialization function_opt effective_type var_name.as_str
-                self.get_assignment_cleanup_origins
-                = cleanup_origins
+                self.collect_assignment_origins = origins
                 effective_type self.expect_type
-                assigned_storage assigned_capability cleanup_origins origins var_name.as_str self.current_location self.ownership.record_binding_origins
+                assigned_storage assigned_capability origins var_name.as_str self.current_location self.ownership.record_binding_origins
                 if is_global ! var_name.as_str common::is_internal_variable_name || then
                     var_name.as_str self.ownership.mark_owner_available
                 fi
@@ -8798,12 +8753,9 @@ impl TypeChecker {
                 return
             fi
             is_parameter_initialization function_opt effective_type var_name.as_str
-            self.assignment_origins = origins
-            is_parameter_initialization function_opt effective_type var_name.as_str
-            self.get_assignment_cleanup_origins
-            = cleanup_origins
+            self.collect_assignment_origins = origins
             effective_type self.expect_type
-            assigned_storage assigned_capability cleanup_origins origins var_name.as_str self.current_location self.ownership.record_binding_origins
+            assigned_storage assigned_capability origins var_name.as_str self.current_location self.ownership.record_binding_origins
             if is_global ! then
                 var_name.as_str self.ownership.mark_owner_available
             fi
@@ -10595,7 +10547,7 @@ impl TypeChecker {
     fn raw_value_input_origins
         self:mut$TypeChecker
         function_opt:mut$std::Option[common::Function]
-    -> std::Option[std::List[Origin]] std::Option[std::List[Origin]] {
+    -> ValueOrigins {
         std::Option[std::List[Origin]]::None = origins
         std::Option[std::List[Origin]]::None = cleanup_origins
         if function_opt std::Option::Some(function) is then
@@ -10618,7 +10570,7 @@ impl TypeChecker {
                 fi
             done
         fi
-        origins cleanup_origins
+        ValueOrigins { live: origins cleanup: cleanup_origins }
     }
 
     pub fn raw_borrow_input_origins
@@ -11020,7 +10972,7 @@ impl TypeChecker {
                 .set
             if capture.typ.is_borrow then
                 self.store capture.name.as_str capture.typ make_borrowed_input_origins = origins
-                std::Option[Place]::None capture.typ.capability std::Option[std::List[Origin]]::None origins capture.name.as_str self.current_location self.ownership.record_binding_origins
+                std::Option[Place]::None capture.typ.capability ValueOrigins { live: origins cleanup: std::Option[std::List[Origin]]::None } capture.name.as_str self.current_location self.ownership.record_binding_origins
                 continue
             fi
             if self.store capture.typ.has_borrow ! then
@@ -11035,7 +10987,7 @@ impl TypeChecker {
                 true exclusive OriginKind::InputCleanup capture.name.as_str Place::new Origin
                 cleanup_origins append_origin = cleanup_origins
             fi
-            std::Option[Place]::None ValueCapability::Owned cleanup_origins origins capture.name.as_str self.current_location self.ownership.record_binding_origins
+            std::Option[Place]::None ValueCapability::Owned ValueOrigins { live: origins cleanup: cleanup_origins } capture.name.as_str self.current_location self.ownership.record_binding_origins
         done
     }
 
@@ -11057,7 +11009,7 @@ impl TypeChecker {
         lambda:mut$common::Function
         op:mut$common::Op
         function_opt:mut$std::Option[common::Function]
-    -> std::Option[std::List[Origin]] std::Option[std::List[Origin]] {
+    -> ValueOrigins {
         std::Option[std::List[Origin]]::None = closure_origins
         std::Option[std::List[Origin]]::None = closure_cleanup_origins
         std::List[std::String]::new = owned_captures
@@ -11133,7 +11085,7 @@ impl TypeChecker {
             1 += capture_index
         done
         owned_captures = lambda.owned_captures
-        closure_origins closure_cleanup_origins
+        ValueOrigins { live: closure_origins cleanup: closure_cleanup_origins }
     }
 
     # Resolve `?` only after the input and enclosing return types are known.
@@ -11382,12 +11334,11 @@ impl TypeChecker {
         fi
         std::Map[std::String common::Type]::new = mutation_bindings
         if precise_callable ! execution_pending ! && then
-            function_value.place self.ownership.canonical_storage function_value.origins.live callable_capture_origins
-            = captured_origins
-            function_value.place self.ownership.canonical_storage function_value.origins.cleanup callable_capture_origins
-            = captured_cleanup
-            function_opt captured_cleanup captured_origins
-            mutation_bindings effect self.retain_mutable_call_origins
+            ValueOrigins {
+                live: function_value.place self.ownership.canonical_storage function_value.origins.live callable_capture_origins
+                cleanup: function_value.place self.ownership.canonical_storage function_value.origins.cleanup callable_capture_origins
+            } = captured
+            function_opt captured mutation_bindings effect self.retain_mutable_call_origins
             function_opt function_value self.retain_callable_capture_writes
             function_opt effect self.retain_callable_argument_writes
         fi
@@ -11456,8 +11407,7 @@ impl TypeChecker {
         self:mut$TypeChecker
         op:mut$common::Op
         push_name:$str
-        closure_origins:std::Option[std::List[Origin]]
-        closure_cleanup_origins:std::Option[std::List[Origin]]
+        closure_origins:ValueOrigins
         function_opt:$std::Option[common::Function]
     {
         common::make_unknown_type self.stack_push_type
@@ -11475,8 +11425,7 @@ impl TypeChecker {
         if function_opt std::Option::Some(enclosing) is then
             enclosing.stack_effect rules::identity_generic_bindings = op.call_bindings
         fi
-        closure_origins = pending_value.origins.live
-        closure_cleanup_origins = pending_value.origins.cleanup
+        closure_origins = pending_value.origins
     }
 
     fn check_function_reference
@@ -11485,17 +11434,15 @@ impl TypeChecker {
         function_opt:mut$std::Option[common::Function]
         push_name:$str
     {
-        std::Option[std::List[Origin]]::None = closure_origins
-        std::Option[std::List[Origin]]::None = closure_cleanup_origins
+        ValueOrigins::new = closure_origins
         if push_name self.store.get_function std::Option::Some(declaration) is then
             declaration.clone = pending_push_fn
             function_opt pending_push_fn self.sync_capture_types
-            function_opt op pending_push_fn self.check_closure_captures
-            = closure_cleanup_origins = closure_origins
+            function_opt op pending_push_fn self.check_closure_captures = closure_origins
             pending_push_fn self.store.set_function
         fi
         if push_name "lambda__" str::starts_with then
-            function_opt closure_cleanup_origins closure_origins push_name op self.push_deferred_lambda
+            function_opt closure_origins push_name op self.push_deferred_lambda
             return
         fi
         self.infer_parameters self.checks self.diagnostics self.store push_name
@@ -11528,7 +11475,7 @@ impl TypeChecker {
             .unwrap = function_value
         std::Set[std::String]::new = function_value.callables
         push_name.to_str function_value.callables.add
-        if closure_origins.is_some closure_cleanup_origins.is_some || then
+        if closure_origins.live.is_some closure_origins.cleanup.is_some || then
             self
                 .stack
                 .values
@@ -11537,8 +11484,7 @@ impl TypeChecker {
                 .values
                 .get_mut
                 .unwrap = closure_value
-            closure_origins = closure_value.origins.live
-            closure_cleanup_origins = closure_value.origins.cleanup
+            closure_origins = closure_value.origins
         fi
     }
 
@@ -11712,10 +11658,9 @@ impl TypeChecker {
                 .values
                 .get_mut
                 .unwrap = pushed_value
-            origins = pushed_value.origins.live
-            cleanup_origins = pushed_value.origins.cleanup
+            ValueOrigins { live: origins cleanup: cleanup_origins } = pushed_value.origins
         else
-            cleanup_origins origins array_type self.push_value_origins
+            ValueOrigins { live: origins cleanup: cleanup_origins } array_type self.push_value_origins
         fi
     }
 
@@ -11890,11 +11835,9 @@ impl TypeChecker {
                         type_variables hint common::aggregate_type_bindings = bindings
                     fi
                 fi
-                std::Option[std::List[Origin]]::None = origins
-                std::Option[std::List[Origin]]::None = cleanup_origins
+                ValueOrigins::new = origins
                 for expected in inner_types.iter do
-                    cleanup_origins origins bindings expected self.expect_aggregate_value
-                    = cleanup_origins = origins
+                    origins bindings expected self.expect_aggregate_value
                 done
                 if 0 type_variables.length != then
                     bindings type_variables enum_name.as_str common::build_resolved_type
@@ -11902,8 +11845,8 @@ impl TypeChecker {
                     enum_name common::GenericType::new common::Type::Generic
                 fi = result_type
                 result_type.clone std::Option::Some = op.type_hint
-                self.store cleanup_origins origins result_type resolve_cleanup_origins = cleanup_origins
-                cleanup_origins origins result_type self.push_value_origins
+                self.store origins result_type resolve_cleanup_origins = origins
+                origins result_type self.push_value_origins
                 op self.record_aggregate_materialization
             else
                 enum_name common::GenericType::new common::Type::Generic self.stack_push_type
@@ -12127,7 +12070,7 @@ impl TypeChecker {
             if match_ctx.match_type.is_borrow copied ! && then
                 match_ctx.match_type.capability = capability
             fi
-            std::Option[Place]::None capability cleanup_origins origins binding_name.as_str self.current_location self.ownership.record_binding_origins
+            std::Option[Place]::None capability ValueOrigins { live: origins cleanup: cleanup_origins } binding_name.as_str self.current_location self.ownership.record_binding_origins
         done
     }
 
@@ -12669,9 +12612,8 @@ impl TypeChecker {
         self:mut$TypeChecker
         expected:$common::Type
         bindings:mut$std::Map[std::String common::Type]
-        origins:std::Option[std::List[Origin]]
-        cleanup_origins:std::Option[std::List[Origin]]
-    -> std::Option[std::List[Origin]] std::Option[std::List[Origin]] {
+        origins:mut$ValueOrigins
+    {
         self.stack_pop_value = value
         bindings expected.substitute = current_expected
         current_expected value self.resolve_aggregate_literal = actual
@@ -12691,10 +12633,9 @@ impl TypeChecker {
             self.current_location "Generic callback field hides a borrowed result in a type parameter"
             common::ErrorKind::TypeMismatch self.diagnostics.record_error
         fi
-        resolved_expected value origins self.ownership.merge_destination_origins = origins
-        value.origins.cleanup cleanup_origins merge_origins = cleanup_origins
+        resolved_expected value origins.live.clone self.ownership.merge_destination_origins = origins.live
+        value.origins.cleanup origins.cleanup.clone merge_origins = origins.cleanup
         value resolved_expected self.expect_value_type
-        origins cleanup_origins
     }
 
     pub fn check_struct_new self:mut$TypeChecker op:mut$common::Op {
@@ -12705,11 +12646,9 @@ impl TypeChecker {
                     casa_struct.type_vars hint common::aggregate_type_bindings = bindings
                 fi
             fi
-            std::Option[std::List[Origin]]::None = origins
-            std::Option[std::List[Origin]]::None = cleanup_origins
+            ValueOrigins::new = origins
             for member in casa_struct.members.iter do
-                cleanup_origins origins bindings member.typ self.expect_aggregate_value
-                = cleanup_origins = origins
+                origins bindings member.typ self.expect_aggregate_value
             done
             if 0 casa_struct.type_vars.length != then
                 bindings casa_struct.type_vars casa_struct.name.as_str
@@ -12718,8 +12657,8 @@ impl TypeChecker {
                 casa_struct.name.clone common::GenericType::new common::Type::Generic
             fi = result_type
             result_type.clone std::Option::Some = op.type_hint
-            self.store cleanup_origins origins result_type resolve_cleanup_origins = cleanup_origins
-            cleanup_origins origins result_type self.push_value_origins
+            self.store origins result_type resolve_cleanup_origins = origins
+            origins result_type self.push_value_origins
             op self.record_aggregate_materialization
         fi
     }
@@ -12779,14 +12718,12 @@ impl TypeChecker {
                         type_variables hint common::aggregate_type_bindings = bindings
                     fi
                 fi
-                std::Option[std::List[Origin]]::None = origins
-                std::Option[std::List[Origin]]::None = cleanup_origins
+                ValueOrigins::new = origins
                 # Pop field values in reverse order
                 field_types.length = index
                 while 0 index != do
                     1 -= index
-                    cleanup_origins origins bindings index field_types.get.unwrap
-                    self.expect_aggregate_value = cleanup_origins = origins
+                    origins bindings index field_types.get.unwrap self.expect_aggregate_value
                 done
                 if 0 type_variables.length != then
                     bindings type_variables name.as_str common::build_resolved_type
@@ -12794,8 +12731,8 @@ impl TypeChecker {
                     name common::GenericType::new common::Type::Generic
                 fi = result_type
                 result_type.clone std::Option::Some = op.type_hint
-                self.store cleanup_origins origins result_type resolve_cleanup_origins = cleanup_origins
-                cleanup_origins origins result_type self.push_value_origins
+                self.store origins result_type resolve_cleanup_origins = origins
+                origins result_type self.push_value_origins
                 op self.record_aggregate_materialization
             else
                 name common::GenericType::new common::Type::Generic self.stack_push_type
@@ -13789,9 +13726,7 @@ impl TypeChecker {
         for index in merged.length 0 std::Range::new do
             index merged.get_mut.unwrap = target
             index incoming.get.unwrap = source
-            source.live target.live.clone merge_origins = target.live
-            source.cleanup target.cleanup.clone merge_origins
-            = target.cleanup
+            source target.merge
         done
     }
 
@@ -13809,8 +13744,7 @@ impl TypeChecker {
         for mutation in incoming.iter do
             mutation.second.clone = retained
             if mutation.first merged.get std::Option::Some(previous) is then
-                previous.live retained.live.clone merge_origins = retained.live
-                previous.cleanup retained.cleanup.clone merge_origins = retained.cleanup
+                previous retained.merge
             fi
             retained mutation.first.clone merged.set
         done
@@ -14108,8 +14042,7 @@ impl TypeChecker {
         function_opt:mut$std::Option[common::Function]
     {
         for mutation in mutations.iter do
-            function_opt mutation.second.cleanup mutation.second.live
-            mutation.first self.retain_stored_origins
+            function_opt mutation.second mutation.first self.retain_stored_origins
         done
     }
 
@@ -14143,8 +14076,7 @@ impl TypeChecker {
                 .origins
                 .get
                 .unwrap = returned
-            returned.live.clone = origins
-            returned.cleanup.clone = cleanup_origins
+            returned.clone = origins
             std::List[std::String]::new = visiting
             if
                 summary.has_raw_storage visiting self.store BorrowShape::RawStorage return_type type_contains_borrow &&
@@ -14156,18 +14088,15 @@ impl TypeChecker {
                     .values
                     .get
                     .unwrap = fallback
-                fallback.origins.live origins merge_origins = origins
-                fallback.origins.cleanup cleanup_origins merge_origins = cleanup_origins
+                fallback.origins origins.merge
             fi
-            cleanup_origins origins return_type
-            self.classify_type_variable_return_origins = cleanup_origins = origins
+            origins return_type self.classify_type_variable_return_origins = origins
             start index + self
                 .stack
                 .values
                 .get_mut
                 .unwrap = value
-            origins = value.origins.live
-            cleanup_origins = value.origins.cleanup
+            origins = value.origins
         done
     }
 
@@ -16776,12 +16705,11 @@ impl TypeChecker {
 impl TypeChecker {
     fn validate_stored_return_origins
         self:mut$TypeChecker
-        origins:$std::Option[std::List[Origin]]
-        cleanup_origins:$std::Option[std::List[Origin]]
+        origins:$ValueOrigins
         name:$str
         function:$common::Function
     {
-        cleanup_origins origins.clone merge_origins = retained_sources
+        origins.cleanup origins.live.clone merge_origins = retained_sources
         if retained_sources std::Option::Some(items) is else
             return
         fi
