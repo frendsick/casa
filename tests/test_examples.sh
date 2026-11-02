@@ -17,6 +17,8 @@ cd "$ROOT_DIR"
 EXAMPLES_DIR="examples"
 EXAMPLES_TEST_TMP=$(mktemp -d "${TMPDIR:-/tmp}/casa_examples.XXXXXX")
 trap 'rm -rf "$EXAMPLES_TEST_TMP"' EXIT
+# Examples run from this directory, so the binary path must stay valid there.
+EXAMPLES_TEST_TMP=$(cd "$EXAMPLES_TEST_TMP" && pwd)
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -98,8 +100,9 @@ raylib stub ok" ;;
             fi
         done
     else
-        # Interactive terminal examples can run until the timeout.
-        output=$(timeout 1 "$binary") || true
+        # Interactive terminal examples can run until the timeout. File examples
+        # use relative paths, so each run keeps its files in its private directory.
+        output=$(cd "$EXAMPLES_TEST_TMP" && timeout 1 "$binary") || true
     fi
 
     # Clean up binary

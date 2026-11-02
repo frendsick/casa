@@ -22,11 +22,11 @@ matched=false
 if matches_filter version "$@"; then
     matched=true
     [ "$($COMPILER --version /does/not/exist.casa)" = "$expected" ]
-    if $COMPILER --version --unknown >/tmp/casa_cli_version_out 2>&1; then
+    if $COMPILER --version --unknown >"$CLI_TMP/version_out" 2>&1; then
         echo "version accepted an unknown argument" >&2
         exit 1
     fi
-    grep -q 'unrecognized arguments: --unknown' /tmp/casa_cli_version_out
+    grep -q 'unrecognized arguments: --unknown' "$CLI_TMP/version_out"
 fi
 
 if matches_filter verbose "$@"; then
