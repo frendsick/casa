@@ -138,7 +138,7 @@ if [ "$batch_count" -gt 1 ]; then
             printf '    if selected "%s" == then %s::run_tests return fi\n' "$base" "$base"
         done < "$TEST_TMP/batch_tests"
         printf '    "Unknown unit test" panic\n}\n'
-        printf '1 std::get_arg.to_str.unwrap = selected\nselected.as_str run\n'
+        printf '1 std::get_arg.unwrap.to_str.unwrap = selected\nselected.as_str run\n'
     } > "$batch_source"
     if "$COMPILER" -L "$LIB_DIR" "$batch_source" -o "$batch_binary" \
         2>"$TEST_TMP/batch_compile_err"
