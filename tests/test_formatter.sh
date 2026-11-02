@@ -139,7 +139,7 @@ fi
 EOF
     chmod +x "$dispatcher_dir/tests/test_compiler.sh"
     for runner in test_cli.sh test_examples.sh test_bootstrap.sh \
-        test_formatter.sh
+        test_formatter.sh test_formatter_idempotency.sh
     do
         printf '#!/usr/bin/env sh\nexit 0\n' > \
             "$dispatcher_dir/tests/$runner"
@@ -165,7 +165,7 @@ EOF
     fi
     rm -f "$dispatcher_dir/release"
 
-    CASA_COMPILER="$dispatcher_dir/casac" CASA_TEST_JOBS=14 \
+    CASA_COMPILER="$dispatcher_dir/casac" CASA_TEST_JOBS=15 \
         CASA_TEST_RELEASE="$dispatcher_dir/release" \
         "$dispatcher_dir/tests/test_all.sh" \
         > "$dispatcher_dir/output" 2>&1 &
@@ -188,6 +188,12 @@ EOF
     : > "$dispatcher_dir/release"
     if wait "$dispatcher_pid"; then
         printf "${RED}[FAIL]${RESET} Failed: ci_shard_dispatch (failure status)\n"
+        ci_shard_dispatch_ok=false
+    fi
+    if ! grep -Fx "Shard passed: formatter_idempotency" "$dispatcher_dir/output" >/dev/null || \
+        ! grep -Fx "Shard summary: 14 passed, 1 failed" "$dispatcher_dir/output" >/dev/null
+    then
+        printf "${RED}[FAIL]${RESET} Failed: ci_shard_dispatch (shard coverage)\n"
         ci_shard_dispatch_ok=false
     fi
     rm -rf "$dispatcher_dir"
@@ -266,37 +272,6 @@ if matches_filter "compiler_batches" "$@"; then
 fi
 
 if [ "$has_filter" = false ]; then
-
-# Idempotency tests (full suite only)
-
-printf "\nRunning idempotency tests...\n"
-idem_pass=0
-idem_fail=0
-
-for f in examples/*.casa compiler/*.casa lib/*.casa; do
-    [ -f "$f" ] || continue
-    if ! first=$("$FORMATTER" < "$f" 2>/dev/null); then
-        printf "${RED}[FAIL]${RESET} Formatter rejected: %s\n" "$f"
-        idem_fail=$((idem_fail + 1))
-        continue
-    fi
-    if ! second=$(echo "$first" | "$FORMATTER" 2>/dev/null); then
-        printf "${RED}[FAIL]${RESET} Formatter rejected second pass: %s\n" "$f"
-        idem_fail=$((idem_fail + 1))
-        continue
-    fi
-
-    if [ "$first" = "$second" ]; then
-        idem_pass=$((idem_pass + 1))
-    else
-        printf "${RED}[FAIL]${RESET} Not idempotent: %s\n" "$f"
-        idem_fail=$((idem_fail + 1))
-    fi
-done
-
-printf "${GREEN}[OK]${RESET} Idempotency: %d passed, %d failed\n" "$idem_pass" "$idem_fail"
-pass=$((pass + idem_pass))
-fail=$((fail + idem_fail))
 
 # Safety tests (full suite only)
 

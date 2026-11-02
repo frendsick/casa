@@ -18,7 +18,8 @@ runtime
 cli
 examples
 bootstrap
-formatter'
+formatter
+formatter_idempotency'
 
 run_shard() {
     case "$1" in
@@ -30,11 +31,11 @@ run_shard() {
         cli) "$ROOT_DIR/tests/test_cli.sh" ;;
         examples) "$ROOT_DIR/tests/test_examples.sh" ;;
         bootstrap) "$ROOT_DIR/tests/test_bootstrap.sh" ;;
-        formatter)
+        formatter|formatter_idempotency)
             ${CASA_COMPILER:-"$ROOT_DIR/casac"} -L "$ROOT_DIR/lib" \
                 "$ROOT_DIR/formatter/casafmt.casa" -o "$RUN_DIR/casafmt"
             CASA_FORMATTER="$RUN_DIR/casafmt" \
-                "$ROOT_DIR/tests/test_formatter.sh"
+                "$ROOT_DIR/tests/test_$1.sh"
             ;;
         *)
             echo "Unknown test shard: $1" >&2

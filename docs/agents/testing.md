@@ -53,7 +53,7 @@ After the implementation and review are stable:
   behavior. Push the result and let required PR CI run the complete suite on
   the final code. Monitor CI before reporting the PR complete.
 
-- `test_all.sh` builds the branch compiler once, then runs the same 14 shards as
+- `test_all.sh` builds the branch compiler once, then runs the same 15 shards as
   CI in parallel. It uses the smaller of four jobs and the number of online
   processors by default. Set `CASA_TEST_JOBS` to override the limit:
 
@@ -97,10 +97,13 @@ Run one CI shard through the shared dispatcher by passing its name:
 ```
 tests/test_all.sh types_ownership
 tests/test_all.sh formatter
+tests/test_all.sh formatter_idempotency
 ```
 
-When `test_formatter.sh` has filters, idempotency and safety tests
-are skipped (they only run in the full suite).
+When `test_formatter.sh` has filters, safety and paired-input tests are skipped
+(they only run in the full suite). The repository-source idempotency sweep runs
+separately through `test_formatter_idempotency.sh` or the `formatter_idempotency`
+shard. It always runs the complete sweep.
 
 A filtered CLI, compiler, example, or formatter run that selects no tests prints the
 supplied filters in an explicit notice and exits successfully.
@@ -115,7 +118,8 @@ fixed-point tests.
 | `test_compiler.sh` | Unit tests (`tests/compiler/test_*.casa`) and error fixtures (`tests/compiler/errors/*.casa`) |
 | `test_cli.sh` | CLI flags, native build failures, process behavior, target selection, and LSP requests |
 | `test_examples.sh` | Example programs (`examples/*.casa`) against expected output |
-| `test_formatter.sh` | Golden file formatting, idempotency sweep, safety checks |
+| `test_formatter.sh` | Golden file formatting, safety checks, paired-input convergence |
+| `test_formatter_idempotency.sh` | Idempotency sweep over repository sources |
 | `test_bootstrap.sh` | Self-compilation (3-stage) and fixed-point verification |
 
 ## CI bootstrap compiler
