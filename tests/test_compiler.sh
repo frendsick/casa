@@ -76,7 +76,7 @@ test_category() {
             ;;
         test/test_argparse|test/test_bytes|test/test_collection_is_empty|\
         test/test_collection_reclamation|test/test_destruction|test/test_file|test/test_heap_allocator|\
-        test/test_iterator_combinators|test/test_json|test/test_list_contains|test/test_list_iteration|test/test_list_mutation|\
+        test/test_indexed_access|test/test_iterator_combinators|test/test_json|test/test_list_contains|test/test_list_iteration|test/test_list_mutation|\
         test/test_map_iter|test/test_map_storage|test/test_parser_borrows|test/test_range|test/test_set_iter|test/test_shared|\
         test/test_slice|test/test_sorting|test/test_storage_invariants|test/test_string_iteration|\
         test/test_string_utilities|runtime_error/*)
@@ -138,7 +138,7 @@ if [ "$batch_count" -gt 1 ]; then
             printf '    if selected "%s" == then %s::run_tests return fi\n' "$base" "$base"
         done < "$TEST_TMP/batch_tests"
         printf '    "Unknown unit test" panic\n}\n'
-        printf '1 std::get_arg.to_str.unwrap = selected\nselected.as_str run\n'
+        printf '1 std::get_arg.unwrap.to_str.unwrap = selected\nselected.as_str run\n'
     } > "$batch_source"
     if "$COMPILER" -L "$LIB_DIR" "$batch_source" -o "$batch_binary" \
         2>"$TEST_TMP/batch_compile_err"

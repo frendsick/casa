@@ -577,7 +577,7 @@ Use `String` for incremental or loop-based string construction:
 ```casa
 std::String::new = text
 while items.is_empty ! do
-    items.pop = item
+    items.pop.unwrap = item
     item.as_str text.append
 done
 text

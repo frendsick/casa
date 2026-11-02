@@ -64,7 +64,8 @@ borrow, such as `fn[mut$I -> mut$T]`, when the callback lends from its argument.
 An explicit `fn[...]` contract uses conservative input sources.
 
 Transferring a stored borrow remains valid. For example, `List[mut$T].pop`
-removes an existing value instead of lending list storage. A callback contract
+returns an existing value in `Some` instead of lending list storage. An empty list
+returns `None`. A callback contract
 that consumes a generic argument by value, such as `fn[T -> T]`, can transfer
 that argument when `T` is a borrow type.
 

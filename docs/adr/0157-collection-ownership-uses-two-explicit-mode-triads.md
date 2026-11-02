@@ -2,6 +2,7 @@
 related issue: #369
 
 status: amended by [ADR-0176](0176-list-mutable-iteration-lends-one-element-at-a-time.md)
+and [ADR-0187](0187-indexed-access-returns-option.md)
 
 Checked collection access borrows elements. Removal transfers ownership where
 its return type supplies an owned value. `iter` borrows the source and its
@@ -9,8 +10,9 @@ elements. These distinctions follow
 [ADR-0013](0013-affine-ownership-with-automatic-storage.md) and
 [ADR-0014](0014-explicit-unsafe-boundary.md).
 
-`List.get` and `List.get_ref` return `$T`. `List.get_mut` returns `mut$T`.
-These operations terminate on an invalid index. `List.remove` returns `Option[T]`.
+`List.get` returns `Option[$T]`, and `List.get_mut` returns `Option[mut$T]`.
+An invalid index returns `None`. `get_ref` is removed. `List.remove` and `List.pop`
+return `Option[T]`.
 
 `Map.get`, `Map.get_mut`, and `Map.remove` return `Option[$V]`,
 `Option[mut$V]`, and `Option[V]`. Missing keys return `Option::None`.

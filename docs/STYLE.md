@@ -62,7 +62,7 @@ Names such as `std::List` assume `import "std"`. See
 
   ```casa
   for i in length 0 std::Range::new do
-      i items.get process
+      i items.get.unwrap process
   done
   ```
 
@@ -340,7 +340,7 @@ and other naturally decimal quantities in decimal.
   # SHOULD NOT: manual indexing where `for` works
   0 = index: u64
   while index tokens.length < do
-      index tokens.get process
+      index tokens.get.unwrap process
       1 += index
   done
   ```

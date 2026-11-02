@@ -34,7 +34,7 @@ arrays of different lengths are different types:
 import "std"
 
 [10, 20, 30] = numbers: array[i64 3]
-1 numbers.nth print # 20
+1 numbers.get.unwrap print # 20
 ```
 
 | Method | Signature | Description |
@@ -42,11 +42,11 @@ import "std"
 | [as_slice](#arrayt-nas_slice) | `fn as_slice[T const N:u64] self:$array[T N] -> Slice[T]` | Borrowed view of the complete array |
 | [clone](#arrayt-nclone) | `fn clone self:$array[T N] -> array[T N]` | Independent array when `T: Clone` |
 | [contains](#arraystr-ncontains) | `fn contains[const N:u64] self:$array[str N] needle:$str -> bool` | Whether a string array contains `needle` |
+| [get](#arrayt-nget) | `fn get[T const N:u64] self:$array[T N] index:u64 -> Option[$T]` | Borrow of the element at a zero-based index |
 | [is_empty](#arrayt-nis_empty) | `fn is_empty[T const N:u64] self:$array[T N] -> bool` | Whether `N` is zero |
 | [iter](#arrayt-niter) | `fn iter[T const N:u64] self:$array[T N] -> Iter[$T]` | Iterator over borrows of the elements |
 | [length](#arrayt-nlength) | `fn length[T const N:u64] self:$array[T N] -> u64` | Number of elements, which is `N` |
-| [nth](#arrayt-nnth) | `fn nth[T const N:u64] self:$array[T N] index:u64 -> $T` | Borrow of the element at a zero-based index |
-| [slice](#arrayt-nslice) | `fn slice[T const N:u64] self:$array[T N] start:u64 stop:u64 -> Slice[T]` | Borrowed half-open range `[start, stop)` |
+| [slice](#arrayt-nslice) | `fn slice[T const N:u64] self:$array[T N] start:u64 stop:u64 -> Option[Slice[T]]` | Borrowed half-open range `[start, stop)` |
 
 ### array[T N]::as_slice
 
@@ -96,23 +96,24 @@ fn length[T const N:u64] self:$array[T N] -> u64
 
 Returns the number of elements, which is `N`.
 
-### array[T N]::nth
+### array[T N]::get
 
 ```text
-fn nth[T const N:u64] self:$array[T N] index:u64 -> $T
+fn get[T const N:u64] self:$array[T N] index:u64 -> Option[$T]
 ```
 
-Returns a [shared borrow](ownership.md#borrow-for-a-call) of the element at a zero-based index. An out-of-range index
-terminates the program. The source keeps ownership of the element.
+Returns `Some` containing a [shared borrow](ownership.md#borrow-for-a-call) of the
+element at a zero-based index. An out-of-range runtime index returns `None`.
+The source keeps ownership of the element.
 
 ### array[T N]::slice
 
 ```text
-fn slice[T const N:u64] self:$array[T N] start:u64 stop:u64 -> Slice[T]
+fn slice[T const N:u64] self:$array[T N] start:u64 stop:u64 -> Option[Slice[T]]
 ```
 
-Borrows `[start, stop)`. Requires `start <= stop <= N`. An invalid range terminates
-the program. Call: `stop start values.slice`.
+Borrows `[start, stop)`. Returns `Some` when `start <= stop <= N`, or `None` for
+an invalid range. Call: `stop start values.slice`.
 
 ### Array storage and ownership
 
@@ -154,12 +155,12 @@ The array destroys its elements when it goes out of scope. `clone` produces an
 independent array when `T: Clone`. An array is `Copy` when `T: Copy`, including
 when `N` is zero. Arrays with non-`Copy` elements remain affine. Indexing with a
 constant past the last element is a compile-time error. Indexing past it with a
-runtime value terminates the program.
+runtime value returns `None`.
 
-`nth` and `iter` read through a borrowed array, so they return `$T` rather
+`get` and `iter` read through a borrowed array, so they yield `$T` rather
 than an owned element. The array stays the only owner: an element type with a
 reserved `drop` method runs its hook once, when the array is destroyed. Use
-`.clone` on the result when an owned value is needed.
+`.unwrap.clone` on a successful lookup when an owned value is needed.
 
 ## Slices
 
@@ -179,7 +180,7 @@ fn total values:$std::Slice[i64] -> i64 {
 }
 
 [10, 20, 30, 40] = numbers
-4 1 numbers.slice = middle
+4 1 numbers.slice.unwrap = middle
 middle total print # 90
 [10, 20, 30] std::List::from_array = list
 list.as_slice total print # 60
@@ -187,11 +188,11 @@ list.as_slice total print # 60
 
 | Method | Signature | Description |
 |---|---|---|
+| [get](#slicetget) | `fn get self:$Slice[T] index:u64 -> Option[$T]` | Borrow of the element at a zero-based index |
 | [is_empty](#slicetis_empty) | `fn is_empty self:$Slice[T] -> bool` | Whether the view has no elements |
 | [iter](#slicetiter) | `fn iter self:$Slice[T] -> Iter[$T]` | Iterator over borrows of the elements |
 | [length](#slicetlength) | `fn length self:$Slice[T] -> u64` | Number of elements in the view |
-| [nth](#slicetnth) | `fn nth self:$Slice[T] index:u64 -> $T` | Borrow of the element at a zero-based index |
-| [slice](#slicetslice) | `fn slice self:$Slice[T] start:u64 stop:u64 -> Slice[T]` | Borrowed subrange `[start, stop)` |
+| [slice](#slicetslice) | `fn slice self:$Slice[T] start:u64 stop:u64 -> Option[Slice[T]]` | Borrowed subrange `[start, stop)` |
 
 ### Slice[T]::is_empty
 
@@ -217,25 +218,25 @@ fn length self:$Slice[T] -> u64
 
 Returns the number of elements in the view.
 
-### Slice[T]::nth
+### Slice[T]::get
 
 ```text
-fn nth self:$Slice[T] index:u64 -> $T
+fn get self:$Slice[T] index:u64 -> Option[$T]
 ```
 
-Returns a shared borrow of the element at a zero-based index. An out-of-range index
-terminates the program. The source keeps ownership of the element.
+Returns `Some` containing a shared borrow of the element at a zero-based index.
+An out-of-range index returns `None`. The source keeps ownership of the element.
 
 ### Slice[T]::slice
 
 ```text
-fn slice self:$Slice[T] start:u64 stop:u64 -> Slice[T]
+fn slice self:$Slice[T] start:u64 stop:u64 -> Option[Slice[T]]
 ```
 
 Borrows a subrange relative to this view. Requires `start <= stop <= self.length`.
-An invalid range terminates the program. Call: `stop start view.slice`. Equal
+An invalid range returns `None`. Call: `stop start view.slice`. Equal
 bounds produce an empty view, including at the end of the source. Empty views
-have length zero and yield no elements. Indexing an empty view terminates.
+have length zero and yield no elements. Indexing an empty view returns `None`.
 
 ### Slice ownership
 
@@ -256,15 +257,12 @@ Views expose shared access only. `Bytes.iter` still yields copied `u8` values,
 while `Bytes.as_slice.iter` yields `$u8`. Mutable and consuming traversal are
 not part of this API.
 
-### Migration from list-specific slices
+### Migrating indexed access
 
-Existing `List.slice`, `List.as_slice`, `Slice.length`, `Slice.is_empty`,
-`Slice.nth`, and `Slice.iter` calls keep their behavior. The former public
-`source`, `start`, and `size` fields are removed. Use `length` instead of `size`,
-`view.slice` for relative subranges, and `nth` or `iter` for element access.
-Construct a view with `stop start owner.slice` instead of a `Slice` struct literal
-or positional constructor. Keep the original owner separately when it is needed
-after the view's last use.
+Arrays and views use `get` instead of `nth`. `List.get_ref` is removed. Indexed
+reads and `slice` return `Option`, so use `.unwrap` when an element or range must
+exist. `as_slice` keeps returning a complete view directly. Use `length` for a
+view's element count. Its storage representation remains private.
 
 ## Lists
 
@@ -292,7 +290,7 @@ removed. The [List reference](lists.md) covers list operations, including
 | [length](#byteslength) | `fn length self:$Bytes -> u64` | Number of initialized bytes |
 | [new](#bytesnew) | `fn new -> Bytes` | Empty byte buffer |
 | [push](#bytespush) | `fn push self:mut$Bytes byte:u8` | Add one byte |
-| [slice](#bytesslice) | `fn slice self:$Bytes start:u64 stop:u64 -> Slice[u8]` | Borrowed byte range `[start, stop)` |
+| [slice](#bytesslice) | `fn slice self:$Bytes start:u64 stop:u64 -> Option[Slice[u8]]` | Borrowed byte range `[start, stop)` |
 | [to_raw_buffer](#bytesto_raw_buffer) | `fn to_raw_buffer self:$Bytes -> RawBuffer` | Independent allocation containing exactly `length` initialized bytes |
 | [to_str](#bytesto_str) | `fn to_str self:$Bytes -> Result[String Utf8Error]` | Validate and copy UTF-8 text |
 
@@ -389,11 +387,11 @@ Adds one byte.
 ### Bytes::slice
 
 ```text
-fn slice self:$Bytes start:u64 stop:u64 -> Slice[u8]
+fn slice self:$Bytes start:u64 stop:u64 -> Option[Slice[u8]]
 ```
 
 Borrows `[start, stop)`. Requires `start <= stop <= self.length`. An invalid range
-terminates the program. Call: `stop start bytes.slice`.
+returns `None`. Call: `stop start bytes.slice`.
 
 ### Bytes::to_raw_buffer
 
@@ -822,7 +820,7 @@ import "std"
 [10, 20, 30] = values
 # Named calls take their first argument from the top: push stop, then start.
 for index in values.length 0 std::Range::new do
-    index values.nth print "\n" print # 10, 20, 30
+    index values.get.unwrap print "\n" print # 10, 20, 30
 done
 ```
 

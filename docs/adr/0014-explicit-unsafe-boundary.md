@@ -13,6 +13,6 @@ Checked collection access borrows elements. List access terminates on an invalid
 ## Consequences
 
 - Safe Casa code cannot cause memory unsafety through compiler-provided operations.
-- `List.get` returns `$T` and `List.get_mut` returns `mut$T`, with bounds checks. Map access returns `Option[$V]` or `Option[mut$V]`.
+- `List.get` returns `Option[$T]` and `List.get_mut` returns `Option[mut$T]`, with bounds checks (amended by [ADR-0187](0187-indexed-access-returns-option.md)). Map access returns `Option[$V]` or `Option[mut$V]`.
 - Stdlib wrappers concentrate unsafe code and expose checked safe APIs.
 - Constructing `$cstr` from a raw pointer requires `unsafe`. Safe foreign-string wrappers preserve a source borrow or return an owned validated `String`.

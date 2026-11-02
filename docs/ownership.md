@@ -137,6 +137,11 @@ key while a returned value remains live.
 A function cannot return a borrow of a local owner. The diagnostic identifies
 the local owner that would escape.
 
+Indexed collection lookups return optional borrows. `List.get`, `array.get`, and
+`Slice.get` return `Option[$T]`. `List.get_mut` returns `Option[mut$T]`. A borrow
+inside `Some` keeps its source loaned through its last use, including after
+`.unwrap` or pattern matching. `None` represents a missing element.
+
 ## Borrow disjoint fields
 
 A function can return multiple exclusive field borrows when their named paths
