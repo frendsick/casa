@@ -50,7 +50,7 @@ names. Call forms below assume a list binding named `numbers`.
 | [get](#listtget) | `fn get[T] self:$List[T] n:u64 -> $T` | Borrow of the element at a zero-based index |
 | [get_mut](#listtget_mut) | `fn get_mut[T] self:mut$List[T] n:u64 -> mut$T` | Exclusive borrow of an element |
 | [get_ref](#listtget_ref) | `fn get_ref[T] self:$List[T] n:u64 -> $T` | Borrow of the element at a zero-based index |
-| [insert](#listtinsert) | `fn insert[T] self:mut$List[T] item:T index:u64` | Insert before `index` |
+| [insert](#listtinsert) | `fn insert[T] self:mut$List[T] item:T index:u64 -> Result[Unit T]` | Insert before `index` |
 | [into_iter](#listtinto_iter) | `fn into_iter self:List[T] -> Iter[T]` | Transfer elements in index order |
 | [is_empty](#listtis_empty) | `fn is_empty self:$List -> bool` | Whether the list has no elements |
 | [iter](#listtiter) | `fn iter self:$List[T] -> Iter[$T]` | Iterator over borrows of the elements |
@@ -65,9 +65,9 @@ names. Call forms below assume a list binding named `numbers`.
 | [push_str](#listbytespush_str) | `fn push_str self:mut$List[Bytes] value:$str` | Copy text into an owned byte buffer and append it |
 | [push_str](#liststringpush_str) | `fn push_str self:mut$List[String] value:$str` | Copy a text view into an owned string and append it |
 | [remove](#listtremove) | `fn remove[T] self:mut$List[T] index:u64 -> Option[T]` | Remove and return an element if present |
-| [replace](#listtreplace) | `fn replace[T] self:mut$List[T] n:u64 item:T -> T` | Replace and return an element |
+| [replace](#listtreplace) | `fn replace[T] self:mut$List[T] n:u64 item:T -> Result[T T]` | Replace and return an element |
 | [reverse](#listtreverse) | `fn reverse[T] self:mut$List[T]` | Reverse in place |
-| [set](#listtset) | `fn set[T] self:mut$List[T] n:u64 item:T` | Replace and destroy an element |
+| [set](#listtset) | `fn set[T] self:mut$List[T] n:u64 item:T -> Result[Unit T]` | Replace and destroy an element |
 | [slice](#listtslice) | `fn slice[T] self:$List[T] start:u64 stop:u64 -> Slice[T]` | Borrowed half-open range `[start, stop)` |
 | [sort](#listtsort) | `fn sort self:mut$List[T]` | Sort in place when `T` implements `Ord` |
 | [sort_by](#listtsort_by) | `fn sort_by self:mut$List[T] f:fn[$T $T -> bool]` | Sort in place with a callback |
@@ -178,15 +178,17 @@ Call `index numbers.get_ref`.
 ### List[T]::insert
 
 ```text
-fn insert[T] self:mut$List[T] item:T index:u64
+fn insert[T] self:mut$List[T] item:T index:u64 -> Result[Unit T]
 ```
 
-`insert` inserts before `index`. Insertion at the list's length appends. A
-greater index terminates the program. The list is borrowed exclusively, and a
-non-`Copy` item moves into it. The item is consumed before the index, unlike
-[set](#listtset).
+`insert` borrows the list exclusively and inserts `item` before `index`.
+Insertion at the list's length appends. Success returns `Result::Ok(Unit::Value)`.
+A greater index returns `Result::Error(item)` without changing the list or
+destroying the item. The caller owns the returned item. The item is consumed
+before the index, unlike [set](#listtset).
 
-Call `index item numbers.insert`.
+Call `index item numbers.insert`. Use `index item numbers.insert.unwrap drop`
+when the index must be valid.
 
 ### List[T]::into_iter
 
@@ -377,14 +379,17 @@ Call `index numbers.remove`.
 ### List[T]::replace
 
 ```text
-fn replace[T] self:mut$List[T] n:u64 item:T -> T
+fn replace[T] self:mut$List[T] n:u64 item:T -> Result[T T]
 ```
 
-`replace` borrows the list exclusively, moves a non-`Copy` item into the indexed
-position, and returns the previous element to the caller. An out-of-range index
-terminates the program.
+`replace` borrows the list exclusively and moves `item` into the indexed
+position. Success returns `Result::Ok(previous)`, transferring ownership of
+the previous element to the caller. An index greater than or equal to the
+length returns `Result::Error(item)` without changing the list or destroying
+the item. The caller owns the returned item in either case.
 
-Call `item index numbers.replace`.
+Call `item index numbers.replace`. Use `item index numbers.replace.unwrap`
+when the index must be valid.
 
 ### List[T]::reverse
 
@@ -399,14 +404,35 @@ Call `numbers.reverse`.
 ### List[T]::set
 
 ```text
-fn set[T] self:mut$List[T] n:u64 item:T
+fn set[T] self:mut$List[T] n:u64 item:T -> Result[Unit T]
 ```
 
-`set` borrows the list exclusively, destroys the previous element, and moves a
-non-`Copy` item into its place. An out-of-range index terminates the program.
+`set` borrows the list exclusively, destroys the previous element, and moves
+`item` into its place. Success returns `Result::Ok(Unit::Value)`. An index
+greater than or equal to the length returns `Result::Error(item)` without
+changing the list or destroying the item. The caller owns the returned item.
 Use [replace](#listtreplace) when the previous value must be returned.
 
-Call `item index numbers.set`.
+Call `item index numbers.set`. Use `item index numbers.set.unwrap drop`
+when the index must be valid.
+
+For example, this complete program recovers an owned item after a failed update:
+
+```casa
+import "std"
+
+std::List[std::String]::new = words
+if "retry".to_str 0 words.set std::Result::Error(item) is then
+    item words.push
+fi
+0 words.get print "\n" print
+```
+
+Output:
+
+```text
+retry
+```
 
 ### List[T]::slice
 
