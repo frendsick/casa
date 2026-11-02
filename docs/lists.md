@@ -17,8 +17,8 @@ import "std"
 
 [10, 20] std::List::from_array = numbers
 30 numbers.push
-0 numbers.get print "\n" print
-numbers.pop print "\n" print
+0 numbers.get.unwrap print "\n" print
+numbers.pop.unwrap print "\n" print
 ```
 
 Output:
@@ -47,9 +47,8 @@ names. Call forms below assume a list binding named `numbers`.
 | [clone](#listtclone) | `fn clone self:$List[T] -> List[T]` | Independent list when `T: Clone` |
 | [contains](#liststrcontains) | `fn contains self:$List[str] needle:$str -> bool` | Whether a string list contains `needle` |
 | [from_array](#listtfrom_array) | `fn from_array[T const N:u64] array:array[T N] -> List[T]` | List containing the array values |
-| [get](#listtget) | `fn get[T] self:$List[T] n:u64 -> $T` | Borrow of the element at a zero-based index |
-| [get_mut](#listtget_mut) | `fn get_mut[T] self:mut$List[T] n:u64 -> mut$T` | Exclusive borrow of an element |
-| [get_ref](#listtget_ref) | `fn get_ref[T] self:$List[T] n:u64 -> $T` | Borrow of the element at a zero-based index |
+| [get](#listtget) | `fn get[T] self:$List[T] n:u64 -> Option[$T]` | Borrow of the element at a zero-based index |
+| [get_mut](#listtget_mut) | `fn get_mut[T] self:mut$List[T] n:u64 -> Option[mut$T]` | Exclusive borrow of an element |
 | [insert](#listtinsert) | `fn insert[T] self:mut$List[T] item:T index:u64 -> Result[Unit T]` | Insert before `index` |
 | [into_iter](#listtinto_iter) | `fn into_iter self:List[T] -> Iter[T]` | Transfer elements in index order |
 | [is_empty](#listtis_empty) | `fn is_empty self:$List -> bool` | Whether the list has no elements |
@@ -60,7 +59,7 @@ names. Call forms below assume a list binding named `numbers`.
 | [length](#listtlength) | `fn length self:$List -> u64` | Number of elements |
 | [list_iter](#listtlist_iter) | `fn list_iter self:$List[T] -> ListIter[T]` | Concrete cursor over shared element borrows |
 | [new](#listtnew) | `fn new[T] -> List[T]` | Empty list |
-| [pop](#listtpop) | `fn pop[T] self:mut$List[T] -> T` | Remove and return the last element |
+| [pop](#listtpop) | `fn pop[T] self:mut$List[T] -> Option[T]` | Remove and return the last element |
 | [push](#listtpush) | `fn push[T] self:mut$List[T] item:T` | Add at the end |
 | [push_str](#listbytespush_str) | `fn push_str self:mut$List[Bytes] value:$str` | Copy text into an owned byte buffer and append it |
 | [push_str](#liststringpush_str) | `fn push_str self:mut$List[String] value:$str` | Copy a text view into an owned string and append it |
@@ -68,10 +67,10 @@ names. Call forms below assume a list binding named `numbers`.
 | [replace](#listtreplace) | `fn replace[T] self:mut$List[T] n:u64 item:T -> Result[T T]` | Replace and return an element |
 | [reverse](#listtreverse) | `fn reverse[T] self:mut$List[T]` | Reverse in place |
 | [set](#listtset) | `fn set[T] self:mut$List[T] n:u64 item:T -> Result[Unit T]` | Replace and destroy an element |
-| [slice](#listtslice) | `fn slice[T] self:$List[T] start:u64 stop:u64 -> Slice[T]` | Borrowed half-open range `[start, stop)` |
+| [slice](#listtslice) | `fn slice[T] self:$List[T] start:u64 stop:u64 -> Option[Slice[T]]` | Borrowed half-open range `[start, stop)` |
 | [sort](#listtsort) | `fn sort self:mut$List[T]` | Sort in place when `T` implements `Ord` |
 | [sort_by](#listtsort_by) | `fn sort_by self:mut$List[T] f:fn[$T $T -> bool]` | Sort in place with a callback |
-| [swap_at](#listtswap_at) | `fn swap_at[T] self:mut$List[T] i:u64 j:u64` | Exchange two elements |
+| [swap_at](#listtswap_at) | `fn swap_at[T] self:mut$List[T] i:u64 j:u64 -> Option[Unit]` | Exchange two elements |
 
 ### List[T]::append
 
@@ -140,40 +139,30 @@ Call `[10, 20] std::List::from_array = numbers`.
 ### List[T]::get
 
 ```text
-fn get[T] self:$List[T] n:u64 -> $T
+fn get[T] self:$List[T] n:u64 -> Option[$T]
 ```
 
 `get` returns a [shared borrow](ownership.md#borrow-for-a-call) of the element
 at zero-based index `n`. It does not remove or clone the element. The list keeps
 ownership and cannot be mutated until the returned borrow's last use.
 
-The index must be less than the list's length. An out-of-range index terminates the
-program. This method does not return an `Option`.
+A valid index returns `Some` containing the borrow. An out-of-range index returns
+`None` without changing the list. Use `.unwrap` when the index must be valid.
 
 Call `index numbers.get`.
 
 ### List[T]::get_mut
 
 ```text
-fn get_mut[T] self:mut$List[T] n:u64 -> mut$T
+fn get_mut[T] self:mut$List[T] n:u64 -> Option[mut$T]
 ```
 
 `get_mut` returns an [exclusive borrow](ownership.md#borrow-for-a-call) of the
 indexed element. The exclusive borrow prevents other access to the list until
-its last use. An out-of-range index terminates the program.
+its last use. A valid index returns `Some` containing the borrow. An out-of-range
+index returns `None` without changing the list.
 
 Call `index numbers.get_mut`.
-
-### List[T]::get_ref
-
-```text
-fn get_ref[T] self:$List[T] n:u64 -> $T
-```
-
-`get_ref` returns the same shared element borrow as [get](#listtget), with the
-same bounds and ownership rules. An out-of-range index terminates the program.
-
-Call `index numbers.get_ref`.
 
 ### List[T]::insert
 
@@ -324,14 +313,15 @@ Call `std::List[i64]::new = numbers`.
 ### List[T]::pop
 
 ```text
-fn pop[T] self:mut$List[T] -> T
+fn pop[T] self:mut$List[T] -> Option[T]
 ```
 
 `pop` borrows the list exclusively, removes its final element, and returns that
 element by value. The caller receives ownership when `T` is an owning type. The
 list binding remains available afterward.
 
-The list must be nonempty. Popping an empty list terminates the program.
+A nonempty list returns the removed value in `Some`. An empty list returns `None`
+without changing the list.
 
 Call `numbers.pop`.
 
@@ -425,7 +415,7 @@ std::List[std::String]::new = words
 if "retry".to_str 0 words.set std::Result::Error(item) is then
     item words.push
 fi
-0 words.get print "\n" print
+0 words.get.unwrap print "\n" print
 ```
 
 Output:
@@ -437,11 +427,11 @@ retry
 ### List[T]::slice
 
 ```text
-fn slice[T] self:$List[T] start:u64 stop:u64 -> Slice[T]
+fn slice[T] self:$List[T] start:u64 stop:u64 -> Option[Slice[T]]
 ```
 
 `slice` borrows the half-open range `[start, stop)`. It requires
-`start <= stop <= length`. An invalid range terminates the program. The slice
+`start <= stop <= length` for `Some`. An invalid range returns `None`. The slice
 keeps the list loaned until its last use.
 
 Call `stop start numbers.slice`. See [Slices](collections.md#slices).
@@ -477,18 +467,18 @@ Call `compare numbers.sort_by`. See [the sorting example](../examples/sorting.ca
 ### List[T]::swap_at
 
 ```text
-fn swap_at[T] self:mut$List[T] i:u64 j:u64
+fn swap_at[T] self:mut$List[T] i:u64 j:u64 -> Option[Unit]
 ```
 
-`swap_at` exchanges two elements through an exclusive list borrow. When the two
-indices differ, either index outside the list terminates the program. Equal
-indices leave the list unchanged.
+`swap_at` exchanges two elements through an exclusive list borrow and returns
+`Some(Unit::Value)`. Either index outside the list returns `None` without changing
+the list. Equal indices succeed only when that index is valid.
 
 Call `second first numbers.swap_at`.
 
 ## Element ownership
 
-`get`, `get_ref`, `get_mut`, `iter`, and `iter_mut` keep the list as the element owner. Use `copy` for a `Copy`
+`get`, `get_mut`, `iter`, and `iter_mut` keep the list as the element owner. Use `copy` for a `Copy`
 element or `.clone` for a `Clone` element when an independent value is needed. `set`
 destroys the replaced element. `replace`, `remove`, and `pop` transfer the removed value
 to the caller. `into_iter` transfers each yielded element to its caller and owns

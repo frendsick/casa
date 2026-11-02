@@ -1,5 +1,7 @@
 # Array length is part of the array type
 
+status: amended by [ADR-0187](0187-indexed-access-returns-option.md)
+
 `array[T N]` is an owned sequence of exactly `N` elements, where `N` is a
 compile-time constant. Arrays of different lengths are different types. The
 value is its element storage. It carries no length word and no separate header,
@@ -26,23 +28,23 @@ length are concrete at that checking site. For example, this definition is
 rejected because `3` is outside the concrete length `3`:
 
 ```casa
-fn fourth values:$array[i64 3] -> i64 { 3 values.nth.clone }
+fn fourth values:$array[i64 3] -> i64 { 3 values.get.unwrap.clone }
 ```
 
 A constant parameter remains symbolic while its generic body is checked under
 ADR-0069. The same index is therefore accepted here because `N` is not concrete:
 
 ```casa
-fn fourth[const N:u64] values:$array[i64 N] -> i64 { 3 values.nth.clone }
+fn fourth[const N:u64] values:$array[i64 N] -> i64 { 3 values.get.unwrap.clone }
 
 [1, 2, 3] fourth drop # Specializes N to 3 and terminates at runtime.
 ```
 
-Each generated specialization retains the ordinary terminating runtime bounds
+Each generated specialization retains the ordinary runtime bounds
 check. This applies even when its array length later becomes concrete. Casa does
 not need a generic constraint solver or a new body check for each
 specialization. An index that is not a compile-time constant also keeps the
-runtime bounds check.
+runtime bounds check, returning `None` on failure.
 
 A view over a runtime-length range can no longer be an array, because its length
 is not known when the type is written. Casa needs a separate runtime-length

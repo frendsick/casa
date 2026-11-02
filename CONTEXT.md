@@ -13,6 +13,8 @@ _Avoid_: List slice, owned slice
 **Unit**:
 A value with one possible state, constructed with `std::Unit::Value`. A
 `Result[std::Unit E]` represents a fallible operation without a success payload.
+An `Option[std::Unit]` reports whether an operation without a success payload
+applies, such as swapping two valid list indices.
 Unit is an ordinary value and remains distinct from an empty output stack.
 _Avoid_: Void, empty result, zero-sized value
 

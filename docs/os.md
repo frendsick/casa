@@ -206,8 +206,9 @@ environment variables, paths, and a child process.
 ## Arguments and processes
 
 `std::process::args -> List[Bytes]` copies all process arguments. `argc` is the
-argument count and `std::get_arg index:u64 -> Bytes` copies one argument. Index `0`
-is the program name. An invalid index terminates the program.
+argument count and `std::get_arg index:u64 -> Option[Bytes]` copies one argument. Index `0`
+is the program name. A valid index returns the argument in `Some`. An invalid index
+returns `None`.
 
 `std::process::exit status:u8` terminates immediately with the supplied status. It
 does not unwind or run cleanup. Normal root completion exits with status zero.

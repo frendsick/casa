@@ -169,14 +169,14 @@ has no live input origin`.
 
 ```casa
 # SAFETY: the caller keeps `index` below `N`.
-unsafe fn nth[T const N:u64] array:$array[T N] index:u64 -> $T {
+unsafe fn get_unchecked[T const N:u64] array:$array[T N] index:u64 -> $T {
     # SAFETY: the input borrow keeps the array live, and the caller checks the index.
     unsafe { array ptr::from_ref index size_of[T] * + ptr::as_ref[T] }
 }
 ```
 
 The input borrow keeps the storage live. The caller must keep `index` in range,
-so this helper is an `unsafe fn`. Prefer the checked array `nth` method in
+so this helper is an `unsafe fn`. Prefer the checked array `get` method in
 normal code. See [ADR-0112](adr/0112-raw-pointer-borrows-use-existing-input-origins.md)
 and [ADR-0113](adr/0113-escaping-raw-mutable-borrows-require-exclusive-input-origins.md).
 
