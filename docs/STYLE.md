@@ -212,6 +212,22 @@ without a type-name prefix is acceptable.
   it does not express that restriction. Use `bool` and derive the integer internally
   (`if backward then -1 else 1 fi = step`).
 
+### Long parameter lists
+
+There is no parameter limit. When a signature is hard to call correctly, apply
+the first step that fits:
+
+1. Remove a parameter that the callee can derive or that every caller passes
+   with the same value.
+2. Move values that stay fixed through a private traversal to its receiver.
+3. Group parameters that form one concept into a struct, and construct it with
+   a named literal.
+
+- **MUST NOT** bundle independent compiler dependencies such as `store` and
+  `diagnostics` only to shorten a signature.
+- Start with parameters that share a type but are not interchangeable, because
+  the type checker cannot catch a swap between them.
+
 ---
 
 ## Option and Result
