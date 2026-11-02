@@ -1032,11 +1032,12 @@ impl FunctionPlanner {
                         .state
                         .closures
                         .get std::Option::Some(names) is
-                then
-                    for name in names.iter do
-                        name.clone DestructionNode::Closure children.push
-                    done
+                else
+                    children return
                 fi
+                for name in names.iter do
+                    name.clone DestructionNode::Closure children.push
+                done
             }
             typechecker::CheckedShape::Array => {
                 typ.array_element_type.unwrap = element_type
@@ -1059,25 +1060,7 @@ impl FunctionPlanner {
                     children plan member_type compiler.push_field_destruction_child
                 done
             }
-            typechecker::CheckedShape::Enum => {
-                typ.match_base = name
-                name compiler
-                    .state
-                    .store
-                    .enums
-                    .get
-                    .unwrap = casa_enum
-                casa_enum.type_vars typ common::aggregate_type_bindings = substitutions
-                for variant_name in casa_enum.variants.iter do
-                    if variant_name.as_str casa_enum.variant_types.get_str std::Option::Some(payload_types) is then
-                        for payload_index in payload_types.length 0 std::Range::new do
-                            substitutions payload_index payload_types.get.substitute = payload_type
-                            payload_index variant_name.as_str casa_enum compiler.get_enum_field_plan = plan
-                            children plan payload_type compiler.push_field_destruction_child
-                        done
-                    fi
-                done
-            }
+            typechecker::CheckedShape::Enum => typ compiler.collect_enum_destruction_children return
             _ => {}
         end
         children
@@ -1089,23 +1072,7 @@ impl FunctionPlanner {
     -> std::List[DestructionNode] {
         node match
             DestructionNode::Value(typ _) => typ compiler.destruction_children
-            DestructionNode::Closure(name) => {
-                std::List[DestructionNode]::new = children
-                name.as_str compiler
-                    .state
-                    .store
-                    .get_function
-                    .unwrap = lambda
-                for capture in lambda.captures.iter do
-                    if capture.name.as_str lambda.owned_captures common::string_list_contains then
-                        # Copy captures only release their backing allocation.
-                        if capture.typ compiler.is_copy_aggregate ! then
-                            children StorageKind::Heap capture.typ compiler.push_destruction_child
-                        fi
-                    fi
-                done
-                children
-            }
+            DestructionNode::Closure(name) => name compiler.collect_closure_destruction_children
         end
     }
 
@@ -1973,21 +1940,7 @@ impl FunctionPlanner {
         bytecode:mut$std::List[InstValue]
     {
         value match
-            common::PatternValue::Literal(literal) => {
-                subject InstValue::LocalGet bytecode.push
-                literal.value match
-                    common::LiteralValue::Str(text) => {
-                        text.as_str self.intern_string InstValue::PushStr bytecode.push
-                        InstValue::StrEq bytecode.push
-                    }
-                    common::LiteralValue::Int(number) => bytecode number.value emit_int_eq
-                    common::LiteralValue::Char(character) => bytecode character emit_int_eq
-                    common::LiteralValue::Bool(boolean) => {
-                        bytecode if boolean then 1 else 0 fi emit_int_eq
-                    }
-                end
-                failure InstValue::JumpNe bytecode.push
-            }
+            common::PatternValue::Literal(literal) => bytecode failure subject literal self.emit_literal_pattern_test
             common::PatternValue::EnumVariant(variant) => {
                 if value pattern::is_wildcard then
                     return
@@ -2658,31 +2611,7 @@ impl FunctionPlanner {
             # Each capture is followed by its ownership flag. The record
             # header stores the call and destruction functions.
             for capture in captures.iter do
-                capture.name.as_str = capture_name: $str
-                capture_name.as_str lambda.owned_captures common::string_list_contains = owns_capture
-                owns_capture capture.typ compiler.is_copy_aggregate && = copies_aggregate
-                if capture_name.as_str compiler.capture_slots.get_copy_str std::Option::Some(capture_index) is then
-                    capture_index InstValue::CaptureLoad bytecode.push
-                    if copies_aggregate then
-                        bytecode capture.typ compiler.emit_heap_copy
-                    elif owns_capture then
-                        capture_index InstValue::CaptureFlagClear bytecode.push
-                    fi
-                else
-                    capture_name op.resolve_storage_name = storage_name
-                    bytecode owns_capture copies_aggregate ! && storage_name.as_str
-                    compiler.emit_variable_get
-                    if owns_capture capture.typ compiler.uses_automatic_storage && then
-                        bytecode capture.typ compiler.emit_heap_copy
-                    fi
-                    if owns_capture copies_aggregate ! && then
-                        if storage_name.as_str compiler.owner_flags.get_copy_str std::Option::Some(flag) is then
-                            0 InstValue::Push bytecode.push
-                            flag InstValue::LocalSet bytecode.push
-                        fi
-                    fi
-                fi
-                if owns_capture then 1 else 0 fi InstValue::Push bytecode.push
+                bytecode op lambda capture compiler.emit_closure_capture
             done
             name.clone InstValue::FnPush bytecode.push
             lambda compiler.ensure_closure_destruction_function = drop_name
@@ -3263,21 +3192,7 @@ impl FunctionPlanner {
         bytecode:mut$std::List[InstValue]
     {
         if kind semantic_body::BindingKind::PushCapture == then
-            if binding.name self.capture_slots.get_copy std::Option::Some(index) is then
-                index InstValue::CaptureLoad bytecode.push
-                if facts.moves_owner then
-                    if typ self.is_copy_aggregate then
-                        bytecode typ self.emit_inline_copy
-                    else
-                        if typ self.uses_automatic_storage then
-                            bytecode typ self.move_heap_value
-                        fi
-                        index InstValue::CaptureFlagClear bytecode.push
-                    fi
-                fi
-            else
-                f"Capture `{binding.name}` is missing during target planning" self.record_failure_string
-            fi
+            bytecode facts typ binding self.compile_capture_value
         else
             if typ binding.storage_name.as_str self.lends_owned_scalar then
                 binding.storage_name.as_str self.resolve_local InstValue::LocalAddress bytecode.push
@@ -3550,19 +3465,17 @@ impl FunctionPlanner {
                     std::Option[EnumDispatch]::None return
                 fi
             fi
-            arm.pattern match
-                common::PatternValue::EnumVariant(variant) => {
-                    for child in variant.bindings.iter do
-                        if child common::PatternValue::Binding is ! child pattern::is_wildcard ! && then
-                            std::Option[EnumDispatch]::None return
-                        fi
-                    done
-                    if common::MATCH_WILDCARD variant.variant_name.as_str == then
-                        true = wildcard_seen
-                    fi
-                }
-                _ => std::Option[EnumDispatch]::None return
-            end
+            if arm.pattern common::PatternValue::EnumVariant(variant) is else
+                std::Option[EnumDispatch]::None return
+            fi
+            for child in variant.bindings.iter do
+                if child common::PatternValue::Binding is ! child pattern::is_wildcard ! && then
+                    std::Option[EnumDispatch]::None return
+                fi
+            done
+            if common::MATCH_WILDCARD variant.variant_name.as_str == then
+                true = wildcard_seen
+            fi
         done
         enum_name self
             .state
@@ -5487,17 +5400,10 @@ impl Emitter {
         fi
         0 window.nth = inst
         1 window.nth = next
+        if cache next inst self.emit_local_set_get then
+            2 return
+        fi
         inst match
-            InstValue::LocalSet(written) => {
-                next match
-                    InstValue::LocalGet(read) if written read == => {
-                        cache inst self.emit_scalar_inst drop
-                        1 += cache.depth
-                        2 return
-                    }
-                    _ => {}
-                end
-            }
             InstValue::Push(amount) => {
                 if cache next amount self.emit_immediate_shift then
                     2 return
@@ -5505,19 +5411,8 @@ impl Emitter {
                 if cache next amount self.emit_power_of_two_division then
                     2 return
                 fi
-                if
-                    window.length 3 >=
-                    INT32_MIN amount <= && INT32_MAX amount >= &&
-                    next InstValue::Add is &&
-                then
-                    # `&&` is eager, so read the third instruction only after
-                    # the length check.
-                    if 2 window.nth InstValue::Load64 is then
-                        1 cache self.refill_scalar_stack
-                        cache.depth 1 - cache.get_register = register
-                        f"movq {amount}({register}), {register}" self.indent_string
-                        3 return
-                    fi
+                if cache amount window self.emit_offset_load then
+                    3 return
                 fi
             }
             _ => {}
@@ -5998,65 +5893,7 @@ impl Emitter {
                 top "%al" "movzbq" self.emit_binary_registers
             }
             _ => {
-                inst match
-                    InstValue::Add => below top "addq" self.emit_binary_registers
-                    InstValue::Sub => below top "subq" self.emit_binary_registers
-                    InstValue::Mul => below top "imulq" self.emit_binary_registers
-                    InstValue::CheckedAdd(builtin) => {
-                        below top "addq" self.emit_binary_registers
-                        "arithmetic_error" if builtin.is_unsigned then "jc" else "jo" fi self.emit_failure_jump
-                    }
-                    InstValue::CheckedSub(builtin) => {
-                        below top "subq" self.emit_binary_registers
-                        "arithmetic_error" if builtin.is_unsigned then "jc" else "jo" fi self.emit_failure_jump
-                    }
-                    InstValue::CheckedMul(builtin) => {
-                        if builtin.is_unsigned then
-                            "%rax" below "movq" self.emit_binary_registers
-                            top "mulq" self.emit_unary_register
-                            "testq %rdx, %rdx" self.indent
-                            "arithmetic_error" "jnz" self.emit_failure_jump
-                            below "%rax" "movq" self.emit_binary_registers
-                        else
-                            below top "imulq" self.emit_binary_registers
-                            "arithmetic_error" "jo" self.emit_failure_jump
-                        fi
-                    }
-                    InstValue::BitAnd => below top "andq" self.emit_binary_registers
-                    InstValue::BitOr => below top "orq" self.emit_binary_registers
-                    InstValue::BitXor => below top "xorq" self.emit_binary_registers
-                    InstValue::And => {
-                        top top "testq" self.emit_binary_registers
-                        "setne %al" self.indent
-                        below below "testq" self.emit_binary_registers
-                        "setne %cl" self.indent
-                        "andb %cl, %al" self.indent
-                        below "%al" "movzbq" self.emit_binary_registers
-                    }
-                    InstValue::Or => {
-                        below top "orq" self.emit_binary_registers
-                        "setne %al" self.indent
-                        below "%al" "movzbq" self.emit_binary_registers
-                    }
-                    _ => {
-                        inst match
-                            InstValue::Eq => "sete"
-                            InstValue::Ne => "setne"
-                            InstValue::Lt => "setl"
-                            InstValue::Le => "setle"
-                            InstValue::Gt => "setg"
-                            InstValue::Ge => "setge"
-                            InstValue::Ult => "setb"
-                            InstValue::Ule => "setbe"
-                            InstValue::Ugt => "seta"
-                            InstValue::Uge => "setae"
-                            _ => "Invalid cached scalar operation" panic
-                        end = comparison
-                        below top "cmpq" self.emit_binary_registers
-                        "%al" comparison self.emit_unary_register
-                        below "%al" "movzbq" self.emit_binary_registers
-                    }
-                end
+                below top inst self.emit_binary_scalar_inst
                 1 -= cache.depth
             }
         end
@@ -7709,4 +7546,251 @@ fn encode_specialization_name name:$str -> std::String {
         fi
     done
     label
+}
+
+impl FunctionPlanner {
+    fn collect_enum_destruction_children
+        self:mut$FunctionPlanner
+        typ:$common::Type
+    -> std::List[DestructionNode] {
+        std::List[DestructionNode]::new = children
+        typ.match_base = name
+        name self
+            .state
+            .store
+            .enums
+            .get
+            .unwrap = casa_enum
+        casa_enum.type_vars typ common::aggregate_type_bindings = substitutions
+        for variant_name in casa_enum.variants.iter do
+            if variant_name.as_str casa_enum.variant_types.get_str std::Option::Some(payload_types) is then
+                for payload_index in payload_types.length 0 std::Range::new do
+                    substitutions payload_index payload_types.get.substitute = payload_type
+                    payload_index variant_name.as_str casa_enum self.get_enum_field_plan = plan
+                    children plan payload_type self.push_field_destruction_child
+                done
+            fi
+        done
+        children
+    }
+}
+
+impl FunctionPlanner {
+    fn collect_closure_destruction_children
+        self:mut$FunctionPlanner
+        name:$std::String
+    -> std::List[DestructionNode] {
+        std::List[DestructionNode]::new = children
+        name.as_str self
+            .state
+            .store
+            .get_function
+            .unwrap = lambda
+        for capture in lambda.captures.iter do
+            if capture.name.as_str lambda.owned_captures common::string_list_contains then
+                # Copy captures only release their backing allocation.
+                if capture.typ self.is_copy_aggregate ! then
+                    children StorageKind::Heap capture.typ self.push_destruction_child
+                fi
+            fi
+        done
+        children
+    }
+}
+
+impl FunctionPlanner {
+    fn emit_literal_pattern_test
+        self:mut$FunctionPlanner
+        literal:$common::LiteralPattern
+        subject:u64
+        failure:u64
+        bytecode:mut$std::List[InstValue]
+    {
+        subject InstValue::LocalGet bytecode.push
+        literal.value match
+            common::LiteralValue::Str(text) => {
+                text.as_str self.intern_string InstValue::PushStr bytecode.push
+                InstValue::StrEq bytecode.push
+            }
+            common::LiteralValue::Int(number) => bytecode number.value emit_int_eq
+            common::LiteralValue::Char(character) => bytecode character emit_int_eq
+            common::LiteralValue::Bool(boolean) => {
+                bytecode if boolean then 1 else 0 fi emit_int_eq
+            }
+        end
+        failure InstValue::JumpNe bytecode.push
+    }
+}
+
+impl FunctionPlanner {
+    fn emit_closure_capture
+        self:mut$FunctionPlanner
+        capture:$common::Variable
+        lambda:$common::Function
+        op:$semantic_body::OperationFacts
+        bytecode:mut$std::List[InstValue]
+    {
+        capture.name.as_str = capture_name: $str
+        capture_name.as_str lambda.owned_captures common::string_list_contains = owns_capture
+        owns_capture capture.typ self.is_copy_aggregate && = copies_aggregate
+        if capture_name.as_str self.capture_slots.get_copy_str std::Option::Some(capture_index) is then
+            capture_index InstValue::CaptureLoad bytecode.push
+            if copies_aggregate then
+                bytecode capture.typ self.emit_heap_copy
+            elif owns_capture then
+                capture_index InstValue::CaptureFlagClear bytecode.push
+            fi
+        else
+            capture_name op.resolve_storage_name = storage_name
+            bytecode owns_capture copies_aggregate ! && storage_name.as_str
+            self.emit_variable_get
+            if owns_capture capture.typ self.uses_automatic_storage && then
+                bytecode capture.typ self.emit_heap_copy
+            fi
+            if owns_capture copies_aggregate ! && then
+                if storage_name.as_str self.owner_flags.get_copy_str std::Option::Some(flag) is then
+                    0 InstValue::Push bytecode.push
+                    flag InstValue::LocalSet bytecode.push
+                fi
+            fi
+        fi
+        if owns_capture then 1 else 0 fi InstValue::Push bytecode.push
+    }
+}
+
+impl FunctionPlanner {
+    fn compile_capture_value
+        self:mut$FunctionPlanner
+        binding:$common::BindingReference
+        typ:$common::Type
+        facts:$semantic_body::OperationFacts
+        bytecode:mut$std::List[InstValue]
+    {
+        if binding.name self.capture_slots.get_copy std::Option::Some(index) is else
+            f"Capture `{binding.name}` is missing during target planning" self.record_failure_string
+            return
+        fi
+        index InstValue::CaptureLoad bytecode.push
+        if facts.moves_owner ! then
+            return
+        fi
+        if typ self.is_copy_aggregate then
+            bytecode typ self.emit_inline_copy
+            return
+        fi
+        if typ self.uses_automatic_storage then
+            bytecode typ self.move_heap_value
+        fi
+        index InstValue::CaptureFlagClear bytecode.push
+    }
+}
+
+impl Emitter {
+    fn emit_binary_scalar_inst self:mut$Emitter inst:$InstValue top:str below:str {
+        inst match
+            InstValue::Add => below top "addq" self.emit_binary_registers
+            InstValue::Sub => below top "subq" self.emit_binary_registers
+            InstValue::Mul => below top "imulq" self.emit_binary_registers
+            InstValue::CheckedAdd(builtin) => {
+                below top "addq" self.emit_binary_registers
+                "arithmetic_error" if builtin.is_unsigned then "jc" else "jo" fi self.emit_failure_jump
+            }
+            InstValue::CheckedSub(builtin) => {
+                below top "subq" self.emit_binary_registers
+                "arithmetic_error" if builtin.is_unsigned then "jc" else "jo" fi self.emit_failure_jump
+            }
+            InstValue::CheckedMul(builtin) => {
+                if builtin.is_unsigned then
+                    "%rax" below "movq" self.emit_binary_registers
+                    top "mulq" self.emit_unary_register
+                    "testq %rdx, %rdx" self.indent
+                    "arithmetic_error" "jnz" self.emit_failure_jump
+                    below "%rax" "movq" self.emit_binary_registers
+                else
+                    below top "imulq" self.emit_binary_registers
+                    "arithmetic_error" "jo" self.emit_failure_jump
+                fi
+            }
+            InstValue::BitAnd => below top "andq" self.emit_binary_registers
+            InstValue::BitOr => below top "orq" self.emit_binary_registers
+            InstValue::BitXor => below top "xorq" self.emit_binary_registers
+            InstValue::And => {
+                top top "testq" self.emit_binary_registers
+                "setne %al" self.indent
+                below below "testq" self.emit_binary_registers
+                "setne %cl" self.indent
+                "andb %cl, %al" self.indent
+                below "%al" "movzbq" self.emit_binary_registers
+            }
+            InstValue::Or => {
+                below top "orq" self.emit_binary_registers
+                "setne %al" self.indent
+                below "%al" "movzbq" self.emit_binary_registers
+            }
+            _ => {
+                inst match
+                    InstValue::Eq => "sete"
+                    InstValue::Ne => "setne"
+                    InstValue::Lt => "setl"
+                    InstValue::Le => "setle"
+                    InstValue::Gt => "setg"
+                    InstValue::Ge => "setge"
+                    InstValue::Ult => "setb"
+                    InstValue::Ule => "setbe"
+                    InstValue::Ugt => "seta"
+                    InstValue::Uge => "setae"
+                    _ => "Invalid cached scalar operation" panic
+                end = comparison
+                below top "cmpq" self.emit_binary_registers
+                "%al" comparison self.emit_unary_register
+                below "%al" "movzbq" self.emit_binary_registers
+            }
+        end
+    }
+}
+
+impl Emitter {
+    fn emit_local_set_get
+        self:mut$Emitter
+        inst:$InstValue
+        next:$InstValue
+        cache:mut$ScalarStack
+    -> bool {
+        if inst InstValue::LocalSet(written) is else
+            false return
+        fi
+        if next InstValue::LocalGet(read) is else
+            false return
+        fi
+        if written read != then
+            false return
+        fi
+        cache inst self.emit_scalar_inst drop
+        1 += cache.depth
+        true
+    }
+
+    fn emit_offset_load
+        self:mut$Emitter
+        window:$std::Slice[InstValue]
+        amount:i64
+        cache:mut$ScalarStack
+    -> bool {
+        1 window.nth = next
+        if
+            window.length 3 >=
+            INT32_MIN amount <= && INT32_MAX amount >= &&
+            next InstValue::Add is &&
+        then
+            # `&&` is eager, so read the third instruction only after
+            # the length check.
+            if 2 window.nth InstValue::Load64 is then
+                1 cache self.refill_scalar_stack
+                cache.depth 1 - cache.get_register = register
+                f"movq {amount}({register}), {register}" self.indent_string
+                true return
+            fi
+        fi
+        false
+    }
 }
