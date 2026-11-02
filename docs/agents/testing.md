@@ -108,8 +108,10 @@ shard. It always runs the complete sweep.
 A filtered CLI, compiler, example, or formatter run that selects no tests prints the
 supplied filters in an explicit notice and exits successfully.
 
-`test_bootstrap.sh` has no filters. It always runs both self-compilation and
-fixed-point tests.
+`test_bootstrap.sh` has no filters. Its self-compilation and fixed-point checks
+share one compiler chain, with three compiler builds per successful run. A
+failure in either of the first two builds stops the run because both checks
+need that compiler.
 
 ## Test categories
 
