@@ -43,6 +43,10 @@ std::List[i64]::new = values
 "name=42" parser::Cursor::new = cursor
 ```
 
+Introduced names must be unqualified. This applies to declarations, enum variants,
+fields, generic parameters, import aliases, and methods. For example, `fn a::b {}`
+and `import "std" as a::b` are invalid. Use `::` to refer to existing declarations.
+
 Aliases and declarations cannot use the same source name. Importing two modules with one alias is also an error.
 
 ### Qualified names and module identity
@@ -53,7 +57,7 @@ constructors, enum variants, and function references. Receiver calls such as
 re-export another module's imports.
 
 Methods on built-in types keep the type namespace, such as `str::split`.
-An `impl` block can also introduce a namespace without a type declaration.
+An `impl` block can also introduce an unqualified namespace without a type declaration.
 Inside its defining module, that namespace keeps its local name. An importer
 uses the module name or alias first. For example, `import "os"` exposes
 `os::file::read_all` and `os::dir::create`. `import "os" as system` exposes
@@ -61,6 +65,9 @@ uses the module name or alias first. For example, `import "os"` exposes
 `std::process::exit`. Distinct modules can each define `impl file` without
 sharing the same namespace. Methods on an imported declared type also use the
 module prefix, as in `std::List[i64]::new`.
+
+A qualified receiver must name an existing struct or enum, such as
+`impl common::Location`. It cannot introduce a namespace such as `impl a::n`.
 
 Older code that imports `os` or `std` must add the module prefix to calls and
 function references. For example, change `file::read_all` to
